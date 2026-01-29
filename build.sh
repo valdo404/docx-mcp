@@ -43,21 +43,20 @@ fi
 BUILD_MODE=${1:-release}
 FEATURES=${2:-}
 
+# Always include build-bin feature (required for binary target)
+if [ -n "$FEATURES" ]; then
+    FEATURES="build-bin,$FEATURES"
+else
+    FEATURES="build-bin"
+fi
+
 if [ "$BUILD_MODE" = "debug" ]; then
     echo -e "${YELLOW}📦 Building in debug mode...${NC}"
-    if [ -n "$FEATURES" ]; then
-        cargo build --features "$FEATURES"
-    else
-        cargo build
-    fi
+    cargo build --features "$FEATURES"
     BINARY_PATH="target/debug/docx-mcp"
 else
     echo -e "${YELLOW}📦 Building in release mode...${NC}"
-    if [ -n "$FEATURES" ]; then
-        cargo build --release --features "$FEATURES"
-    else
-        cargo build --release
-    fi
+    cargo build --release --features "$FEATURES"
     BINARY_PATH="target/release/docx-mcp"
 fi
 
