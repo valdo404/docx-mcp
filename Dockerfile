@@ -1,15 +1,15 @@
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
-ARG TARGETARCH
+FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
+
+# NativeAOT requires clang as the platform linker
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends clang zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 
-# Copy everything and publish (single step: NativeAOT runtime packs
-# are only resolved during publish, so a separate restore cannot
-# fully cache them)
 COPY . .
 RUN dotnet publish src/DocxMcp/DocxMcp.csproj \
     --configuration Release \
-    -a $TARGETARCH \
     -o /app
 
 # Runtime: minimal image with only the binary
