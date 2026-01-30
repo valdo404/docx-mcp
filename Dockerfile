@@ -3,16 +3,12 @@ ARG TARGETARCH
 
 WORKDIR /src
 
-# Copy project files first for layer caching
-COPY src/DocxMcp/DocxMcp.csproj src/DocxMcp/
-RUN dotnet restore src/DocxMcp/DocxMcp.csproj \
-    -a $TARGETARCH
-
-# Copy everything and publish
+# Copy everything and publish (single step: NativeAOT runtime packs
+# are only resolved during publish, so a separate restore cannot
+# fully cache them)
 COPY . .
 RUN dotnet publish src/DocxMcp/DocxMcp.csproj \
     --configuration Release \
-    --no-restore \
     -a $TARGETARCH \
     -o /app
 
