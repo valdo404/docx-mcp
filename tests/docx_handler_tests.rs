@@ -1,5 +1,5 @@
 use anyhow::Result;
-use docx_mcp::docx_handler::{DocxHandler, DocxStyle, TableData};
+use docx_mcp::docx_handler::{DocxHandler, DocxStyle, TableData, ImageData};
 use tempfile::TempDir;
 use std::path::PathBuf;
 use pretty_assertions::assert_eq;
@@ -314,4 +314,244 @@ fn test_special_characters_in_content() {
     let text = handler.extract_text(&doc_id).unwrap();
     assert!(text.contains("éñüñdéd"));
     assert!(text.contains("🚀📝✨"));
+}
+
+// ── XML fallback tests ────────────────────────────────────────
+
+/// Helper: create a document with a table, a hyperlink and an image,
+/// save it, then re-open via open_document (which does NOT populate in_memory_ops).
+fn create_and_reopen_rich_doc() -> (DocxHandler, String, String, TempDir) {
+    let (mut handler, temp_dir) = setup_test_handler();
+    let doc_id = handler.create_document().unwrap();
+
+    // Add a table
+    let table_data = TableData {
+        rows: vec![
+            vec!["Header1".to_string(), "Header2".to_string()],
+            vec!["CellA".to_string(), "CellB".to_string()],
+            vec!["CellC".to_string(), "CellD".to_string()],
+        ],
+        headers: Some(vec!["Header1".to_string(), "Header2".to_string()]),
+        border_style: Some("single".to_string()),
+        col_widths: None,
+        merges: None,
+        cell_shading: None,
+    };
+    handler.add_table(&doc_id, table_data).unwrap();
+
+    // Add a hyperlink
+    handler.add_hyperlink(&doc_id, "Rust website", "https://www.rust-lang.org").unwrap();
+
+    // Add a small 1x1 PNG image
+    let png_data = create_minimal_png();
+    let image = ImageData {
+        data: png_data,
+        width: Some(50),
+        height: Some(50),
+        alt_text: Some("test image".to_string()),
+    };
+    handler.add_image(&doc_id, image).unwrap();
+
+    // Save to a file on disk
+    let save_path = temp_dir.path().join("rich_doc.docx");
+    handler.save_document(&doc_id, &save_path).unwrap();
+
+    // Close the original document
+    handler.close_document(&doc_id).unwrap();
+
+    // Re-open via open_document (XML-only path, no in_memory_ops)
+    let opened_id = handler.open_document(&save_path).unwrap();
+
+    (handler, doc_id, opened_id, temp_dir)
+}
+
+/// Create a minimal valid 1x1 white PNG in memory.
+fn create_minimal_png() -> Vec<u8> {
+    // Minimal valid PNG: 1x1 pixel, RGBA white
+    let mut buf = Vec::new();
+    // PNG signature
+    buf.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    // IHDR chunk
+    let ihdr_data: [u8; 13] = [
+        0, 0, 0, 1, // width = 1
+        0, 0, 0, 1, // height = 1
+        8,          // bit depth = 8
+        2,          // color type = RGB
+        0,          // compression
+        0,          // filter
+        0,          // interlace
+    ];
+    let ihdr_crc = crc32(&[b'I', b'H', b'D', b'R'], &ihdr_data);
+    buf.extend_from_slice(&(13u32).to_be_bytes()); // length
+    buf.extend_from_slice(b"IHDR");
+    buf.extend_from_slice(&ihdr_data);
+    buf.extend_from_slice(&ihdr_crc.to_be_bytes());
+
+    // IDAT chunk: zlib-compressed scanline (filter=0, R=255, G=255, B=255)
+    let raw_scanline: [u8; 4] = [0, 255, 255, 255]; // filter byte + RGB
+    let compressed = deflate_raw(&raw_scanline);
+    let idat_crc = crc32(b"IDAT", &compressed);
+    buf.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
+    buf.extend_from_slice(b"IDAT");
+    buf.extend_from_slice(&compressed);
+    buf.extend_from_slice(&idat_crc.to_be_bytes());
+
+    // IEND chunk
+    let iend_crc = crc32(b"IEND", &[]);
+    buf.extend_from_slice(&0u32.to_be_bytes());
+    buf.extend_from_slice(b"IEND");
+    buf.extend_from_slice(&iend_crc.to_be_bytes());
+    buf
+}
+
+fn crc32(chunk_type: &[u8], data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF;
+    for &byte in chunk_type.iter().chain(data.iter()) {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    crc ^ 0xFFFFFFFF
+}
+
+fn deflate_raw(input: &[u8]) -> Vec<u8> {
+    // Minimal zlib: CMF=0x78, FLG=0x01 (no dict, check bits), then a stored block
+    let mut out = vec![0x78, 0x01];
+    // DEFLATE stored block: BFINAL=1, BTYPE=00
+    out.push(0x01); // final block, stored
+    let len = input.len() as u16;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&(!len).to_le_bytes());
+    out.extend_from_slice(input);
+    // Adler-32 checksum
+    let adler = adler32(input);
+    out.extend_from_slice(&adler.to_be_bytes());
+    out
+}
+
+fn adler32(data: &[u8]) -> u32 {
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+#[test]
+fn test_xml_fallback_get_tables() {
+    let (handler, _orig_id, opened_id, _temp_dir) = create_and_reopen_rich_doc();
+
+    let result = handler.get_tables_json(&opened_id);
+    assert!(result.is_ok(), "get_tables_json failed: {:?}", result.err());
+
+    let val = result.unwrap();
+    let tables = val["tables"].as_array().expect("tables should be an array");
+    assert!(!tables.is_empty(), "Should find at least one table");
+
+    let t0 = &tables[0];
+    assert_eq!(t0["rows"].as_u64().unwrap(), 3, "Table should have 3 rows");
+    assert_eq!(t0["cols"].as_u64().unwrap(), 2, "Table should have 2 columns");
+
+    // Verify cell content
+    let cells = t0["cells"].as_array().expect("cells should be an array");
+    let first_row = cells[0].as_array().expect("first row should be an array");
+    assert!(first_row[0].as_str().unwrap().contains("Header1"), "First cell should contain Header1");
+    let second_row = cells[1].as_array().expect("second row should be an array");
+    assert!(second_row[0].as_str().unwrap().contains("CellA"), "Cell (1,0) should contain CellA");
+}
+
+#[test]
+fn test_xml_fallback_list_hyperlinks() {
+    let (handler, _orig_id, opened_id, _temp_dir) = create_and_reopen_rich_doc();
+
+    let result = handler.list_hyperlinks(&opened_id);
+    assert!(result.is_ok(), "list_hyperlinks failed: {:?}", result.err());
+
+    let val = result.unwrap();
+    let links = val["hyperlinks"].as_array().expect("hyperlinks should be an array");
+    assert!(!links.is_empty(), "Should find at least one hyperlink");
+
+    let link0 = &links[0];
+    assert!(
+        link0["text"].as_str().unwrap().contains("Rust website"),
+        "Hyperlink text should contain 'Rust website', got: {}",
+        link0["text"]
+    );
+    assert!(
+        link0["url"].as_str().unwrap().contains("rust-lang.org"),
+        "Hyperlink URL should contain 'rust-lang.org', got: {}",
+        link0["url"]
+    );
+}
+
+#[test]
+fn test_xml_fallback_list_images() {
+    let (handler, _orig_id, opened_id, _temp_dir) = create_and_reopen_rich_doc();
+
+    let result = handler.list_images(&opened_id);
+    assert!(result.is_ok(), "list_images failed: {:?}", result.err());
+
+    let val = result.unwrap();
+    let images = val["images"].as_array().expect("images should be an array");
+    assert!(!images.is_empty(), "Should find at least one image");
+
+    let img0 = &images[0];
+    // The image should have dimensions (from EMU conversion)
+    assert!(img0["width"].as_u64().is_some(), "Image should have width");
+    assert!(img0["height"].as_u64().is_some(), "Image should have height");
+}
+
+#[test]
+fn test_xml_fallback_empty_document() {
+    // Open an empty document via open_document — all three methods should return empty arrays, not errors.
+    let (mut handler, temp_dir) = setup_test_handler();
+    let doc_id = handler.create_document().unwrap();
+    let save_path = temp_dir.path().join("empty.docx");
+    handler.save_document(&doc_id, &save_path).unwrap();
+    handler.close_document(&doc_id).unwrap();
+
+    let opened_id = handler.open_document(&save_path).unwrap();
+
+    let tables = handler.get_tables_json(&opened_id).unwrap();
+    assert_eq!(tables["tables"].as_array().unwrap().len(), 0);
+
+    let images = handler.list_images(&opened_id).unwrap();
+    assert_eq!(images["images"].as_array().unwrap().len(), 0);
+
+    let links = handler.list_hyperlinks(&opened_id).unwrap();
+    assert_eq!(links["hyperlinks"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn test_in_memory_ops_still_work() {
+    // Ensure the in-memory path is still preferred when available (no regression).
+    let (mut handler, temp_dir) = setup_test_handler();
+    let doc_id = handler.create_document().unwrap();
+
+    let table_data = TableData {
+        rows: vec![
+            vec!["A".to_string(), "B".to_string()],
+            vec!["C".to_string(), "D".to_string()],
+        ],
+        headers: None,
+        border_style: None,
+        col_widths: None,
+        merges: None,
+        cell_shading: None,
+    };
+    handler.add_table(&doc_id, table_data).unwrap();
+    handler.add_hyperlink(&doc_id, "Example", "https://example.com").unwrap();
+
+    let tables = handler.get_tables_json(&doc_id).unwrap();
+    assert!(!tables["tables"].as_array().unwrap().is_empty());
+
+    let links = handler.list_hyperlinks(&doc_id).unwrap();
+    assert!(!links["hyperlinks"].as_array().unwrap().is_empty());
 }

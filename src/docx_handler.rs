@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use zip::{ZipArchive, ZipWriter};
 use zip::write::FileOptions;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocxMetadata {
@@ -63,9 +64,25 @@ pub struct ImageData {
 
 pub struct DocxHandler {
     temp_dir: PathBuf,
-    pub documents: std::collections::HashMap<String, DocxMetadata>,
+    pub documents: HashMap<String, DocxMetadata>,
     // In-memory operations for documents created via this handler
-    in_memory_ops: std::collections::HashMap<String, Vec<DocxOp>>,
+    in_memory_ops: HashMap<String, Vec<DocxOp>>,
+}
+
+/// Collect all `<w:t>` text content from descendants of a given XML node.
+fn collect_text(node: &roxmltree::Node) -> String {
+    let mut text = String::new();
+    for desc in node.descendants() {
+        if desc.tag_name().name() == "t" {
+            if let Some(t) = desc.text() {
+                if !text.is_empty() && !text.ends_with(' ') {
+                    text.push(' ');
+                }
+                text.push_str(t);
+            }
+        }
+    }
+    text
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -795,52 +812,343 @@ impl DocxHandler {
         Ok(updated)
     }
 
-    /// List tables with resolved merges and sizes
-    pub fn get_tables_json(&self, doc_id: &str) -> Result<serde_json::Value> {
-        let ops = self.in_memory_ops.get(doc_id)
-            .ok_or_else(|| anyhow::anyhow!("No in-memory ops for document: {}", doc_id))?;
-        let mut tables = Vec::new();
-        for (ti, op) in ops.iter().enumerate() {
-            if let DocxOp::Table { data } = op {
-                let rows = data.rows.len();
-                let cols = data.rows.first().map(|r| r.len()).unwrap_or(0);
-                tables.push(serde_json::json!({
-                    "index": ti,
-                    "rows": rows,
-                    "cols": cols,
-                    "col_widths": data.col_widths,
-                    "merges": data.merges,
-                    "cells": data.rows,
-                }));
+    // ── XML fallback helpers ──────────────────────────────────────
+
+    /// Read an XML part from the DOCX ZIP archive for a given document.
+    fn read_xml_from_docx(&self, doc_id: &str, part_name: &str) -> Result<String> {
+        let metadata = self.documents.get(doc_id)
+            .ok_or_else(|| anyhow::anyhow!("Document not found: {}", doc_id))?;
+        let src_file = std::fs::File::open(&metadata.path)?;
+        let mut archive = ZipArchive::new(src_file)?;
+        let mut entry = archive.by_name(part_name)
+            .with_context(|| format!("Part '{}' not found in DOCX", part_name))?;
+        let mut xml = String::new();
+        use std::io::Read as _;
+        entry.read_to_string(&mut xml)?;
+        Ok(xml)
+    }
+
+    /// Parse `word/_rels/document.xml.rels` and return a map of rId → Target.
+    fn parse_relationships(&self, doc_id: &str) -> Result<HashMap<String, String>> {
+        let xml = self.read_xml_from_docx(doc_id, "word/_rels/document.xml.rels")?;
+        let doc = roxmltree::Document::parse(&xml)?;
+        let mut rels = HashMap::new();
+        for node in doc.descendants() {
+            if node.tag_name().name() == "Relationship" {
+                if let (Some(id), Some(target)) = (node.attribute("Id"), node.attribute("Target")) {
+                    rels.insert(id.to_string(), target.to_string());
+                }
             }
+        }
+        Ok(rels)
+    }
+
+    /// Parse tables from `word/document.xml` using roxmltree.
+    fn get_tables_from_xml(&self, doc_id: &str) -> Result<serde_json::Value> {
+        let xml = self.read_xml_from_docx(doc_id, "word/document.xml")?;
+        let doc = roxmltree::Document::parse(&xml)?;
+
+        let mut tables = Vec::new();
+        let mut table_index = 0usize;
+
+        for node in doc.descendants() {
+            if node.tag_name().name() != "tbl" { continue; }
+
+            // Column widths from <w:tblGrid>/<w:gridCol w:w="...">
+            let mut col_widths: Vec<u32> = Vec::new();
+            for child in node.children() {
+                if child.tag_name().name() == "tblGrid" {
+                    for gc in child.children() {
+                        if gc.tag_name().name() == "gridCol" {
+                            let w = gc.attribute(("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w"))
+                                .or_else(|| gc.attribute("w:w"))
+                                .and_then(|v| v.parse::<u32>().ok())
+                                .unwrap_or(0);
+                            // Convert twips to approximate pixels (1 twip = 1/1440 inch, 96 dpi)
+                            col_widths.push(w * 96 / 1440);
+                        }
+                    }
+                }
+            }
+
+            let mut rows_json: Vec<Vec<String>> = Vec::new();
+            let mut merges: Vec<serde_json::Value> = Vec::new();
+
+            let mut row_idx = 0usize;
+            for tr in node.children() {
+                if tr.tag_name().name() != "tr" { continue; }
+                let mut row: Vec<String> = Vec::new();
+                let mut col_idx = 0usize;
+
+                for tc in tr.children() {
+                    if tc.tag_name().name() != "tc" { continue; }
+
+                    let cell_text = collect_text(&tc);
+                    row.push(cell_text);
+
+                    // Detect merges from <w:tcPr>
+                    let mut col_span = 1usize;
+                    let mut vmerge_type: Option<String> = None;
+                    for tcpr in tc.children() {
+                        if tcpr.tag_name().name() != "tcPr" { continue; }
+                        for prop in tcpr.children() {
+                            match prop.tag_name().name() {
+                                "gridSpan" => {
+                                    col_span = prop.attribute(("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val"))
+                                        .or_else(|| prop.attribute("w:val"))
+                                        .and_then(|v| v.parse::<usize>().ok())
+                                        .unwrap_or(1);
+                                }
+                                "vMerge" => {
+                                    vmerge_type = Some(
+                                        prop.attribute(("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val"))
+                                            .or_else(|| prop.attribute("w:val"))
+                                            .unwrap_or("continue")
+                                            .to_string()
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    if col_span > 1 || vmerge_type.as_deref() == Some("restart") {
+                        merges.push(serde_json::json!({
+                            "row": row_idx,
+                            "col": col_idx,
+                            "row_span": if vmerge_type.as_deref() == Some("restart") { 1 } else { 1 },
+                            "col_span": col_span,
+                            "_vmerge": vmerge_type,
+                        }));
+                    }
+
+                    col_idx += col_span;
+                }
+                rows_json.push(row);
+                row_idx += 1;
+            }
+
+            // Post-process vMerge spans: walk through merge entries and count consecutive "continue" cells
+            let merges = Self::resolve_vmerge_spans(&merges, row_idx);
+
+            let num_rows = rows_json.len();
+            let num_cols = rows_json.first().map(|r| r.len()).unwrap_or(0);
+            tables.push(serde_json::json!({
+                "index": table_index,
+                "rows": num_rows,
+                "cols": num_cols,
+                "col_widths": if col_widths.is_empty() { None } else { Some(col_widths) },
+                "merges": if merges.is_empty() { serde_json::Value::Null } else { serde_json::json!(merges) },
+                "cells": rows_json,
+            }));
+            table_index += 1;
         }
         Ok(serde_json::json!({ "tables": tables }))
     }
 
-    /// List images with basic metadata
-    pub fn list_images(&self, doc_id: &str) -> Result<serde_json::Value> {
-        let ops = self.in_memory_ops.get(doc_id)
-            .ok_or_else(|| anyhow::anyhow!("No in-memory ops for document: {}", doc_id))?;
-        let mut images = Vec::new();
-        for (i, op) in ops.iter().enumerate() {
-            if let DocxOp::Image { width, height, alt_text, .. } = op {
-                images.push(serde_json::json!({"index": i, "width": width, "height": height, "alt_text": alt_text}));
+    /// Resolve vertical merge spans: for each `restart` merge, count how many consecutive
+    /// rows at the same column have `continue` (or no explicit restart) to compute `row_span`.
+    fn resolve_vmerge_spans(raw_merges: &[serde_json::Value], _total_rows: usize) -> Vec<serde_json::Value> {
+        let mut result: Vec<serde_json::Value> = Vec::new();
+        // Collect restart positions: (row, col, col_span, index_in_result)
+        let mut restarts: Vec<(usize, usize, usize)> = Vec::new();
+        // Collect continue positions: (row, col)
+        let mut continues: Vec<(usize, usize)> = Vec::new();
+
+        for m in raw_merges {
+            let row = m["row"].as_u64().unwrap_or(0) as usize;
+            let col = m["col"].as_u64().unwrap_or(0) as usize;
+            let col_span = m["col_span"].as_u64().unwrap_or(1) as usize;
+            let vmerge = m["_vmerge"].as_str();
+
+            match vmerge {
+                Some("restart") => {
+                    restarts.push((row, col, col_span));
+                }
+                Some("continue") => {
+                    continues.push((row, col));
+                }
+                _ => {
+                    // No vMerge, just a col_span merge
+                    result.push(serde_json::json!({
+                        "row": row,
+                        "col": col,
+                        "row_span": 1,
+                        "col_span": col_span,
+                    }));
+                }
             }
+        }
+
+        // For each restart, find how many consecutive continues follow at the same column
+        for (start_row, col, col_span) in &restarts {
+            let mut row_span = 1usize;
+            let mut next_row = start_row + 1;
+            loop {
+                if continues.contains(&(next_row, *col)) {
+                    row_span += 1;
+                    next_row += 1;
+                } else {
+                    break;
+                }
+            }
+            result.push(serde_json::json!({
+                "row": start_row,
+                "col": col,
+                "row_span": row_span,
+                "col_span": col_span,
+            }));
+        }
+
+        result
+    }
+
+    /// Parse images from `word/document.xml` using roxmltree.
+    fn list_images_from_xml(&self, doc_id: &str) -> Result<serde_json::Value> {
+        let xml = self.read_xml_from_docx(doc_id, "word/document.xml")?;
+        let doc = roxmltree::Document::parse(&xml)?;
+
+        let mut images = Vec::new();
+        let mut idx = 0usize;
+
+        for node in doc.descendants() {
+            if node.tag_name().name() != "drawing" { continue; }
+
+            // Look for <a:blip> to confirm this is an image
+            let has_blip = node.descendants().any(|d| d.tag_name().name() == "blip");
+            if !has_blip { continue; }
+
+            // Dimensions from <wp:extent cx="..." cy="..."> (EMU units → pixels at 96dpi)
+            let mut width: Option<u32> = None;
+            let mut height: Option<u32> = None;
+            for desc in node.descendants() {
+                if desc.tag_name().name() == "extent" {
+                    width = desc.attribute("cx")
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(|emu| (emu / 9525) as u32);
+                    height = desc.attribute("cy")
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(|emu| (emu / 9525) as u32);
+                    break;
+                }
+            }
+
+            // Alt text from <wp:docPr descr="...">
+            let mut alt_text: Option<String> = None;
+            for desc in node.descendants() {
+                if desc.tag_name().name() == "docPr" {
+                    alt_text = desc.attribute("descr").map(|s| s.to_string());
+                    break;
+                }
+            }
+
+            images.push(serde_json::json!({
+                "index": idx,
+                "width": width,
+                "height": height,
+                "alt_text": alt_text,
+            }));
+            idx += 1;
         }
         Ok(serde_json::json!({"images": images}))
     }
 
-    /// List hyperlinks present in the in-memory ops
-    pub fn list_hyperlinks(&self, doc_id: &str) -> Result<serde_json::Value> {
-        let ops = self.in_memory_ops.get(doc_id)
-            .ok_or_else(|| anyhow::anyhow!("No in-memory ops for document: {}", doc_id))?;
+    /// Parse hyperlinks from `word/document.xml` using roxmltree.
+    fn list_hyperlinks_from_xml(&self, doc_id: &str) -> Result<serde_json::Value> {
+        let xml = self.read_xml_from_docx(doc_id, "word/document.xml")?;
+        let doc = roxmltree::Document::parse(&xml)?;
+        let rels = self.parse_relationships(doc_id).unwrap_or_default();
+
         let mut links = Vec::new();
-        for (i, op) in ops.iter().enumerate() {
-            if let DocxOp::Hyperlink { text, url } = op {
-                links.push(serde_json::json!({"index": i, "text": text, "url": url}));
+        let mut idx = 0usize;
+
+        for node in doc.descendants() {
+            if node.tag_name().name() != "hyperlink" { continue; }
+
+            let text = collect_text(&node);
+
+            // Resolve URL: either r:id → relationships map, or w:anchor → #bookmark
+            let url = if let Some(rid) = node.attribute(("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id"))
+                .or_else(|| node.attribute("r:id"))
+            {
+                rels.get(rid).cloned().unwrap_or_default()
+            } else if let Some(anchor) = node.attribute(("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "anchor"))
+                .or_else(|| node.attribute("w:anchor"))
+            {
+                format!("#{}", anchor)
+            } else {
+                String::new()
+            };
+
+            if !text.is_empty() || !url.is_empty() {
+                links.push(serde_json::json!({
+                    "index": idx,
+                    "text": text,
+                    "url": url,
+                }));
+                idx += 1;
             }
         }
         Ok(serde_json::json!({"hyperlinks": links}))
+    }
+
+    // ── End XML fallback helpers ────────────────────────────────
+
+    /// List tables with resolved merges and sizes
+    pub fn get_tables_json(&self, doc_id: &str) -> Result<serde_json::Value> {
+        // Try in-memory ops first (documents created via API)
+        if let Some(ops) = self.in_memory_ops.get(doc_id) {
+            let mut tables = Vec::new();
+            for (ti, op) in ops.iter().enumerate() {
+                if let DocxOp::Table { data } = op {
+                    let rows = data.rows.len();
+                    let cols = data.rows.first().map(|r| r.len()).unwrap_or(0);
+                    tables.push(serde_json::json!({
+                        "index": ti,
+                        "rows": rows,
+                        "cols": cols,
+                        "col_widths": data.col_widths,
+                        "merges": data.merges,
+                        "cells": data.rows,
+                    }));
+                }
+            }
+            return Ok(serde_json::json!({ "tables": tables }));
+        }
+        // Fallback: parse XML from the DOCX file
+        self.get_tables_from_xml(doc_id)
+    }
+
+    /// List images with basic metadata
+    pub fn list_images(&self, doc_id: &str) -> Result<serde_json::Value> {
+        // Try in-memory ops first (documents created via API)
+        if let Some(ops) = self.in_memory_ops.get(doc_id) {
+            let mut images = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                if let DocxOp::Image { width, height, alt_text, .. } = op {
+                    images.push(serde_json::json!({"index": i, "width": width, "height": height, "alt_text": alt_text}));
+                }
+            }
+            return Ok(serde_json::json!({"images": images}));
+        }
+        // Fallback: parse XML from the DOCX file
+        self.list_images_from_xml(doc_id)
+    }
+
+    /// List hyperlinks present in the document
+    pub fn list_hyperlinks(&self, doc_id: &str) -> Result<serde_json::Value> {
+        // Try in-memory ops first (documents created via API)
+        if let Some(ops) = self.in_memory_ops.get(doc_id) {
+            let mut links = Vec::new();
+            for (i, op) in ops.iter().enumerate() {
+                if let DocxOp::Hyperlink { text, url } = op {
+                    links.push(serde_json::json!({"index": i, "text": text, "url": url}));
+                }
+            }
+            return Ok(serde_json::json!({"hyperlinks": links}));
+        }
+        // Fallback: parse XML from the DOCX file
+        self.list_hyperlinks_from_xml(doc_id)
     }
 
     /// Summarize fields from document and header/footer XML (best-effort)
