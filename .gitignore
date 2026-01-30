@@ -1,10 +1,15 @@
-/example/MCP-Doc
-
-# Rust
-target/
-Cargo.lock
-**/*.rs.bk
-*.pdb
+# .NET
+bin/
+obj/
+dist/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
 
 # IDE
 .idea/
@@ -12,6 +17,7 @@ Cargo.lock
 *.swp
 *.swo
 *~
+.vs/
 
 # OS
 .DS_Store
@@ -20,48 +26,19 @@ Thumbs.db
 # Test outputs
 *.docx
 *.pdf
-*.png
-*.jpg
-*.jpeg
-images/
-thumbnails/
-output/
 
 # Temporary files
 /tmp/
 *.tmp
 *.temp
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-.venv
-
 # Logs
 *.log
 logs/
 
-# Documentation build
-/docs/_build/
-/docs/.doctrees/
+# NuGet
+packages/
 
 # Coverage
-*.gcov
-*.gcda
-*.gcno
 coverage/
-lcov.info
-
-# Profiling
-*.prof
-perf.data
-perf.data.old
-
-# Dependencies
-node_modules/
-vendor/
+TestResults/
