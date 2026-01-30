@@ -31,6 +31,7 @@ builder.Services
     .WithTools<QueryTool>()
     .WithTools<CountTool>()
     .WithTools<ReadSectionTool>()
+    .WithTools<ReadHeadingContentTool>()
     .WithTools<PatchTool>()
     .WithTools<ExportTools>();
 

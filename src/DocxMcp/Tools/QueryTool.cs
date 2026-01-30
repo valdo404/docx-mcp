@@ -73,10 +73,10 @@ public sealed class QueryTool
             // Wrap result with pagination metadata
             var formatted = (format?.ToLowerInvariant() ?? "json") switch
             {
-                "json" => FormatJson(elements),
+                "json" => FormatJsonArray(elements),
                 "text" => FormatText(elements),
                 "summary" => FormatSummary(elements),
-                _ => FormatJson(elements)
+                _ => FormatJsonArray(elements)
             };
 
             if ((format?.ToLowerInvariant() ?? "json") == "json")
@@ -180,6 +180,15 @@ public sealed class QueryTool
         if (elements.Count == 1)
             return ElementToJson(elements[0]).ToJsonString(JsonOpts);
 
+        return FormatJsonArray(elements);
+    }
+
+    /// <summary>
+    /// Always returns a JSON array, even for a single element.
+    /// Used by pagination envelopes where items must be an array.
+    /// </summary>
+    internal static string FormatJsonArray(List<OpenXmlElement> elements)
+    {
         var arr = new JsonArray();
         foreach (var el in elements)
             arr.Add((JsonNode?)ElementToJson(el));

@@ -172,14 +172,7 @@ public sealed class ReadSectionTool
 
     private static string FormatJson(List<OpenXmlElement> elements)
     {
-        if (elements.Count == 1)
-            return QueryTool.ElementToJson(elements[0]).ToJsonString(JsonOpts);
-
-        var arr = new JsonArray();
-        foreach (var el in elements)
-            arr.Add((JsonNode?)QueryTool.ElementToJson(el));
-
-        return arr.ToJsonString(JsonOpts);
+        return QueryTool.FormatJsonArray(elements);
     }
 
     private static string FormatText(List<OpenXmlElement> elements)
