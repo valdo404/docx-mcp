@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>docx-mcp Session Browser</title>
+    <link rel="stylesheet" href="/css/app.css" />
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@fluentui/web-components@2/dist/web-components.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.7/dist/docx-preview.min.js"></script>
+</head>
+<body>
+    <fluent-design-system-provider id="design-provider" use-defaults
+        base-layer-luminance="1"
+        accent-base-color="#0078d4">
+        <div id="app-shell">
+            <header id="app-header">
+                <div class="header-left">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H14a1 1 0 0 1-1-1V3.5zM8 13h8v1H8v-1zm0 3h8v1H8v-1zm0-6h4v1H8v-1z"/></svg>
+                    <h1>docx-mcp</h1>
+                </div>
+                <div class="header-right">
+                    <fluent-switch id="theme-toggle" title="Toggle dark mode">
+                        <span slot="checked-message">Dark</span>
+                        <span slot="unchecked-message">Light</span>
+                    </fluent-switch>
+                    <fluent-badge id="sse-status" color="lightweight">Connecting...</fluent-badge>
+                </div>
+            </header>
+            <main id="app-content">
+                <fluent-progress-ring></fluent-progress-ring>
+            </main>
+        </div>
+    </fluent-design-system-provider>
+
+    <script type="module" src="/js/app.js"></script>
+</body>
+</html>
