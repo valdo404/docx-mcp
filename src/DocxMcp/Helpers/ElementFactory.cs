@@ -707,7 +707,7 @@ public static class ElementFactory
         return cb;
     }
 
-    private static BorderValues ParseBorderValue(string? style)
+    internal static BorderValues ParseBorderValue(string? style)
     {
         return style?.ToLowerInvariant() switch
         {

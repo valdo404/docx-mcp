@@ -644,6 +644,13 @@ public sealed class SessionManager
                         var cid = patch.TryGetProperty("comment_id", out var cidEl) ? cidEl.GetInt32().ToString() : "?";
                         ops.Add($"delete_comment #{cid}");
                     }
+                    else if (op is "style_element" or "style_paragraph" or "style_table")
+                    {
+                        var stylePath = patch.TryGetProperty("path", out var spEl) && spEl.ValueKind == JsonValueKind.String
+                            ? spEl.GetString()
+                            : null;
+                        ops.Add(stylePath is not null ? $"{op} {stylePath}" : $"{op} (all)");
+                    }
                     else
                     {
                         var shortPath = path is not null && path.Length > 30
@@ -707,6 +714,15 @@ public sealed class SessionManager
                     break;
                 case "delete_comment":
                     Tools.CommentTools.ReplayDeleteComment(patch, wpDoc);
+                    break;
+                case "style_element":
+                    Tools.StyleTools.ReplayStyleElement(patch, wpDoc);
+                    break;
+                case "style_paragraph":
+                    Tools.StyleTools.ReplayStyleParagraph(patch, wpDoc);
+                    break;
+                case "style_table":
+                    Tools.StyleTools.ReplayStyleTable(patch, wpDoc);
                     break;
             }
         }
