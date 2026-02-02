@@ -8,16 +8,23 @@ RUN apt-get update && \
 WORKDIR /src
 
 COPY . .
+
+# Build both MCP server and CLI as NativeAOT binaries
 RUN dotnet publish src/DocxMcp/DocxMcp.csproj \
     --configuration Release \
     -o /app
 
-# Runtime: minimal image with only the binary
+RUN dotnet publish src/DocxMcp.Cli/DocxMcp.Cli.csproj \
+    --configuration Release \
+    -o /app/cli
+
+# Runtime: minimal image with only the binaries
 # The runtime-deps image already provides an 'app' user/group
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-preview AS runtime
 
 WORKDIR /app
-COPY --from=build /app .
+COPY --from=build /app/docx-mcp .
+COPY --from=build /app/cli/docx-cli .
 
 # Sessions persistence directory (WAL, baselines, checkpoints)
 RUN mkdir -p /home/app/.docx-mcp/sessions && \
@@ -25,5 +32,7 @@ RUN mkdir -p /home/app/.docx-mcp/sessions && \
 VOLUME /home/app/.docx-mcp/sessions
 
 USER app
+
+ENV DOCX_MCP_SESSIONS_DIR=/home/app/.docx-mcp/sessions
 
 ENTRYPOINT ["./docx-mcp"]

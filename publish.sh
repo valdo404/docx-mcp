@@ -9,7 +9,8 @@ set -euo pipefail
 #   ./publish.sh all          # Build for all platforms (cross-compile)
 #   ./publish.sh macos-arm64  # Build for specific target
 
-PROJECT="src/DocxMcp/DocxMcp.csproj"
+SERVER_PROJECT="src/DocxMcp/DocxMcp.csproj"
+CLI_PROJECT="src/DocxMcp.Cli/DocxMcp.Cli.csproj"
 OUTPUT_DIR="dist"
 CONFIG="Release"
 
@@ -22,20 +23,13 @@ declare -A TARGETS=(
     ["windows-arm64"]="win-arm64"
 )
 
-publish_target() {
-    local name="$1"
-    local rid="${TARGETS[$name]}"
-    local out="$OUTPUT_DIR/$name"
+publish_project() {
+    local project="$1"
+    local binary_name="$2"
+    local rid="$3"
+    local out="$4"
 
-    echo "==> Publishing $name ($rid)..."
-    mkdir -p "$out"
-
-    # On macOS, NativeAOT needs Homebrew libraries (openssl, brotli, etc.)
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        export LIBRARY_PATH="/opt/homebrew/lib:${LIBRARY_PATH:-}"
-    fi
-
-    dotnet publish "$PROJECT" \
+    dotnet publish "$project" \
         --configuration "$CONFIG" \
         --runtime "$rid" \
         --self-contained true \
@@ -44,10 +38,10 @@ publish_target() {
         -p:OptimizationPreference=Size
 
     local binary
-    if [[ "$name" == windows-* ]]; then
-        binary="$out/docx-mcp.exe"
+    if [[ "$out" == *windows* ]]; then
+        binary="$out/${binary_name}.exe"
     else
-        binary="$out/docx-mcp"
+        binary="$out/$binary_name"
     fi
 
     if [[ -f "$binary" ]]; then
@@ -57,6 +51,25 @@ publish_target() {
     else
         echo "    WARNING: Binary not found at $binary"
     fi
+}
+
+publish_target() {
+    local name="$1"
+    local rid="${TARGETS[$name]}"
+    local out="$OUTPUT_DIR/$name"
+
+    mkdir -p "$out"
+
+    # On macOS, NativeAOT needs Homebrew libraries (openssl, brotli, etc.)
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        export LIBRARY_PATH="/opt/homebrew/lib:${LIBRARY_PATH:-}"
+    fi
+
+    echo "==> Publishing docx-mcp ($name / $rid)..."
+    publish_project "$SERVER_PROJECT" "docx-mcp" "$rid" "$out"
+
+    echo "==> Publishing docx-cli ($name / $rid)..."
+    publish_project "$CLI_PROJECT" "docx-cli" "$rid" "$out"
 }
 
 main() {

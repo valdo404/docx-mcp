@@ -7,11 +7,9 @@
     <AssemblyName>docx-cli</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PackAsTool>true</PackAsTool>
-    <ToolCommandName>docx-cli</ToolCommandName>
-    <PackageId>DocxMcp.Cli</PackageId>
-    <Version>1.0.0</Version>
-    <Description>CLI for DOCX document manipulation — mirrors the docx-mcp MCP server tools.</Description>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <OptimizationPreference>Size</OptimizationPreference>
   </PropertyGroup>
 
   <ItemGroup>
