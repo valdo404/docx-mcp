@@ -9,6 +9,8 @@ namespace DocxMcp;
 /// Thread-safe manager for document sessions with WAL-based persistence.
 /// Sessions survive server restarts via baseline snapshots + write-ahead log replay.
 /// Supports undo/redo via WAL cursor + checkpoint replay.
+/// Uses cross-process file locking to prevent index corruption when multiple
+/// MCP server processes share the same sessions directory.
 /// </summary>
 public sealed class SessionManager
 {
@@ -83,11 +85,7 @@ public sealed class SessionManager
             session.Dispose();
             _store.DeleteSession(id);
 
-            lock (_indexLock)
-            {
-                _index.Sessions.RemoveAll(e => e.Id == id);
-                _store.SaveIndex(_index);
-            }
+            WithLockedIndex(index => { index.Sessions.RemoveAll(e => e.Id == id); });
         }
         else
         {
@@ -123,15 +121,15 @@ public sealed class SessionManager
             {
                 _store.TruncateWalAt(id, cursor);
 
-                lock (_indexLock)
+                WithLockedIndex(index =>
                 {
-                    var entry = _index.Sessions.Find(e => e.Id == id);
+                    var entry = index.Sessions.Find(e => e.Id == id);
                     if (entry is not null)
                     {
                         _store.DeleteCheckpointsAfter(id, cursor, entry.CheckpointPositions);
                         entry.CheckpointPositions.RemoveAll(p => p > cursor);
                     }
-                }
+                });
             }
 
             // Auto-generate description from patch ops if not provided
@@ -144,20 +142,24 @@ public sealed class SessionManager
             // Create checkpoint if crossing an interval boundary
             MaybeCreateCheckpoint(id, newCursor);
 
-            lock (_indexLock)
+            // Update index and extract compaction decision BEFORE releasing lock
+            // to avoid recursive deadlock (AppendWal -> Compact -> WithLockedIndex)
+            bool shouldCompact = false;
+            WithLockedIndex(index =>
             {
-                var entry = _index.Sessions.Find(e => e.Id == id);
+                var entry = index.Sessions.Find(e => e.Id == id);
                 if (entry is not null)
                 {
                     entry.WalCount = _store.WalEntryCount(id);
                     entry.CursorPosition = newCursor;
                     entry.LastModifiedAt = DateTime.UtcNow;
-                    _store.SaveIndex(_index);
-
-                    if (entry.WalCount >= _compactThreshold)
-                        Compact(id);
+                    shouldCompact = entry.WalCount >= _compactThreshold;
                 }
-            }
+            });
+
+            // Compact AFTER releasing the file lock to avoid deadlock
+            if (shouldCompact)
+                Compact(id);
         }
         catch (Exception ex)
         {
@@ -191,18 +193,17 @@ public sealed class SessionManager
             _store.DeleteCheckpoints(id);
             _cursors[id] = 0;
 
-            lock (_indexLock)
+            WithLockedIndex(index =>
             {
-                var entry = _index.Sessions.Find(e => e.Id == id);
+                var entry = index.Sessions.Find(e => e.Id == id);
                 if (entry is not null)
                 {
                     entry.WalCount = 0;
                     entry.CursorPosition = 0;
                     entry.CheckpointPositions.Clear();
                     entry.LastModifiedAt = DateTime.UtcNow;
-                    _store.SaveIndex(_index);
                 }
-            }
+            });
 
             _logger.LogInformation("Compacted session {SessionId}.", id);
         }
@@ -262,15 +263,14 @@ public sealed class SessionManager
 
         _cursors[id] = newCursor;
 
-        lock (_indexLock)
+        WithLockedIndex(index =>
         {
-            var entry = _index.Sessions.Find(e => e.Id == id);
+            var entry = index.Sessions.Find(e => e.Id == id);
             if (entry is not null)
             {
                 entry.CursorPosition = newCursor;
-                _store.SaveIndex(_index);
             }
-        }
+        });
 
         return new UndoRedoResult
         {
@@ -323,12 +323,11 @@ public sealed class SessionManager
         var cursor = _cursors.GetOrAdd(id, _ => walEntries.Count);
         var walCount = walEntries.Count;
 
-        List<int> checkpointPositions;
-        lock (_indexLock)
+        var checkpointPositions = WithLockedIndex(index =>
         {
-            var entry = _index.Sessions.Find(e => e.Id == id);
-            checkpointPositions = entry?.CheckpointPositions ?? new List<int>();
-        }
+            var entry = index.Sessions.Find(e => e.Id == id);
+            return entry?.CheckpointPositions.ToList() ?? new List<int>();
+        });
 
         var entries = new List<HistoryEntry>();
 
@@ -379,12 +378,18 @@ public sealed class SessionManager
 
     /// <summary>
     /// Restore all persisted sessions from disk on startup.
-    /// Opens each baseline and replays its WAL up to the cursor position.
+    /// Acquires file lock for the entire duration to prevent mutations during startup replay.
     /// </summary>
     public int RestoreSessions()
     {
         _store.EnsureDirectory();
-        _index = _store.LoadIndex();
+        using var fileLock = _store.AcquireLock();
+
+        lock (_indexLock)
+        {
+            _index = _store.LoadIndex();
+        }
+
         int restored = 0;
         var stale = new List<string>();
 
@@ -467,6 +472,36 @@ public sealed class SessionManager
         return restored;
     }
 
+    // --- Cross-process index helpers ---
+
+    /// <summary>
+    /// Acquire cross-process file lock, reload index from disk, mutate, save.
+    /// Ensures no stale reads when multiple processes share the sessions directory.
+    /// </summary>
+    private void WithLockedIndex(Action<SessionIndexFile> mutate)
+    {
+        using var fileLock = _store.AcquireLock();
+        lock (_indexLock)
+        {
+            _index = _store.LoadIndex();
+            mutate(_index);
+            _store.SaveIndex(_index);
+        }
+    }
+
+    /// <summary>
+    /// Acquire cross-process file lock, reload index from disk, read a value.
+    /// </summary>
+    private T WithLockedIndex<T>(Func<SessionIndexFile, T> read)
+    {
+        using var fileLock = _store.AcquireLock();
+        lock (_indexLock)
+        {
+            _index = _store.LoadIndex();
+            return read(_index);
+        }
+    }
+
     // --- Private helpers ---
 
     private void PersistNewSession(DocxSession session)
@@ -479,9 +514,9 @@ public sealed class SessionManager
 
             _cursors[session.Id] = 0;
 
-            lock (_indexLock)
+            WithLockedIndex(index =>
             {
-                _index.Sessions.Add(new SessionEntry
+                index.Sessions.Add(new SessionEntry
                 {
                     Id = session.Id,
                     SourcePath = session.SourcePath,
@@ -491,8 +526,7 @@ public sealed class SessionManager
                     WalCount = 0,
                     CursorPosition = 0
                 });
-                _store.SaveIndex(_index);
-            }
+            });
         }
         catch (Exception ex)
         {
@@ -507,12 +541,11 @@ public sealed class SessionManager
     /// </summary>
     private void RebuildDocumentAtPosition(string id, int targetPosition)
     {
-        List<int> checkpointPositions;
-        lock (_indexLock)
+        var checkpointPositions = WithLockedIndex(index =>
         {
-            var indexEntry = _index.Sessions.Find(e => e.Id == id);
-            checkpointPositions = indexEntry?.CheckpointPositions ?? new List<int>();
-        }
+            var indexEntry = index.Sessions.Find(e => e.Id == id);
+            return indexEntry?.CheckpointPositions.ToList() ?? new List<int>();
+        });
 
         var (ckptPos, ckptBytes) = _store.LoadNearestCheckpoint(id, targetPosition, checkpointPositions);
 
@@ -542,15 +575,14 @@ public sealed class SessionManager
         _cursors[id] = targetPosition;
         oldSession.Dispose();
 
-        lock (_indexLock)
+        WithLockedIndex(index =>
         {
-            var entry = _index.Sessions.Find(e => e.Id == id);
+            var entry = index.Sessions.Find(e => e.Id == id);
             if (entry is not null)
             {
                 entry.CursorPosition = targetPosition;
-                _store.SaveIndex(_index);
             }
-        }
+        });
     }
 
     /// <summary>
@@ -566,14 +598,14 @@ public sealed class SessionManager
                 var bytes = session.ToBytes();
                 _store.PersistCheckpoint(id, newCursor, bytes);
 
-                lock (_indexLock)
+                WithLockedIndex(index =>
                 {
-                    var entry = _index.Sessions.Find(e => e.Id == id);
+                    var entry = index.Sessions.Find(e => e.Id == id);
                     if (entry is not null && !entry.CheckpointPositions.Contains(newCursor))
                     {
                         entry.CheckpointPositions.Add(newCursor);
                     }
-                }
+                });
 
                 _logger.LogInformation("Created checkpoint at position {Position} for session {SessionId}.", newCursor, id);
             }
@@ -602,10 +634,23 @@ public sealed class SessionManager
                 var path = patch.TryGetProperty("path", out var pathEl) ? pathEl.GetString() : null;
                 if (op is not null)
                 {
-                    var shortPath = path is not null && path.Length > 30
-                        ? path[..30] + "..."
-                        : path;
-                    ops.Add(shortPath is not null ? $"{op} {shortPath}" : op);
+                    if (op == "add_comment")
+                    {
+                        var cid = patch.TryGetProperty("comment_id", out var cidEl) ? cidEl.GetInt32().ToString() : "?";
+                        ops.Add($"add_comment #{cid}");
+                    }
+                    else if (op == "delete_comment")
+                    {
+                        var cid = patch.TryGetProperty("comment_id", out var cidEl) ? cidEl.GetInt32().ToString() : "?";
+                        ops.Add($"delete_comment #{cid}");
+                    }
+                    else
+                    {
+                        var shortPath = path is not null && path.Length > 30
+                            ? path[..30] + "..."
+                            : path;
+                        ops.Add(shortPath is not null ? $"{op} {shortPath}" : op);
+                    }
                 }
             }
 
@@ -656,6 +701,12 @@ public sealed class SessionManager
                     break;
                 case "remove_column":
                     Tools.PatchTool.ReplayRemoveColumn(patch, wpDoc);
+                    break;
+                case "add_comment":
+                    Tools.CommentTools.ReplayAddComment(patch, wpDoc);
+                    break;
+                case "delete_comment":
+                    Tools.CommentTools.ReplayDeleteComment(patch, wpDoc);
                     break;
             }
         }

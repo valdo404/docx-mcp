@@ -73,10 +73,10 @@ public sealed class QueryTool
             // Wrap result with pagination metadata
             var formatted = (format?.ToLowerInvariant() ?? "json") switch
             {
-                "json" => FormatJsonArray(elements),
+                "json" => FormatJsonArray(elements, doc),
                 "text" => FormatText(elements),
                 "summary" => FormatSummary(elements),
-                _ => FormatJsonArray(elements)
+                _ => FormatJsonArray(elements, doc)
             };
 
             if ((format?.ToLowerInvariant() ?? "json") == "json")
@@ -90,10 +90,10 @@ public sealed class QueryTool
 
         return (format?.ToLowerInvariant() ?? "json") switch
         {
-            "json" => FormatJson(elements),
+            "json" => FormatJson(elements, doc),
             "text" => FormatText(elements),
             "summary" => FormatSummary(elements),
-            _ => FormatJson(elements)
+            _ => FormatJson(elements, doc)
         };
     }
 
@@ -175,23 +175,23 @@ public sealed class QueryTool
         return summary.ToJsonString(JsonOpts);
     }
 
-    private static string FormatJson(List<OpenXmlElement> elements)
+    private static string FormatJson(List<OpenXmlElement> elements, WordprocessingDocument? doc = null)
     {
         if (elements.Count == 1)
-            return ElementToJson(elements[0]).ToJsonString(JsonOpts);
+            return ElementToJson(elements[0], doc).ToJsonString(JsonOpts);
 
-        return FormatJsonArray(elements);
+        return FormatJsonArray(elements, doc);
     }
 
     /// <summary>
     /// Always returns a JSON array, even for a single element.
     /// Used by pagination envelopes where items must be an array.
     /// </summary>
-    internal static string FormatJsonArray(List<OpenXmlElement> elements)
+    internal static string FormatJsonArray(List<OpenXmlElement> elements, WordprocessingDocument? doc = null)
     {
         var arr = new JsonArray();
         foreach (var el in elements)
-            arr.Add((JsonNode?)ElementToJson(el));
+            arr.Add((JsonNode?)ElementToJson(el, doc));
 
         return arr.ToJsonString(JsonOpts);
     }
@@ -214,9 +214,9 @@ public sealed class QueryTool
         return sb.ToString();
     }
 
-    internal static JsonNode ElementToJson(OpenXmlElement element) => element switch
+    internal static JsonNode ElementToJson(OpenXmlElement element, WordprocessingDocument? doc = null) => element switch
     {
-        Paragraph p => ParagraphToJson(p),
+        Paragraph p => ParagraphToJson(p, doc),
         Table t => TableToJson(t),
         TableRow tr => RowToJson(tr),
         TableCell tc => CellToJson(tc),
@@ -231,7 +231,7 @@ public sealed class QueryTool
         }
     };
 
-    private static JsonObject ParagraphToJson(Paragraph p)
+    private static JsonObject ParagraphToJson(Paragraph p, WordprocessingDocument? doc = null)
     {
         var result = new JsonObject { ["type"] = "paragraph" };
 
@@ -341,6 +341,50 @@ public sealed class QueryTool
             foreach (var h in hyperlinks)
                 arr.Add((JsonNode)HyperlinkToJson(h));
             result["hyperlinks"] = arr;
+        }
+
+        // Enrich with comment metadata when document is available
+        if (doc is not null)
+        {
+            var commentStarts = p.Descendants<CommentRangeStart>().ToList();
+            if (commentStarts.Count > 0)
+            {
+                var commentsPart = doc.MainDocumentPart?.WordprocessingCommentsPart;
+                if (commentsPart?.Comments is not null)
+                {
+                    var commentsArr = new JsonArray();
+                    var body = doc.MainDocumentPart?.Document?.Body;
+
+                    foreach (var cs in commentStarts)
+                    {
+                        var idStr = cs.Id?.Value;
+                        if (idStr is null) continue;
+
+                        var comment = commentsPart.Comments.Elements<Comment>()
+                            .FirstOrDefault(c => c.Id?.Value == idStr);
+                        if (comment is null) continue;
+
+                        var commentObj = new JsonObject
+                        {
+                            ["id"] = int.TryParse(idStr, out var cid) ? cid : 0,
+                            ["author"] = comment.Author?.Value ?? "",
+                            ["text"] = string.Join("\n", comment.Elements<Paragraph>().Select(cp => cp.InnerText)),
+                        };
+
+                        if (body is not null)
+                        {
+                            var anchoredText = Helpers.CommentHelper.GetAnchoredText(p, idStr);
+                            if (anchoredText is not null)
+                                commentObj["anchored_text"] = anchoredText;
+                        }
+
+                        commentsArr.Add((JsonNode)commentObj);
+                    }
+
+                    if (commentsArr.Count > 0)
+                        result["comments"] = commentsArr;
+                }
+            }
         }
 
         return result;

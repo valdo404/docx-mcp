@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
@@ -34,6 +35,7 @@ public sealed class ReadHeadingContentTool
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
         var session = sessions.Get(doc_id);
+        var doc = session.Document;
         var body = session.GetBody();
 
         var allChildren = body.ChildElements.Cast<OpenXmlElement>().ToList();
@@ -82,10 +84,10 @@ public sealed class ReadHeadingContentTool
         var fmt = format?.ToLowerInvariant() ?? "json";
         var formatted = fmt switch
         {
-            "json" => FormatJson(page),
+            "json" => FormatJson(page, doc),
             "text" => FormatText(page),
             "summary" => FormatSummary(page),
-            _ => FormatJson(page)
+            _ => FormatJson(page, doc)
         };
 
         if (fmt == "json")
@@ -248,9 +250,9 @@ public sealed class ReadHeadingContentTool
         return result.ToJsonString(JsonOpts);
     }
 
-    private static string FormatJson(List<OpenXmlElement> elements)
+    private static string FormatJson(List<OpenXmlElement> elements, WordprocessingDocument? doc = null)
     {
-        return QueryTool.FormatJsonArray(elements);
+        return QueryTool.FormatJsonArray(elements, doc);
     }
 
     private static string FormatText(List<OpenXmlElement> elements)

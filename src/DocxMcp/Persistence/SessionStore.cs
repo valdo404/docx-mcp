@@ -14,6 +14,7 @@ public sealed class SessionStore : IDisposable
 {
     private readonly string _sessionsDir;
     private readonly string _indexPath;
+    private readonly string _lockPath;
     private readonly ILogger<SessionStore> _logger;
     private readonly ConcurrentDictionary<string, MappedWal> _openWals = new();
 
@@ -25,6 +26,7 @@ public sealed class SessionStore : IDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".docx-mcp", "sessions");
         _indexPath = Path.Combine(_sessionsDir, "index.json");
+        _lockPath = Path.Combine(_sessionsDir, ".lock");
     }
 
     public string SessionsDir => _sessionsDir;
@@ -32,6 +34,34 @@ public sealed class SessionStore : IDisposable
     public void EnsureDirectory()
     {
         Directory.CreateDirectory(_sessionsDir);
+    }
+
+    // --- Cross-process file lock ---
+
+    /// <summary>
+    /// Acquire an exclusive file lock for cross-process index mutations.
+    /// Uses exponential backoff with jitter on contention.
+    /// </summary>
+    public SessionLock AcquireLock(int maxRetries = 20, int initialDelayMs = 50)
+    {
+        EnsureDirectory();
+        var delay = initialDelayMs;
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                var fs = new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                return new SessionLock(fs);
+            }
+            catch (IOException) when (attempt < maxRetries)
+            {
+                Thread.Sleep(delay);
+                delay = Math.Min(delay * 2, 2000);
+            }
+        }
+
+        throw new TimeoutException(
+            $"Failed to acquire session lock after {maxRetries} retries ({_lockPath}).");
     }
 
     // --- Index operations ---
@@ -156,6 +186,7 @@ public sealed class SessionStore : IDisposable
     public List<string> ReadWal(string sessionId)
     {
         var wal = GetOrCreateWal(sessionId);
+        wal.Refresh();
         var patches = new List<string>();
 
         foreach (var line in wal.ReadAll())
@@ -183,6 +214,7 @@ public sealed class SessionStore : IDisposable
     public List<string> ReadWalRange(string sessionId, int from, int to)
     {
         var wal = GetOrCreateWal(sessionId);
+        wal.Refresh();
         var lines = wal.ReadRange(from, to);
         var patches = new List<string>(lines.Count);
 
@@ -211,6 +243,7 @@ public sealed class SessionStore : IDisposable
     public List<WalEntry> ReadWalEntries(string sessionId)
     {
         var wal = GetOrCreateWal(sessionId);
+        wal.Refresh();
         var entries = new List<WalEntry>();
 
         foreach (var line in wal.ReadAll())
@@ -234,7 +267,9 @@ public sealed class SessionStore : IDisposable
 
     public int WalEntryCount(string sessionId)
     {
-        return GetOrCreateWal(sessionId).EntryCount;
+        var wal = GetOrCreateWal(sessionId);
+        wal.Refresh();
+        return wal.EntryCount;
     }
 
     public void TruncateWal(string sessionId)

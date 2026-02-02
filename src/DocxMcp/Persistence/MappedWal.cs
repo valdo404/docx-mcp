@@ -65,6 +65,26 @@ public sealed class MappedWal : IDisposable
         }
     }
 
+    /// <summary>
+    /// Re-read the data length header from the memory-mapped file and rebuild
+    /// line offsets if another process has appended to the WAL.
+    /// No-op when data length is unchanged (common single-process case).
+    /// </summary>
+    public void Refresh()
+    {
+        lock (_lock)
+        {
+            var currentLength = _accessor.ReadInt64(0);
+            if (currentLength != _dataLength
+                && currentLength >= 0
+                && currentLength <= _capacity - HeaderSize)
+            {
+                _dataLength = currentLength;
+                BuildLineOffsets();
+            }
+        }
+    }
+
     public void Append(string line)
     {
         lock (_lock)
