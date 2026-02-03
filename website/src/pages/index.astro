@@ -2,21 +2,26 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="docx-mcp — Intelligent Word Document Automation for AI Agents">
+<Layout title="docx-mcp — AI-Powered Document Editing">
   <!-- Navigation -->
   <nav class="nav">
     <div class="nav-container">
       <a href="/" class="logo">
-        <span class="logo-icon">📄</span>
-        <span class="logo-text">docx-mcp</span>
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="2" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M7 7h6M7 11h6M7 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="18" cy="18" r="5" fill="#0078d4"/>
+            <path d="M16 18h4M18 16v4" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <span>docx-mcp</span>
       </a>
       <div class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#integrations">Integrations</a>
-        <a href="#install">Install</a>
-        <a href="https://github.com/valdo404/docx-mcp" class="btn btn-github" target="_blank" rel="noopener">
-          <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-          GitHub
+        <a href="#products">Products</a>
+        <a href="#vision">Vision</a>
+        <a href="https://github.com/valdo404/docx-mcp" target="_blank" rel="noopener" class="nav-github">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
         </a>
       </div>
     </div>
@@ -24,261 +29,258 @@ import Layout from '../layouts/Layout.astro';
 
   <!-- Hero Section -->
   <section class="hero">
-    <div class="hero-bg"></div>
+    <div class="hero-ambient"></div>
     <div class="container">
-      <div class="hero-badge">
-        <span class="badge-dot"></span>
-        Open Source & Production Ready
-      </div>
-      <h1 class="hero-title">
-        Intelligent Word Document<br/>
-        <span class="gradient-text">Automation for AI Agents</span>
-      </h1>
-      <p class="hero-subtitle">
-        Treat <code>.docx</code> files as structured data, not opaque blobs.<br/>
-        Seamlessly integrate with Claude, Cursor, and any MCP-compatible AI tool.
-      </p>
-      <div class="hero-actions">
-        <a href="#install" class="btn btn-primary">
-          <span>Get Started</span>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </a>
-        <a href="https://github.com/valdo404/docx-mcp" class="btn btn-secondary" target="_blank" rel="noopener">
-          View on GitHub
-        </a>
-      </div>
-      <div class="hero-stats">
-        <div class="stat">
-          <span class="stat-value">21</span>
-          <span class="stat-label">MCP Tools</span>
+      <div class="hero-content">
+        <div class="hero-eyebrow">
+          <span class="badge badge-available">Available now</span>
+          <span class="badge-text">MCP Server for Claude & AI Agents</span>
         </div>
-        <div class="stat">
-          <span class="stat-value">323</span>
-          <span class="stat-label">Tests</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value">~28MB</span>
-          <span class="stat-label">Single Binary</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value">0</span>
-          <span class="stat-label">Dependencies</span>
-        </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- Code Preview -->
-  <section class="code-preview">
-    <div class="container">
-      <div class="code-window">
-        <div class="code-header">
-          <div class="code-dots">
-            <span></span><span></span><span></span>
+        <h1 class="hero-title">
+          Stop editing Word documents.<br/>
+          <span class="hero-highlight">Let AI do it.</span>
+        </h1>
+
+        <p class="hero-description">
+          Your team spends hours formatting reports, updating contracts, and fixing documents manually.
+          docx-mcp connects your AI assistants directly to Microsoft Word — so they can read, edit, and format documents for you.
+        </p>
+
+        <div class="hero-cta">
+          <a href="https://github.com/valdo404/docx-mcp" class="btn btn-primary" target="_blank">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            Get Started Free
+          </a>
+          <a href="#products" class="btn btn-secondary">See the Roadmap</a>
+        </div>
+
+        <div class="hero-proof">
+          <div class="proof-item">
+            <span class="proof-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            </span>
+            <span>Works with Claude Desktop</span>
           </div>
-          <span class="code-title">Claude Desktop Integration</span>
+          <div class="proof-item">
+            <span class="proof-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            </span>
+            <span>Open Source</span>
+          </div>
+          <div class="proof-item">
+            <span class="proof-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            </span>
+            <span>MIT License</span>
+          </div>
         </div>
-        <pre class="code-content"><code><span class="code-comment">// ~/.config/claude/claude_desktop_config.json</span>
-{
-  <span class="code-key">"mcpServers"</span>: {
-    <span class="code-key">"docx"</span>: {
-      <span class="code-key">"command"</span>: <span class="code-string">"docker"</span>,
-      <span class="code-key">"args"</span>: [
-        <span class="code-string">"run"</span>, <span class="code-string">"-i"</span>, <span class="code-string">"--rm"</span>,
-        <span class="code-string">"-v"</span>, <span class="code-string">"/Users/you/Documents:/docs"</span>,
-        <span class="code-string">"valdo404/docx-mcp:latest"</span>
-      ]
-    }
-  }
-}</code></pre>
+      </div>
+
+      <div class="hero-visual">
+        <div class="visual-card">
+          <div class="visual-header">
+            <div class="visual-dots"><span></span><span></span><span></span></div>
+            <span class="visual-title">Claude</span>
+          </div>
+          <div class="visual-content">
+            <div class="chat-message user">
+              <p>"Update the Q4 report with new sales figures and format the executive summary."</p>
+            </div>
+            <div class="chat-message assistant">
+              <p>Done! I've updated the sales figures in all 12 tables and reformatted the executive summary with the new highlights. The document is saved.</p>
+              <div class="chat-file">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8" fill="none" stroke="white" stroke-width="2"/></svg>
+                Q4-Report-2024.docx
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- Features Section -->
-  <section id="features" class="features">
+  <!-- Problem Section -->
+  <section class="problem">
+    <div class="container">
+      <div class="problem-content">
+        <h2>Document editing is still manual. In 2024.</h2>
+        <p>
+          AI can write code, analyze data, and answer complex questions.
+          But when it comes to your Word documents? You're still copying, pasting, and formatting by hand.
+        </p>
+        <div class="problem-stats">
+          <div class="stat">
+            <span class="stat-number">5h+</span>
+            <span class="stat-label">per week spent on document formatting</span>
+          </div>
+          <div class="stat">
+            <span class="stat-number">73%</span>
+            <span class="stat-label">of knowledge workers edit docs daily</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Products Section -->
+  <section id="products" class="products">
     <div class="container">
       <div class="section-header">
-        <h2 class="section-title">Powerful Features</h2>
-        <p class="section-subtitle">Everything you need to automate Word document processing with AI</p>
+        <h2>The docx-mcp Ecosystem</h2>
+        <p>One mission: make document editing automatic. Multiple products to get there.</p>
       </div>
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="feature-icon">🎯</div>
-          <h3>Typed Path Queries</h3>
-          <p>Navigate documents with intuitive paths like <code>/body/heading[level=1]</code> or <code>/body/paragraph[text~='budget']</code></p>
+
+      <div class="products-grid">
+        <!-- Available Now -->
+        <div class="product-card product-available">
+          <div class="product-status">
+            <span class="status-dot available"></span>
+            Available now
+          </div>
+          <div class="product-icon">
+            <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="8" y="4" width="32" height="40" rx="4" fill="#0078d4"/>
+              <path d="M16 16h16M16 24h16M16 32h10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>MCP Server</h3>
+          <p>
+            Connect Claude, Cursor, or any MCP-compatible AI to your Word documents.
+            Read, edit, format — all through natural language.
+          </p>
+          <a href="https://github.com/valdo404/docx-mcp" class="product-link" target="_blank">
+            View on GitHub
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </a>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon">⏱️</div>
-          <h3>Time Travel</h3>
-          <p>Full undo/redo with write-ahead logs. Jump to any editing point and branch off to new timelines.</p>
+
+        <!-- Coming Soon Products -->
+        <div class="product-card product-coming">
+          <div class="product-status">
+            <span class="status-dot coming"></span>
+            Coming soon
+          </div>
+          <div class="product-icon">
+            <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="6" y="8" width="36" height="32" rx="4" stroke="#0078d4" stroke-width="2"/>
+              <circle cx="24" cy="24" r="8" fill="#0078d4"/>
+              <path d="M24 20v4l3 3" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>Word Add-in</h3>
+          <p>
+            AI-powered editing directly inside Microsoft Word.
+            Available for Windows, macOS, and iPad.
+          </p>
+          <div class="product-platforms">
+            <span>Windows</span>
+            <span>macOS</span>
+            <span>iPad</span>
+          </div>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon">🎨</div>
-          <h3>Merge-Based Styling</h3>
-          <p>Apply formatting without losing existing properties. Make text bold without losing italic.</p>
+
+        <div class="product-card product-coming">
+          <div class="product-status">
+            <span class="status-dot coming"></span>
+            Coming soon
+          </div>
+          <div class="product-icon">
+            <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="#0078d4" stroke-width="2"/>
+              <circle cx="24" cy="24" r="6" fill="#0078d4"/>
+            </svg>
+          </div>
+          <h3>Claude Skill</h3>
+          <p>
+            Use docx-mcp capabilities directly in Claude.ai.
+            No setup, no installation — just ask Claude to edit your documents.
+          </p>
+          <div class="product-badge">Anthropic Partnership</div>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon">💬</div>
-          <h3>Comments System</h3>
-          <p>Add, list, and delete comments anchored to specific elements. Persists in native .docx format.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">📦</div>
-          <h3>Zero Dependencies</h3>
-          <p>Single NativeAOT compiled binary (~28MB). No .NET runtime required. Just download and run.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🔄</div>
-          <h3>Session Persistence</h3>
-          <p>Sessions survive server restarts. Pick up exactly where you left off with full history.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">📤</div>
-          <h3>Multi-Format Export</h3>
-          <p>Export to PDF, HTML, or Markdown. Built-in converters with no external dependencies.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🔒</div>
-          <h3>File Locking</h3>
-          <p>Cross-process document locking prevents concurrent edits and data corruption.</p>
+
+        <div class="product-card product-coming product-wide">
+          <div class="product-status">
+            <span class="status-dot coming"></span>
+            Coming soon
+          </div>
+          <div class="product-icon">
+            <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8 24h8l4-8 4 16 4-8h12" stroke="#0078d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="8" cy="24" r="3" fill="#0078d4"/>
+              <circle cx="40" cy="24" r="3" fill="#0078d4"/>
+            </svg>
+          </div>
+          <h3>Agentic Document Workflows</h3>
+          <p>
+            End-to-end automation for enterprise document pipelines.
+            Connect your documents to AI agents that handle the entire editing lifecycle — from draft to final approval.
+          </p>
+          <div class="product-integrations">
+            <div class="integration">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21.007 8.222A3.738 3.738 0 0 0 17.227 5.5a3.727 3.727 0 0 0-2.69 1.157 5.452 5.452 0 0 0-2.532-.643 5.477 5.477 0 0 0-5.476 5.477v.057a3.738 3.738 0 0 0 .643 7.447h10.855a3.738 3.738 0 0 0 2.98-5.773z"/></svg>
+              <span>Microsoft 365</span>
+            </div>
+            <div class="integration">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12.5 2h-9a1.5 1.5 0 0 0-1.5 1.5v9a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.5-1.5zm7 7h-4a1.5 1.5 0 0 0-1.5 1.5v10a1.5 1.5 0 0 0 1.5 1.5h4a1.5 1.5 0 0 0 1.5-1.5v-10a1.5 1.5 0 0 0-1.5-1.5z"/></svg>
+              <span>SharePoint</span>
+            </div>
+            <div class="integration">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              <span>Amazon S3</span>
+            </div>
+            <div class="integration">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M22.46 6c-.77.35-1.6.58-2.46.69.88-.53 1.56-1.37 1.88-2.38-.83.5-1.75.85-2.72 1.05C18.37 4.5 17.26 4 16 4c-2.35 0-4.27 1.92-4.27 4.29 0 .34.04.67.11.98C8.28 9.09 5.11 7.38 3 4.79c-.37.63-.58 1.37-.58 2.15 0 1.49.75 2.81 1.91 3.56-.71 0-1.37-.2-1.95-.5v.03c0 2.08 1.48 3.82 3.44 4.21a4.22 4.22 0 0 1-1.93.07 4.28 4.28 0 0 0 4 2.98 8.521 8.521 0 0 1-5.33 1.84c-.34 0-.68-.02-1.02-.06C3.44 20.29 5.7 21 8.12 21 16 21 20.33 14.46 20.33 8.79c0-.19 0-.37-.01-.56.84-.6 1.56-1.36 2.14-2.23z"/></svg>
+              <span>ChatGPT</span>
+            </div>
+            <div class="integration">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><path d="M12 6a1 1 0 0 0-1 1v5a1 1 0 0 0 .29.71l3 3a1 1 0 0 0 1.42-1.42L13 11.59V7a1 1 0 0 0-1-1z"/></svg>
+              <span>Claude</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Tools Section -->
-  <section class="tools">
+  <!-- Vision Section -->
+  <section id="vision" class="vision">
     <div class="container">
-      <div class="section-header">
-        <h2 class="section-title">21 MCP Tools</h2>
-        <p class="section-subtitle">Complete document manipulation toolkit</p>
-      </div>
-      <div class="tools-grid">
-        <div class="tool-category">
-          <h4>Document Management</h4>
-          <ul>
-            <li><code>document_open</code></li>
-            <li><code>document_save</code></li>
-            <li><code>document_close</code></li>
-            <li><code>document_list</code></li>
-          </ul>
-        </div>
-        <div class="tool-category">
-          <h4>Querying</h4>
-          <ul>
-            <li><code>query</code></li>
-            <li><code>read_section</code></li>
-            <li><code>read_heading_content</code></li>
-            <li><code>document_count</code></li>
-            <li><code>document_snapshot</code></li>
-          </ul>
-        </div>
-        <div class="tool-category">
-          <h4>Editing</h4>
-          <ul>
-            <li><code>apply_patch</code> <span class="tool-badge">RFC 6902</span></li>
-          </ul>
-        </div>
-        <div class="tool-category">
-          <h4>Styling</h4>
-          <ul>
-            <li><code>style_element</code></li>
-            <li><code>style_paragraph</code></li>
-            <li><code>style_table</code></li>
-          </ul>
-        </div>
-        <div class="tool-category">
-          <h4>Comments</h4>
-          <ul>
-            <li><code>comment_add</code></li>
-            <li><code>comment_list</code></li>
-            <li><code>comment_delete</code></li>
-          </ul>
-        </div>
-        <div class="tool-category">
-          <h4>History</h4>
-          <ul>
-            <li><code>document_undo</code></li>
-            <li><code>document_redo</code></li>
-            <li><code>document_history</code></li>
-            <li><code>document_jump_to</code></li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Integrations Section -->
-  <section id="integrations" class="integrations">
-    <div class="container">
-      <div class="section-header">
-        <h2 class="section-title">Seamless Integrations</h2>
-        <p class="section-subtitle">Works with your favorite AI tools out of the box</p>
-      </div>
-      <div class="integrations-grid">
-        <div class="integration-card">
-          <div class="integration-logo">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      <div class="vision-content">
+        <h2>The future of document editing is agentic</h2>
+        <p>
+          We're building toward a world where you never manually edit a Word document again.
+          Your AI assistant understands your intent, knows your documents, and handles the formatting,
+          updates, and revisions — while you focus on what matters.
+        </p>
+        <div class="vision-features">
+          <div class="vision-feature">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            </div>
+            <div class="feature-text">
+              <h4>Multi-platform</h4>
+              <p>Works everywhere your documents live — Microsoft 365, SharePoint, local files, cloud storage.</p>
+            </div>
           </div>
-          <h3>Claude Desktop</h3>
-          <p>Native MCP integration with Anthropic's Claude Desktop application</p>
-        </div>
-        <div class="integration-card">
-          <div class="integration-logo">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.5 2c-5.621 0-10.211 4.443-10.475 10h-3.025l5 6.625 5-6.625h-2.975c.257-3.351 3.06-6 6.475-6 3.584 0 6.5 2.916 6.5 6.5s-2.916 6.5-6.5 6.5c-1.863 0-3.542-.793-4.728-2.053l-2.427 3.216c1.877 1.754 4.389 2.837 7.155 2.837 5.79 0 10.5-4.71 10.5-10.5s-4.71-10.5-10.5-10.5z"/></svg>
+          <div class="vision-feature">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v10M1 12h6m6 0h10"/></svg>
+            </div>
+            <div class="feature-text">
+              <h4>AI-native</h4>
+              <p>Built for Claude, ChatGPT, and the next generation of AI assistants.</p>
+            </div>
           </div>
-          <h3>Cursor IDE</h3>
-          <p>Edit Word documents directly from your AI-powered code editor</p>
-        </div>
-        <div class="integration-card">
-          <div class="integration-logo">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.568 8.16c-.169 1.858-1.576 6.543-2.23 8.681-.277.903-.82 1.204-1.346 1.234-.937.054-1.648-.618-2.555-1.212-1.419-.929-2.22-1.507-3.598-2.413-1.592-1.048-.56-1.624.347-2.565.238-.247 4.363-4 4.444-4.342.01-.043.02-.202-.075-.286s-.234-.055-.335-.032c-.143.032-2.418 1.536-6.826 4.51-.646.443-1.231.659-1.755.647-.578-.013-1.688-.327-2.514-.595-1.013-.33-1.818-.504-1.748-1.063.037-.291.444-.59 1.222-.895 4.788-2.086 7.98-3.461 9.575-4.125 4.56-1.898 5.51-2.228 6.128-2.239.136-.002.44.031.637.19.166.134.212.314.234.44.021.127.048.416.027.641z"/></svg>
+          <div class="vision-feature">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <div class="feature-text">
+              <h4>Enterprise-ready</h4>
+              <p>Security, compliance, and audit trails built in from day one.</p>
+            </div>
           </div>
-          <h3>Any MCP Client</h3>
-          <p>Standard Model Context Protocol support for universal compatibility</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Install Section -->
-  <section id="install" class="install">
-    <div class="container">
-      <div class="section-header">
-        <h2 class="section-title">Quick Start</h2>
-        <p class="section-subtitle">Get up and running in seconds</p>
-      </div>
-      <div class="install-options">
-        <div class="install-option">
-          <h3>
-            <span class="install-icon">🐳</span>
-            Docker (Recommended)
-          </h3>
-          <div class="code-block">
-            <code>docker pull valdo404/docx-mcp:latest</code>
-            <button class="copy-btn" data-code="docker pull valdo404/docx-mcp:latest">Copy</button>
-          </div>
-        </div>
-        <div class="install-option">
-          <h3>
-            <span class="install-icon">💻</span>
-            CLI Tool
-          </h3>
-          <div class="code-block">
-            <code>docx-cli open report.docx<br/>docx-cli query &lt;id&gt; '/body/paragraph[*]'<br/>docx-cli patch &lt;id&gt; '[{"op":"add",...}]'</code>
-          </div>
-        </div>
-      </div>
-      <div class="install-platforms">
-        <h4>Available for all platforms</h4>
-        <div class="platforms">
-          <span class="platform">macOS ARM64</span>
-          <span class="platform">macOS x64</span>
-          <span class="platform">Linux x64</span>
-          <span class="platform">Linux ARM64</span>
-          <span class="platform">Windows x64</span>
-          <span class="platform">Windows ARM64</span>
         </div>
       </div>
     </div>
@@ -289,16 +291,14 @@ import Layout from '../layouts/Layout.astro';
     <div class="container">
       <div class="cta-content">
         <h2>Ready to automate your document workflows?</h2>
-        <p>Join the growing community of developers using docx-mcp for intelligent document automation.</p>
+        <p>Start with the open-source MCP Server today. Be first in line for what's next.</p>
         <div class="cta-actions">
-          <a href="https://github.com/valdo404/docx-mcp" class="btn btn-primary btn-large" target="_blank" rel="noopener">
-            <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-            Star on GitHub
-          </a>
-          <a href="https://github.com/valdo404/docx-mcp/blob/main/README.md" class="btn btn-secondary btn-large" target="_blank" rel="noopener">
-            Read the Docs
+          <a href="https://github.com/valdo404/docx-mcp" class="btn btn-primary btn-large" target="_blank">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            Get Started on GitHub
           </a>
         </div>
+        <p class="cta-note">Free and open source under MIT License</p>
       </div>
     </div>
   </section>
@@ -308,17 +308,23 @@ import Layout from '../layouts/Layout.astro';
     <div class="container">
       <div class="footer-content">
         <div class="footer-brand">
-          <span class="logo-icon">📄</span>
-          <span class="logo-text">docx-mcp</span>
+          <div class="logo">
+            <div class="logo-icon">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="3" y="2" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M7 7h6M7 11h6M7 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                <circle cx="18" cy="18" r="5" fill="#0078d4"/>
+                <path d="M16 18h4M18 16v4" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <span>docx-mcp</span>
+          </div>
+          <p>AI-powered document editing for everyone.</p>
         </div>
-        <p class="footer-text">
-          Open source under MIT License.
-          Built with .NET 10 & Open XML SDK.
-        </p>
         <div class="footer-links">
-          <a href="https://github.com/valdo404/docx-mcp" target="_blank" rel="noopener">GitHub</a>
-          <a href="https://github.com/valdo404/docx-mcp/issues" target="_blank" rel="noopener">Issues</a>
-          <a href="https://github.com/valdo404/docx-mcp/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+          <a href="https://github.com/valdo404/docx-mcp" target="_blank">GitHub</a>
+          <a href="https://github.com/valdo404/docx-mcp/issues" target="_blank">Issues</a>
+          <a href="https://github.com/valdo404/docx-mcp/blob/main/LICENSE" target="_blank">MIT License</a>
         </div>
       </div>
     </div>
@@ -326,6 +332,13 @@ import Layout from '../layouts/Layout.astro';
 </Layout>
 
 <style>
+  /* Container */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing-xxl);
+  }
+
   /* Navigation */
   .nav {
     position: fixed;
@@ -333,15 +346,15 @@ import Layout from '../layouts/Layout.astro';
     left: 0;
     right: 0;
     z-index: 100;
-    background: rgba(10, 10, 15, 0.8);
+    background: rgba(15, 15, 15, 0.85);
     backdrop-filter: blur(20px);
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .nav-container {
     max-width: 1200px;
     margin: 0 auto;
-    padding: 1rem 2rem;
+    padding: var(--spacing-l) var(--spacing-xxl);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -350,581 +363,606 @@ import Layout from '../layouts/Layout.astro';
   .logo {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-weight: 700;
-    font-size: 1.25rem;
+    gap: var(--spacing-s);
+    color: var(--text-primary);
+    font-weight: var(--font-weight-semibold);
+    font-size: var(--font-size-400);
+  }
+
+  .logo:hover {
+    text-decoration: none;
   }
 
   .logo-icon {
-    font-size: 1.5rem;
+    width: 28px;
+    height: 28px;
+    color: var(--text-primary);
+  }
+
+  .logo-icon svg {
+    width: 100%;
+    height: 100%;
   }
 
   .nav-links {
     display: flex;
     align-items: center;
-    gap: 2rem;
+    gap: var(--spacing-xxl);
   }
 
   .nav-links a {
     color: var(--text-secondary);
+    font-size: var(--font-size-300);
     transition: color 0.2s;
   }
 
   .nav-links a:hover {
     color: var(--text-primary);
+    text-decoration: none;
+  }
+
+  .nav-github {
+    display: flex;
+    align-items: center;
   }
 
   /* Buttons */
   .btn {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
-    font-weight: 600;
-    transition: all 0.2s;
+    justify-content: center;
+    gap: var(--spacing-s);
+    padding: var(--spacing-m) var(--spacing-xl);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    transition: all 0.15s ease;
     cursor: pointer;
     border: none;
+    text-decoration: none;
+  }
+
+  .btn:hover {
+    text-decoration: none;
   }
 
   .btn-primary {
-    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+    background: var(--brand-primary);
     color: white;
   }
 
   .btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 30px rgba(59, 130, 246, 0.3);
+    background: var(--brand-primary-hover);
   }
 
   .btn-secondary {
-    background: var(--bg-tertiary);
+    background: transparent;
     color: var(--text-primary);
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border-default);
   }
 
   .btn-secondary:hover {
-    background: var(--bg-secondary);
-    border-color: var(--text-muted);
-  }
-
-  .btn-github {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    padding: 0.5rem 1rem;
+    background: var(--bg-layer-3);
+    border-color: var(--border-strong);
   }
 
   .btn-large {
-    padding: 1rem 2rem;
-    font-size: 1.1rem;
-  }
-
-  .github-icon {
-    width: 20px;
-    height: 20px;
-  }
-
-  .btn svg {
-    width: 18px;
-    height: 18px;
+    padding: var(--spacing-l) var(--spacing-xxl);
+    font-size: var(--font-size-400);
   }
 
   /* Hero Section */
   .hero {
     position: relative;
-    padding: 10rem 2rem 6rem;
-    text-align: center;
+    padding: 160px 0 80px;
     overflow: hidden;
   }
 
-  .hero-bg {
+  .hero-ambient {
     position: absolute;
     top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background:
-      radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.15) 0%, transparent 50%),
-      radial-gradient(ellipse at 80% 50%, rgba(139, 92, 246, 0.1) 0%, transparent 40%),
-      radial-gradient(ellipse at 20% 80%, rgba(6, 182, 212, 0.1) 0%, transparent 40%);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 150%;
+    height: 600px;
+    background: radial-gradient(ellipse at center top, rgba(0, 120, 212, 0.15) 0%, transparent 60%);
     pointer-events: none;
   }
 
-  .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    position: relative;
+  .hero .container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 80px;
+    align-items: center;
   }
 
-  .hero-badge {
+  .hero-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-m);
+    margin-bottom: var(--spacing-xxl);
+  }
+
+  .badge {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 50px;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-    margin-bottom: 2rem;
+    padding: var(--spacing-xs) var(--spacing-m);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    font-weight: var(--font-weight-semibold);
   }
 
-  .badge-dot {
-    width: 8px;
-    height: 8px;
-    background: var(--accent-green);
-    border-radius: 50%;
-    animation: pulse 2s infinite;
+  .badge-available {
+    background: rgba(14, 112, 14, 0.2);
+    color: #4caf50;
+    border: 1px solid rgba(14, 112, 14, 0.3);
   }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+  .badge-text {
+    color: var(--text-tertiary);
+    font-size: var(--font-size-200);
   }
 
   .hero-title {
-    font-size: clamp(2.5rem, 6vw, 4.5rem);
-    font-weight: 800;
-    line-height: 1.1;
-    margin-bottom: 1.5rem;
+    font-size: var(--font-size-900);
+    font-weight: var(--font-weight-bold);
+    line-height: var(--line-height-900);
+    margin-bottom: var(--spacing-xxl);
     letter-spacing: -0.02em;
   }
 
-  .gradient-text {
-    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end), var(--accent-cyan));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+  .hero-highlight {
+    color: var(--brand-primary);
   }
 
-  .hero-subtitle {
-    font-size: 1.25rem;
+  .hero-description {
+    font-size: var(--font-size-400);
+    line-height: 1.6;
     color: var(--text-secondary);
-    max-width: 700px;
-    margin: 0 auto 2.5rem;
-    line-height: 1.7;
+    margin-bottom: var(--spacing-xxxl);
+    max-width: 500px;
   }
 
-  .hero-subtitle code {
-    background: var(--bg-tertiary);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    color: var(--accent-cyan);
+  .hero-cta {
+    display: flex;
+    gap: var(--spacing-l);
+    margin-bottom: var(--spacing-xxxl);
   }
 
-  .hero-actions {
+  .hero-proof {
+    display: flex;
+    gap: var(--spacing-xxl);
+  }
+
+  .proof-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-200);
+  }
+
+  .proof-icon {
+    width: 16px;
+    height: 16px;
+    color: #4caf50;
+  }
+
+  .proof-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Hero Visual */
+  .hero-visual {
+    position: relative;
+  }
+
+  .visual-card {
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    overflow: hidden;
+    box-shadow: var(--shadow-28);
+  }
+
+  .visual-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-m);
+    padding: var(--spacing-m) var(--spacing-l);
+    background: var(--bg-layer-3);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .visual-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .visual-dots span {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bg-layer-4);
+  }
+
+  .visual-dots span:nth-child(1) { background: #ff5f56; }
+  .visual-dots span:nth-child(2) { background: #ffbd2e; }
+  .visual-dots span:nth-child(3) { background: #27c93f; }
+
+  .visual-title {
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+  }
+
+  .visual-content {
+    padding: var(--spacing-xxl);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-l);
+  }
+
+  .chat-message {
+    padding: var(--spacing-l);
+    border-radius: var(--radius-m);
+    max-width: 90%;
+  }
+
+  .chat-message p {
+    font-size: var(--font-size-300);
+    line-height: 1.5;
+  }
+
+  .chat-message.user {
+    background: var(--bg-layer-3);
+    color: var(--text-primary);
+    align-self: flex-end;
+  }
+
+  .chat-message.assistant {
+    background: rgba(0, 120, 212, 0.1);
+    border: 1px solid rgba(0, 120, 212, 0.2);
+    color: var(--text-primary);
+  }
+
+  .chat-file {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    margin-top: var(--spacing-m);
+    padding: var(--spacing-s) var(--spacing-m);
+    background: var(--brand-primary);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    color: white;
+  }
+
+  /* Problem Section */
+  .problem {
+    padding: 100px 0;
+    background: var(--bg-layer-2);
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .problem-content {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .problem-content h2 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .problem-content > p {
+    font-size: var(--font-size-400);
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .problem-stats {
     display: flex;
     justify-content: center;
-    gap: 1rem;
-    margin-bottom: 4rem;
-    flex-wrap: wrap;
-  }
-
-  .hero-stats {
-    display: flex;
-    justify-content: center;
-    gap: 3rem;
-    flex-wrap: wrap;
+    gap: 80px;
   }
 
   .stat {
     text-align: center;
   }
 
-  .stat-value {
+  .stat-number {
     display: block;
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--text-primary);
+    font-size: var(--font-size-1000);
+    font-weight: var(--font-weight-bold);
+    color: var(--brand-primary);
+    line-height: 1;
   }
 
   .stat-label {
-    font-size: 0.875rem;
-    color: var(--text-muted);
+    display: block;
+    margin-top: var(--spacing-m);
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
   }
 
-  /* Code Preview */
-  .code-preview {
-    padding: 0 2rem 6rem;
-  }
-
-  .code-window {
-    max-width: 800px;
-    margin: 0 auto;
-    background: var(--code-bg);
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-    overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  }
-
-  .code-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem 1.5rem;
-    background: var(--bg-tertiary);
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .code-dots {
-    display: flex;
-    gap: 8px;
-  }
-
-  .code-dots span {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--border-color);
-  }
-
-  .code-dots span:nth-child(1) { background: #ff5f56; }
-  .code-dots span:nth-child(2) { background: #ffbd2e; }
-  .code-dots span:nth-child(3) { background: #27ca40; }
-
-  .code-title {
-    color: var(--text-muted);
-    font-size: 0.875rem;
-  }
-
-  .code-content {
-    padding: 1.5rem;
-    overflow-x: auto;
-    font-size: 0.9rem;
-    line-height: 1.7;
-  }
-
-  .code-comment { color: #6a737d; }
-  .code-key { color: #79c0ff; }
-  .code-string { color: #a5d6ff; }
-
-  /* Features Section */
-  .features {
-    padding: 6rem 2rem;
-    background: var(--bg-secondary);
+  /* Products Section */
+  .products {
+    padding: 100px 0;
   }
 
   .section-header {
     text-align: center;
-    margin-bottom: 4rem;
+    margin-bottom: 60px;
   }
 
-  .section-title {
-    font-size: 2.5rem;
-    font-weight: 700;
-    margin-bottom: 1rem;
+  .section-header h2 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-m);
   }
 
-  .section-subtitle {
+  .section-header p {
+    font-size: var(--font-size-400);
     color: var(--text-secondary);
-    font-size: 1.125rem;
   }
 
-  .features-grid {
+  .products-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 1.5rem;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-xxl);
   }
 
-  .feature-card {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 2rem;
-    transition: all 0.3s;
+  .product-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: var(--spacing-xxl);
+    transition: all 0.2s ease;
   }
 
-  .feature-card:hover {
-    transform: translateY(-4px);
-    border-color: var(--accent-purple);
-    box-shadow: 0 10px 40px rgba(139, 92, 246, 0.1);
+  .product-card:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--border-default);
   }
 
-  .feature-icon {
-    font-size: 2.5rem;
-    margin-bottom: 1rem;
+  .product-card.product-wide {
+    grid-column: span 3;
   }
 
-  .feature-card h3 {
-    font-size: 1.25rem;
-    margin-bottom: 0.75rem;
+  .product-card.product-available {
+    border-color: rgba(0, 120, 212, 0.3);
+    background: rgba(0, 120, 212, 0.05);
   }
 
-  .feature-card p {
-    color: var(--text-secondary);
-    font-size: 0.95rem;
+  .product-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+    margin-bottom: var(--spacing-xl);
   }
 
-  .feature-card code {
-    background: var(--bg-primary);
-    padding: 0.15rem 0.4rem;
-    border-radius: 4px;
-    font-size: 0.85rem;
-    color: var(--accent-cyan);
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
   }
 
-  /* Tools Section */
-  .tools {
-    padding: 6rem 2rem;
+  .status-dot.available {
+    background: #4caf50;
+    box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
   }
 
-  .tools-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 2rem;
+  .status-dot.coming {
+    background: var(--text-tertiary);
   }
 
-  .tool-category {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 1.5rem;
+  .product-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: var(--spacing-xl);
   }
 
-  .tool-category h4 {
-    color: var(--accent-purple);
-    font-size: 0.875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 1rem;
-  }
-
-  .tool-category ul {
-    list-style: none;
-  }
-
-  .tool-category li {
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .tool-category li:last-child {
-    border-bottom: none;
-  }
-
-  .tool-category code {
-    color: var(--accent-cyan);
-    font-size: 0.875rem;
-  }
-
-  .tool-badge {
-    background: var(--accent-green);
-    color: var(--bg-primary);
-    font-size: 0.65rem;
-    padding: 0.15rem 0.4rem;
-    border-radius: 4px;
-    margin-left: 0.5rem;
-    font-family: 'Inter', sans-serif;
-    font-weight: 600;
-  }
-
-  /* Integrations Section */
-  .integrations {
-    padding: 6rem 2rem;
-    background: var(--bg-secondary);
-  }
-
-  .integrations-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 2rem;
-  }
-
-  .integration-card {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 2.5rem;
-    text-align: center;
-    transition: all 0.3s;
-  }
-
-  .integration-card:hover {
-    transform: translateY(-4px);
-    border-color: var(--accent-blue);
-  }
-
-  .integration-logo {
-    width: 60px;
-    height: 60px;
-    margin: 0 auto 1.5rem;
-    color: var(--accent-blue);
-  }
-
-  .integration-logo svg {
+  .product-icon svg {
     width: 100%;
     height: 100%;
   }
 
-  .integration-card h3 {
-    font-size: 1.25rem;
-    margin-bottom: 0.75rem;
+  .product-card h3 {
+    font-size: var(--font-size-500);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-m);
   }
 
-  .integration-card p {
+  .product-card p {
+    font-size: var(--font-size-300);
     color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: var(--spacing-xl);
   }
 
-  /* Install Section */
-  .install {
-    padding: 6rem 2rem;
+  .product-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    color: var(--brand-primary);
   }
 
-  .install-options {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-    gap: 2rem;
-    margin-bottom: 3rem;
+  .product-link:hover {
+    text-decoration: underline;
   }
 
-  .install-option {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 2rem;
+  .product-platforms {
+    display: flex;
+    gap: var(--spacing-s);
   }
 
-  .install-option h3 {
+  .product-platforms span {
+    padding: var(--spacing-xs) var(--spacing-m);
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+  }
+
+  .product-badge {
+    display: inline-block;
+    padding: var(--spacing-xs) var(--spacing-m);
+    background: rgba(0, 120, 212, 0.15);
+    border: 1px solid rgba(0, 120, 212, 0.3);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    color: var(--brand-primary);
+  }
+
+  .product-integrations {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-l);
+  }
+
+  .integration {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .install-icon {
-    font-size: 1.5rem;
-  }
-
-  .code-block {
-    background: var(--code-bg);
-    border-radius: 8px;
-    padding: 1rem 1.5rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 1rem;
-  }
-
-  .code-block code {
-    color: var(--accent-cyan);
-    font-size: 0.9rem;
-    line-height: 1.8;
-  }
-
-  .copy-btn {
-    background: var(--bg-tertiary);
+    gap: var(--spacing-s);
+    padding: var(--spacing-s) var(--spacing-l);
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
     color: var(--text-secondary);
-    border: 1px solid var(--border-color);
-    padding: 0.4rem 0.8rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    flex-shrink: 0;
   }
 
-  .copy-btn:hover {
-    background: var(--accent-purple);
-    color: white;
-    border-color: var(--accent-purple);
+  .integration svg {
+    color: var(--brand-primary);
   }
 
-  .install-platforms {
+  /* Vision Section */
+  .vision {
+    padding: 100px 0;
+    background: var(--bg-layer-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .vision-content {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .vision-content h2 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xl);
     text-align: center;
   }
 
-  .install-platforms h4 {
+  .vision-content > p {
+    font-size: var(--font-size-400);
     color: var(--text-secondary);
-    font-weight: 500;
-    margin-bottom: 1rem;
+    line-height: 1.7;
+    text-align: center;
+    margin-bottom: 60px;
   }
 
-  .platforms {
-    display: flex;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 0.75rem;
+  .vision-features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-xxl);
   }
 
-  .platform {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
+  .vision-feature {
+    text-align: center;
+  }
+
+  .feature-icon {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto var(--spacing-xl);
+    color: var(--brand-primary);
+  }
+
+  .feature-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .feature-text h4 {
+    font-size: var(--font-size-400);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-s);
+  }
+
+  .feature-text p {
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
+    line-height: 1.5;
   }
 
   /* CTA Section */
   .cta {
-    padding: 6rem 2rem;
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
-    border-top: 1px solid var(--border-color);
-    border-bottom: 1px solid var(--border-color);
+    padding: 100px 0;
   }
 
   .cta-content {
     text-align: center;
-    max-width: 700px;
+    max-width: 600px;
     margin: 0 auto;
   }
 
   .cta-content h2 {
-    font-size: 2rem;
-    margin-bottom: 1rem;
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-l);
   }
 
-  .cta-content p {
+  .cta-content > p {
+    font-size: var(--font-size-400);
     color: var(--text-secondary);
-    font-size: 1.125rem;
-    margin-bottom: 2rem;
+    margin-bottom: var(--spacing-xxxl);
   }
 
   .cta-actions {
-    display: flex;
-    justify-content: center;
-    gap: 1rem;
-    flex-wrap: wrap;
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .cta-note {
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
   }
 
   /* Footer */
   .footer {
-    padding: 3rem 2rem;
-    background: var(--bg-secondary);
+    padding: var(--spacing-xxxl) 0;
+    border-top: 1px solid var(--border-subtle);
   }
 
   .footer-content {
-    max-width: 1200px;
-    margin: 0 auto;
     display: flex;
-    flex-direction: column;
+    justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    text-align: center;
   }
 
-  .footer-brand {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-weight: 700;
-  }
-
-  .footer-text {
-    color: var(--text-muted);
-    font-size: 0.875rem;
+  .footer-brand p {
+    margin-top: var(--spacing-s);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
   }
 
   .footer-links {
     display: flex;
-    gap: 2rem;
+    gap: var(--spacing-xxl);
   }
 
   .footer-links a {
-    color: var(--text-secondary);
-    font-size: 0.875rem;
-    transition: color 0.2s;
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
   }
 
   .footer-links a:hover {
@@ -932,37 +970,76 @@ import Layout from '../layouts/Layout.astro';
   }
 
   /* Responsive */
-  @media (max-width: 768px) {
-    .nav-links {
-      display: none;
+  @media (max-width: 1024px) {
+    .hero .container {
+      grid-template-columns: 1fr;
+      gap: 60px;
     }
 
-    .hero {
-      padding: 8rem 1.5rem 4rem;
+    .hero-visual {
+      order: -1;
+      max-width: 500px;
+      margin: 0 auto;
     }
 
-    .hero-stats {
-      gap: 1.5rem;
+    .hero-content {
+      text-align: center;
     }
 
-    .install-options {
+    .hero-description {
+      max-width: 100%;
+    }
+
+    .hero-cta {
+      justify-content: center;
+    }
+
+    .hero-proof {
+      justify-content: center;
+    }
+
+    .products-grid {
       grid-template-columns: 1fr;
     }
 
-    .code-block {
+    .product-card.product-wide {
+      grid-column: span 1;
+    }
+
+    .vision-features {
+      grid-template-columns: 1fr;
+      gap: 40px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .nav-links a:not(.nav-github) {
+      display: none;
+    }
+
+    .hero-title {
+      font-size: var(--font-size-700);
+      line-height: var(--line-height-700);
+    }
+
+    .hero-cta {
       flex-direction: column;
+    }
+
+    .hero-proof {
+      flex-direction: column;
+      gap: var(--spacing-m);
+    }
+
+    .problem-stats {
+      flex-direction: column;
+      gap: 40px;
+    }
+
+    .footer-content {
+      flex-direction: column;
+      gap: var(--spacing-xxl);
+      text-align: center;
     }
   }
 </style>
-
-<script>
-  // Copy button functionality
-  document.querySelectorAll('.copy-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const code = btn.getAttribute('data-code') || btn.previousElementSibling?.textContent || '';
-      navigator.clipboard.writeText(code);
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy', 2000);
-    });
-  });
-</script>

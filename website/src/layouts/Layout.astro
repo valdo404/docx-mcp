@@ -28,9 +28,8 @@ const { title, description = "Intelligent Word Document Automation for AI Agents
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Fluent UI Icons -->
+    <link rel="stylesheet" href="https://static2.sharepointonline.com/files/fabric/assets/icons/fabricicons.css" />
   </head>
   <body>
     <slot />
@@ -38,21 +37,92 @@ const { title, description = "Intelligent Word Document Automation for AI Agents
 </html>
 
 <style is:global>
+  /* Fluent UI Design Tokens - Dark Theme */
   :root {
-    --bg-primary: #0a0a0f;
-    --bg-secondary: #12121a;
-    --bg-tertiary: #1a1a25;
+    /* Brand colors */
+    --brand-primary: #0078d4;
+    --brand-primary-hover: #106ebe;
+    --brand-primary-pressed: #005a9e;
+    --brand-secondary: #2b88d8;
+
+    /* Neutral backgrounds (Dark theme) */
+    --bg-layer-1: #0f0f0f;
+    --bg-layer-2: #1b1b1b;
+    --bg-layer-3: #2d2d2d;
+    --bg-layer-4: #383838;
+    --bg-card: #1f1f1f;
+    --bg-card-hover: #252525;
+
+    /* Text colors */
     --text-primary: #ffffff;
-    --text-secondary: #a0a0b0;
-    --text-muted: #606070;
-    --accent-blue: #3b82f6;
-    --accent-purple: #8b5cf6;
-    --accent-cyan: #06b6d4;
-    --accent-green: #10b981;
-    --gradient-start: #3b82f6;
-    --gradient-end: #8b5cf6;
-    --border-color: #2a2a35;
-    --code-bg: #1e1e2e;
+    --text-secondary: #d4d4d4;
+    --text-tertiary: #a0a0a0;
+    --text-disabled: #6b6b6b;
+
+    /* Semantic colors */
+    --success: #0e700e;
+    --success-bg: #052505;
+    --warning: #faa06b;
+    --error: #dc3545;
+
+    /* Borders */
+    --border-subtle: #3d3d3d;
+    --border-default: #4a4a4a;
+    --border-strong: #6b6b6b;
+
+    /* Shadows (Fluent elevation) */
+    --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-4: 0 2px 4px rgba(0, 0, 0, 0.28);
+    --shadow-8: 0 4px 8px rgba(0, 0, 0, 0.32);
+    --shadow-16: 0 8px 16px rgba(0, 0, 0, 0.36);
+    --shadow-28: 0 14px 28px rgba(0, 0, 0, 0.4);
+
+    /* Spacing */
+    --spacing-xxs: 2px;
+    --spacing-xs: 4px;
+    --spacing-s: 8px;
+    --spacing-m: 12px;
+    --spacing-l: 16px;
+    --spacing-xl: 20px;
+    --spacing-xxl: 24px;
+    --spacing-xxxl: 32px;
+
+    /* Border radius */
+    --radius-s: 4px;
+    --radius-m: 8px;
+    --radius-l: 12px;
+    --radius-xl: 16px;
+    --radius-circular: 9999px;
+
+    /* Typography */
+    --font-family-base: 'Segoe UI', 'Segoe UI Web', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif;
+    --font-family-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+
+    --font-size-100: 10px;
+    --font-size-200: 12px;
+    --font-size-300: 14px;
+    --font-size-400: 16px;
+    --font-size-500: 20px;
+    --font-size-600: 24px;
+    --font-size-700: 28px;
+    --font-size-800: 32px;
+    --font-size-900: 40px;
+    --font-size-1000: 68px;
+
+    --font-weight-regular: 400;
+    --font-weight-semibold: 600;
+    --font-weight-bold: 700;
+
+    --line-height-100: 14px;
+    --line-height-200: 16px;
+    --line-height-300: 20px;
+    --line-height-400: 22px;
+    --line-height-500: 28px;
+    --line-height-600: 32px;
+    --line-height-700: 36px;
+    --line-height-800: 40px;
+    --line-height-900: 52px;
+    --line-height-1000: 92px;
   }
 
   * {
@@ -66,24 +136,36 @@ const { title, description = "Intelligent Word Document Automation for AI Agents
   }
 
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: var(--bg-primary);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-300);
+    line-height: var(--line-height-300);
+    background-color: var(--bg-layer-1);
     color: var(--text-primary);
-    line-height: 1.6;
-    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   code, pre {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: var(--font-family-mono);
   }
 
   a {
-    color: inherit;
+    color: var(--brand-primary);
     text-decoration: none;
   }
 
+  a:hover {
+    text-decoration: underline;
+  }
+
   ::selection {
-    background: var(--accent-purple);
+    background: var(--brand-primary);
     color: white;
+  }
+
+  /* Fluent focus visible */
+  :focus-visible {
+    outline: 2px solid var(--brand-primary);
+    outline-offset: 2px;
   }
 </style>
