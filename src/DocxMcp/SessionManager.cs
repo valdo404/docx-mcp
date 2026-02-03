@@ -29,10 +29,10 @@ public sealed class SessionManager
         _logger = logger;
         _index = new SessionIndexFile();
 
-        var thresholdEnv = Environment.GetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD");
+        var thresholdEnv = Environment.GetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD");
         _compactThreshold = int.TryParse(thresholdEnv, out var t) && t > 0 ? t : 50;
 
-        var intervalEnv = Environment.GetEnvironmentVariable("DOCX_MCP_CHECKPOINT_INTERVAL");
+        var intervalEnv = Environment.GetEnvironmentVariable("DOCX_CHECKPOINT_INTERVAL");
         _checkpointInterval = int.TryParse(intervalEnv, out var ci) && ci > 0 ? ci : 10;
     }
 
@@ -67,6 +67,60 @@ public sealed class SessionManager
         if (_sessions.TryGetValue(id, out var session))
             return session;
         throw new KeyNotFoundException($"No document session with ID '{id}'.");
+    }
+
+    /// <summary>
+    /// Resolve a session by ID or file path.
+    /// - If the input looks like a session ID and matches, returns that session.
+    /// - If the input is a file path, checks for existing session with that path.
+    /// - If no existing session found and file exists, auto-opens a new session.
+    /// </summary>
+    /// <param name="idOrPath">Either a session ID (12 hex chars) or a file path.</param>
+    /// <returns>The resolved session.</returns>
+    /// <exception cref="KeyNotFoundException">If no session found and file doesn't exist.</exception>
+    public DocxSession ResolveSession(string idOrPath)
+    {
+        // First, try as session ID
+        if (_sessions.TryGetValue(idOrPath, out var session))
+            return session;
+
+        // Check if it looks like a file path (has extension, path separator, or starts with ~ or /)
+        var isLikelyPath = idOrPath.Contains(Path.DirectorySeparatorChar)
+            || idOrPath.Contains(Path.AltDirectorySeparatorChar)
+            || idOrPath.StartsWith('~')
+            || idOrPath.StartsWith('.')
+            || Path.HasExtension(idOrPath);
+
+        if (!isLikelyPath)
+        {
+            // Doesn't look like a path, treat as missing session ID
+            throw new KeyNotFoundException($"No document session with ID '{idOrPath}'.");
+        }
+
+        // Expand ~ to home directory
+        var expandedPath = idOrPath;
+        if (expandedPath.StartsWith('~'))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            expandedPath = Path.Combine(home, expandedPath[1..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
+
+        // Resolve to absolute path
+        var absolutePath = Path.GetFullPath(expandedPath);
+
+        // Check if we have an existing session for this path
+        var existing = _sessions.Values.FirstOrDefault(s =>
+            s.SourcePath is not null &&
+            string.Equals(s.SourcePath, absolutePath, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+            return existing;
+
+        // Auto-open if file exists
+        if (File.Exists(absolutePath))
+            return Open(absolutePath);
+
+        throw new KeyNotFoundException($"No session found for '{idOrPath}' and file does not exist.");
     }
 
     public void Save(string id, string? path = null)
@@ -413,6 +467,26 @@ public sealed class SessionManager
     }
 
     /// <summary>
+    /// Get the hash of the external file from the last ExternalSync WAL entry.
+    /// Used to detect if the external file has changed since the last sync.
+    /// </summary>
+    public string? GetLastExternalSyncHash(string id)
+    {
+        try
+        {
+            var walEntries = _store.ReadWalEntries(id);
+            var lastSync = walEntries
+                .Where(e => e.EntryType == WalEntryType.ExternalSync && e.SyncMeta?.NewHash is not null)
+                .LastOrDefault();
+            return lastSync?.SyncMeta?.NewHash;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Get the edit history for a session with metadata.
     /// </summary>
     public HistoryResult GetHistory(string id, int offset = 0, int limit = 20)
@@ -498,6 +572,7 @@ public sealed class SessionManager
     /// <summary>
     /// Restore all persisted sessions from disk on startup.
     /// Acquires file lock for the entire duration to prevent mutations during startup replay.
+    /// Loads from the nearest checkpoint when available to properly restore ExternalSync state.
     /// Note: Sessions are never auto-deleted. Use CLI to manually close/clean sessions.
     /// </summary>
     public int RestoreSessions()
@@ -516,9 +591,6 @@ public sealed class SessionManager
         {
             try
             {
-                var bytes = _store.LoadBaseline(entry.Id);
-                var session = DocxSession.FromBytes(bytes, entry.Id, entry.SourcePath);
-
                 // Determine how many WAL entries to replay (up to cursor position)
                 var walCount = _store.WalEntryCount(entry.Id);
                 var cursorTarget = entry.CursorPosition;
@@ -528,9 +600,21 @@ public sealed class SessionManager
                     cursorTarget = walCount;
 
                 var replayCount = Math.Min(cursorTarget, walCount);
-                if (replayCount > 0)
+
+                // Load from nearest checkpoint instead of baseline + full replay.
+                // This is critical for ExternalSync entries which store document snapshots
+                // in checkpoints rather than as replayable patches.
+                var (ckptPos, ckptBytes) = _store.LoadNearestCheckpoint(
+                    entry.Id,
+                    replayCount,
+                    entry.CheckpointPositions);
+
+                var session = DocxSession.FromBytes(ckptBytes, entry.Id, entry.SourcePath);
+
+                // Only replay patches AFTER the checkpoint position
+                if (replayCount > ckptPos)
                 {
-                    var patches = _store.ReadWalRange(entry.Id, 0, replayCount);
+                    var patches = _store.ReadWalRange(entry.Id, ckptPos, replayCount);
                     foreach (var patchJson in patches)
                     {
                         try

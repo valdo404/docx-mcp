@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # macOS DMG Builder for DocX MCP Server
-# Creates a beautiful drag-and-drop DMG installer
+# Creates a DMG containing the PKG installer
 # =============================================================================
 
 set -euo pipefail
@@ -27,9 +27,8 @@ DIST_DIR="${PROJECT_ROOT}/dist"
 BUILD_DIR="${DIST_DIR}/dmg-build-${ARCH}"
 OUTPUT_DIR="${DIST_DIR}/installers"
 
-BINARY_DIR="${DIST_DIR}/macos-${ARCH}"
-MCP_BINARY="${BINARY_DIR}/docx-mcp"
-CLI_BINARY="${BINARY_DIR}/docx-cli"
+# PKG installer path
+PKG_FILE="${OUTPUT_DIR}/docx-mcp-${VERSION}-${ARCH}.pkg"
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -65,14 +64,22 @@ done
 
 # Update paths
 BUILD_DIR="${DIST_DIR}/dmg-build-${ARCH}"
-BINARY_DIR="${DIST_DIR}/macos-${ARCH}"
-MCP_BINARY="${BINARY_DIR}/docx-mcp"
-CLI_BINARY="${BINARY_DIR}/docx-cli"
+PKG_FILE="${OUTPUT_DIR}/docx-mcp-${VERSION}-${ARCH}.pkg"
+
+# -----------------------------------------------------------------------------
+# Build PKG if needed
+# -----------------------------------------------------------------------------
+if [[ ! -f "${PKG_FILE}" ]]; then
+    log "PKG not found, building it first..."
+    VERSION="${VERSION}" ARCH="${ARCH}" SIGNING_IDENTITY="${SIGNING_IDENTITY}" \
+        INSTALLER_SIGNING_IDENTITY="${INSTALLER_SIGNING_IDENTITY:-}" \
+        "${SCRIPT_DIR}/build-pkg.sh"
+fi
 
 # -----------------------------------------------------------------------------
 # Validation
 # -----------------------------------------------------------------------------
-[[ -f "${MCP_BINARY}" ]] || error "MCP binary not found: ${MCP_BINARY}"
+[[ -f "${PKG_FILE}" ]] || error "PKG installer not found: ${PKG_FILE}"
 
 # -----------------------------------------------------------------------------
 # Build DMG
@@ -86,38 +93,21 @@ mkdir -p "${BUILD_DIR}" "${OUTPUT_DIR}"
 DMG_CONTENT="${BUILD_DIR}/content"
 mkdir -p "${DMG_CONTENT}"
 
-# Copy and sign binaries
-cp "${MCP_BINARY}" "${DMG_CONTENT}/"
-chmod 755 "${DMG_CONTENT}/docx-mcp"
-
-if [[ -f "${CLI_BINARY}" ]]; then
-    cp "${CLI_BINARY}" "${DMG_CONTENT}/"
-    chmod 755 "${DMG_CONTENT}/docx-cli"
-fi
-
-# Sign binaries
-if [[ -n "${SIGNING_IDENTITY}" ]]; then
-    log "Signing binaries..."
-    codesign --force --options runtime --timestamp \
-        --sign "${SIGNING_IDENTITY}" \
-        "${DMG_CONTENT}/docx-mcp"
-
-    if [[ -f "${DMG_CONTENT}/docx-cli" ]]; then
-        codesign --force --options runtime --timestamp \
-            --sign "${SIGNING_IDENTITY}" \
-            "${DMG_CONTENT}/docx-cli"
-    fi
-fi
+# Copy PKG installer
+cp "${PKG_FILE}" "${DMG_CONTENT}/"
+PKG_NAME="$(basename "${PKG_FILE}")"
 
 # Create README for DMG
 cat > "${DMG_CONTENT}/README.txt" <<EOF
 DocX MCP Server ${VERSION}
 ==========================
 
-Installation Instructions:
-1. Open Terminal
-2. Run: sudo cp docx-mcp docx-cli /usr/local/bin/
-3. Run: chmod +x /usr/local/bin/docx-mcp /usr/local/bin/docx-cli
+Installation:
+  Double-click "${PKG_NAME}" to install.
+
+After installation, binaries will be available at:
+  /usr/local/bin/docx-mcp  (MCP server)
+  /usr/local/bin/docx-cli  (CLI tool)
 
 Quick Start:
   docx-mcp --help
@@ -126,42 +116,6 @@ Quick Start:
 For more information:
   https://github.com/valdo404/docx-mcp
 EOF
-
-# Create symbolic link to /usr/local/bin for drag-and-drop
-ln -s /usr/local/bin "${DMG_CONTENT}/Install Here (drag files)"
-
-# Create install script
-cat > "${DMG_CONTENT}/install.command" <<'SCRIPT'
-#!/bin/bash
-# DocX MCP Server Installer
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo "Installing DocX MCP Server..."
-echo ""
-
-sudo cp "${SCRIPT_DIR}/docx-mcp" /usr/local/bin/
-sudo chmod 755 /usr/local/bin/docx-mcp
-
-if [[ -f "${SCRIPT_DIR}/docx-cli" ]]; then
-    sudo cp "${SCRIPT_DIR}/docx-cli" /usr/local/bin/
-    sudo chmod 755 /usr/local/bin/docx-cli
-fi
-
-echo ""
-echo "Installation complete!"
-echo ""
-echo "Run 'docx-mcp --help' or 'docx-cli --help' for usage."
-echo ""
-read -p "Press Enter to close..."
-SCRIPT
-chmod 755 "${DMG_CONTENT}/install.command"
-
-if [[ -n "${SIGNING_IDENTITY}" ]]; then
-    codesign --force --options runtime --timestamp \
-        --sign "${SIGNING_IDENTITY}" \
-        "${DMG_CONTENT}/install.command"
-fi
 
 # Create temporary DMG
 TEMP_DMG="${BUILD_DIR}/temp.dmg"
@@ -208,6 +162,7 @@ hdiutil detach "${MOUNT_POINT}"
 
 # Convert to compressed, read-only DMG
 log "Creating final DMG..."
+rm -f "${OUTPUT_DMG}"
 hdiutil convert "${TEMP_DMG}" \
     -format UDZO \
     -imagekey zlib-level=9 \

@@ -69,7 +69,7 @@ RFC 6902-adapted JSON patches with ops: `add`, `replace`, `remove`, `move`, `cop
 - **MappedWal** — Memory-mapped WAL (JSONL) with random access for efficient undo/redo
 - **SessionIndex** — JSON metadata tracking sessions, WAL counts, cursor positions, checkpoint markers
 - **SessionLock** — Cross-process file locking (file-based `.lock` with exponential backoff)
-- **Checkpoints** — Full document snapshots every N edits (default 10, via `DOCX_MCP_CHECKPOINT_INTERVAL`)
+- **Checkpoints** — Full document snapshots every N edits (default 10, via `DOCX_CHECKPOINT_INTERVAL`)
 - **Undo** rebuilds from nearest checkpoint then replays. **Redo** replays forward patches (no rebuild).
 
 ### Styling (`Tools/StyleTools.cs`, `Helpers/StyleHelper.cs`)
@@ -93,9 +93,9 @@ public sealed class SomeTools
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DOCX_MCP_SESSIONS_DIR` | `~/.docx-mcp/sessions` | Session storage location |
-| `DOCX_MCP_CHECKPOINT_INTERVAL` | `10` | Edits between checkpoints |
-| `DOCX_MCP_WAL_COMPACT_THRESHOLD` | `50` | WAL entries before compaction |
+| `DOCX_SESSIONS_DIR` | `~/.docx-mcp/sessions` | Session storage location |
+| `DOCX_CHECKPOINT_INTERVAL` | `10` | Edits between checkpoints |
+| `DOCX_WAL_COMPACT_THRESHOLD` | `50` | WAL entries before compaction |
 
 ## Key Conventions
 

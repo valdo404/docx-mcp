@@ -26,20 +26,24 @@ public sealed class DocxSession : IDisposable
 
     /// <summary>
     /// Open an existing .docx file into memory for editing.
+    /// Always stores the absolute path regardless of input.
     /// </summary>
     public static DocxSession Open(string path)
     {
-        if (!File.Exists(path))
-            throw new FileNotFoundException($"File not found: {path}");
+        // Always resolve to absolute path for consistent session lookup
+        var absolutePath = Path.GetFullPath(path);
 
-        var bytes = File.ReadAllBytes(path);
+        if (!File.Exists(absolutePath))
+            throw new FileNotFoundException($"File not found: {absolutePath}");
+
+        var bytes = File.ReadAllBytes(absolutePath);
         var stream = new MemoryStream();
         stream.Write(bytes);
         stream.Position = 0;
         var doc = WordprocessingDocument.Open(stream, isEditable: true);
         ElementIdManager.EnsureNamespace(doc);
         ElementIdManager.EnsureAllIds(doc);
-        return new DocxSession(Guid.NewGuid().ToString("N")[..12], doc, stream, path);
+        return new DocxSession(Guid.NewGuid().ToString("N")[..12], doc, stream, absolutePath);
     }
 
     /// <summary>

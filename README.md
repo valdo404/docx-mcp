@@ -118,7 +118,7 @@ docx-cli export-pdf a1b2c3 output.pdf
 
 | Variable | Description |
 |----------|-------------|
-| `DOCX_MCP_SESSIONS_DIR` | Override sessions directory (shared between MCP server and CLI) |
+| `DOCX_SESSIONS_DIR` | Override sessions directory (shared between MCP server and CLI) |
 
 ## AI Tool Integration
 
@@ -277,7 +277,7 @@ Comments are stored in the OOXML comments part and survive save/reopen cycles. E
 | `document_history` | List all WAL entries with timestamps, descriptions, and current position. |
 | `document_jump_to` | Jump to any position in the editing timeline. |
 
-Every `apply_patch`, `style_*`, and `comment_*` call is recorded with a timestamp and auto-generated description. Undo rebuilds the document from the nearest checkpoint (snapshots taken every 10 edits by default, configurable via `DOCX_MCP_CHECKPOINT_INTERVAL`). Redo replays patches forward on the current DOM — no rebuild overhead.
+Every `apply_patch`, `style_*`, and `comment_*` call is recorded with a timestamp and auto-generated description. Undo rebuilds the document from the nearest checkpoint (snapshots taken every 10 edits by default, configurable via `DOCX_CHECKPOINT_INTERVAL`). Redo replays patches forward on the current DOM — no rebuild overhead.
 
 Applying a new edit after an undo discards the future timeline and starts a new branch, just like typing after undo in a text editor.
 

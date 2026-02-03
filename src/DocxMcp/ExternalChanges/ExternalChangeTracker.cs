@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using DocxMcp.Diff;
 using DocxMcp.Helpers;
 using DocxMcp.Persistence;
@@ -21,6 +20,12 @@ public sealed class ExternalChangeTracker : IDisposable
     private readonly ConcurrentDictionary<string, WatchedSession> _watchedSessions = new();
     private readonly ConcurrentDictionary<string, List<ExternalChangePatch>> _pendingChanges = new();
     private readonly object _lock = new();
+
+    /// <summary>
+    /// Enable debug logging via DEBUG environment variable.
+    /// </summary>
+    private static bool DebugEnabled =>
+        Environment.GetEnvironmentVariable("DEBUG") is not null;
 
     /// <summary>
     /// Event raised when an external change is detected.
@@ -249,16 +254,41 @@ public sealed class ExternalChangeTracker : IDisposable
                 if (!File.Exists(session.SourcePath))
                     return SyncResult.Failure($"Source file not found: {session.SourcePath}");
 
+                if (DebugEnabled)
+                    Console.Error.WriteLine($"[DEBUG:sync] Starting sync for session {sessionId}");
+
                 // 1. Read external file (store FULL bytes)
                 var newBytes = File.ReadAllBytes(session.SourcePath);
                 var previousBytes = session.ToBytes();
 
-                // 2. Compute hashes
+                // 2. Compute CONTENT hashes (ignoring IDs) for change detection
+                // This prevents duplicate WAL entries when only ID attributes differ
+                var previousContentHash = ContentHasher.ComputeContentHash(previousBytes);
+                var newContentHash = ContentHasher.ComputeContentHash(newBytes);
+
+                if (DebugEnabled)
+                {
+                    Console.Error.WriteLine($"[DEBUG:sync] Previous content hash: {previousContentHash}");
+                    Console.Error.WriteLine($"[DEBUG:sync] New content hash:      {newContentHash}");
+                }
+
+                if (previousContentHash == newContentHash)
+                {
+                    if (DebugEnabled)
+                        Console.Error.WriteLine($"[DEBUG:sync] Content unchanged, skipping sync");
+                    return SyncResult.NoChanges();
+                }
+
+                // 3. Compute full byte hashes for WAL metadata (for debugging/auditing)
                 var previousHash = ComputeBytesHash(previousBytes);
                 var newHash = ComputeBytesHash(newBytes);
 
-                if (previousHash == newHash)
-                    return SyncResult.NoChanges();
+                if (DebugEnabled)
+                {
+                    Console.Error.WriteLine($"[DEBUG:sync] Content changed, proceeding with sync");
+                    Console.Error.WriteLine($"[DEBUG:sync] Previous bytes hash: {previousHash}");
+                    Console.Error.WriteLine($"[DEBUG:sync] New bytes hash:      {newHash}");
+                }
 
                 _logger.LogInformation(
                     "Syncing external changes for session {SessionId}. Previous hash: {Old}, New hash: {New}",

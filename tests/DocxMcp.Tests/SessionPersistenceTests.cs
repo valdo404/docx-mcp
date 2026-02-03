@@ -103,8 +103,8 @@ public class SessionPersistenceTests : IDisposable
         try
         {
             // Set threshold to 5 via environment variable before creating the manager
-            var originalThreshold = Environment.GetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD");
-            Environment.SetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD", "5");
+            var originalThreshold = Environment.GetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD");
+            Environment.SetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD", "5");
 
             try
             {
@@ -136,7 +136,7 @@ public class SessionPersistenceTests : IDisposable
             finally
             {
                 // Restore original environment variable
-                Environment.SetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD", originalThreshold);
+                Environment.SetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD", originalThreshold);
             }
         }
         finally

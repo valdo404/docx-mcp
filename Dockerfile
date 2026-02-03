@@ -33,6 +33,6 @@ VOLUME /home/app/.docx-mcp/sessions
 
 USER app
 
-ENV DOCX_MCP_SESSIONS_DIR=/home/app/.docx-mcp/sessions
+ENV DOCX_SESSIONS_DIR=/home/app/.docx-mcp/sessions
 
 ENTRYPOINT ["./docx-mcp"]

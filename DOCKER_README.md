@@ -194,9 +194,9 @@ docx-cli history <id>
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DOCX_MCP_SESSIONS_DIR` | `/home/app/.docx-mcp/sessions` | Sessions directory |
-| `DOCX_MCP_CHECKPOINT_INTERVAL` | `10` | Create checkpoint every N edits |
-| `DOCX_MCP_WAL_COMPACT_THRESHOLD` | `50` | Auto-compact WAL after N entries |
+| `DOCX_SESSIONS_DIR` | `/home/app/.docx-mcp/sessions` | Sessions directory |
+| `DOCX_CHECKPOINT_INTERVAL` | `10` | Create checkpoint every N edits |
+| `DOCX_WAL_COMPACT_THRESHOLD` | `50` | Auto-compact WAL after N entries |
 
 ## Image Details
 

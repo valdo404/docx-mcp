@@ -8,7 +8,7 @@ using DocxMcp.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
 
 // --- Bootstrap ---
-var sessionsDir = Environment.GetEnvironmentVariable("DOCX_MCP_SESSIONS_DIR")
+var sessionsDir = Environment.GetEnvironmentVariable("DOCX_SESSIONS_DIR")
     ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "docx-mcp", "sessions");
@@ -26,21 +26,28 @@ if (args.Length == 0)
 
 var command = args[0].ToLowerInvariant();
 
+// Helper to resolve doc_id or path to session ID
+string ResolveDocId(string idOrPath)
+{
+    var session = sessions.ResolveSession(idOrPath);
+    return session.Id;
+}
+
 try
 {
     var result = command switch
     {
         "open" => CmdOpen(args),
         "list" => DocumentTools.DocumentList(sessions),
-        "close" => DocumentTools.DocumentClose(sessions, null, Require(args, 1, "doc_id")),
-        "save" => DocumentTools.DocumentSave(sessions, null, Require(args, 1, "doc_id"), Opt(args, 2)),
-        "snapshot" => DocumentTools.DocumentSnapshot(sessions, Require(args, 1, "doc_id"),
+        "close" => DocumentTools.DocumentClose(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
+        "save" => DocumentTools.DocumentSave(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path")), Opt(args, 2)),
+        "snapshot" => DocumentTools.DocumentSnapshot(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
-        "query" => QueryTool.Query(sessions, Require(args, 1, "doc_id"), Require(args, 2, "path"),
+        "query" => QueryTool.Query(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path"),
             OptNamed(args, "--format") ?? "json",
             ParseIntOpt(OptNamed(args, "--offset")),
             ParseIntOpt(OptNamed(args, "--limit"))),
-        "count" => CountTool.CountElements(sessions, Require(args, 1, "doc_id"), Require(args, 2, "path")),
+        "count" => CountTool.CountElements(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path")),
 
         // Generic patch (multi-operation)
         "patch" => CmdPatch(args),
@@ -60,14 +67,14 @@ try
         "style-table" => CmdStyleTable(args),
 
         // History commands
-        "undo" => HistoryTools.DocumentUndo(sessions, Require(args, 1, "doc_id"),
+        "undo" => HistoryTools.DocumentUndo(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(Opt(args, 2), 1)),
-        "redo" => HistoryTools.DocumentRedo(sessions, Require(args, 1, "doc_id"),
+        "redo" => HistoryTools.DocumentRedo(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(Opt(args, 2), 1)),
-        "history" => HistoryTools.DocumentHistory(sessions, Require(args, 1, "doc_id"),
+        "history" => HistoryTools.DocumentHistory(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(OptNamed(args, "--offset"), 0),
             ParseInt(OptNamed(args, "--limit"), 20)),
-        "jump-to" => HistoryTools.DocumentJumpTo(sessions, Require(args, 1, "doc_id"),
+        "jump-to" => HistoryTools.DocumentJumpTo(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "position"))),
 
         // Comment commands
@@ -76,11 +83,11 @@ try
         "comment-delete" => CmdCommentDelete(args),
 
         // Export commands
-        "export-html" => ExportTools.ExportHtml(sessions, Require(args, 1, "doc_id"),
+        "export-html" => ExportTools.ExportHtml(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "output_path")),
-        "export-markdown" => ExportTools.ExportMarkdown(sessions, Require(args, 1, "doc_id"),
+        "export-markdown" => ExportTools.ExportMarkdown(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "output_path")),
-        "export-pdf" => ExportTools.ExportPdf(sessions, Require(args, 1, "doc_id"),
+        "export-pdf" => ExportTools.ExportPdf(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "output_path")).GetAwaiter().GetResult(),
 
         // Read commands
@@ -89,11 +96,11 @@ try
 
         // Revision (Track Changes) commands
         "revision-list" => CmdRevisionList(args),
-        "revision-accept" => RevisionTools.RevisionAccept(sessions, Require(args, 1, "doc_id"),
+        "revision-accept" => RevisionTools.RevisionAccept(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "revision_id"))),
-        "revision-reject" => RevisionTools.RevisionReject(sessions, Require(args, 1, "doc_id"),
+        "revision-reject" => RevisionTools.RevisionReject(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "revision_id"))),
-        "track-changes-enable" => RevisionTools.TrackChangesEnable(sessions, Require(args, 1, "doc_id"),
+        "track-changes-enable" => RevisionTools.TrackChangesEnable(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseBool(Require(args, 2, "enabled"))),
 
         // Diff commands
@@ -104,6 +111,9 @@ try
         "check-external" => CmdCheckExternal(args),
         "sync-external" => CmdSyncExternal(args),
         "watch" => CmdWatch(args),
+
+        // Session inspection
+        "inspect" => CmdInspect(args),
 
         "help" or "--help" or "-h" => Usage(),
         _ => $"Unknown command: '{command}'. Run 'docx-cli help' for usage."
@@ -130,7 +140,7 @@ string CmdOpen(string[] a)
 
 string CmdPatch(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var dryRun = HasFlag(a, "--dry-run");
     // patches can be arg[2] or read from stdin
     var patches = GetNonFlagArg(a, 2) ?? ReadStdin();
@@ -139,7 +149,7 @@ string CmdPatch(string[] a)
 
 string CmdAdd(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
@@ -148,7 +158,7 @@ string CmdAdd(string[] a)
 
 string CmdReplace(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
@@ -157,7 +167,7 @@ string CmdReplace(string[] a)
 
 string CmdRemove(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var dryRun = HasFlag(a, "--dry-run");
     return ElementTools.RemoveElement(sessions, null, docId, path, dryRun);
@@ -165,7 +175,7 @@ string CmdRemove(string[] a)
 
 string CmdMove(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
@@ -174,7 +184,7 @@ string CmdMove(string[] a)
 
 string CmdCopy(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
@@ -183,7 +193,7 @@ string CmdCopy(string[] a)
 
 string CmdReplaceText(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var find = Require(a, 3, "find");
     var replace = Require(a, 4, "replace");
@@ -194,7 +204,7 @@ string CmdReplaceText(string[] a)
 
 string CmdRemoveColumn(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var column = int.Parse(Require(a, 3, "column"));
     var dryRun = HasFlag(a, "--dry-run");
@@ -203,7 +213,7 @@ string CmdRemoveColumn(string[] a)
 
 string CmdStyleElement(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = Require(a, 2, "style");
     var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
     return StyleTools.StyleElement(sessions, docId, style, path);
@@ -211,7 +221,7 @@ string CmdStyleElement(string[] a)
 
 string CmdStyleParagraph(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = Require(a, 2, "style");
     var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
     return StyleTools.StyleParagraph(sessions, docId, style, path);
@@ -219,7 +229,7 @@ string CmdStyleParagraph(string[] a)
 
 string CmdStyleTable(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = OptNamed(a, "--style");
     var cellStyle = OptNamed(a, "--cell-style");
     var rowStyle = OptNamed(a, "--row-style");
@@ -229,7 +239,7 @@ string CmdStyleTable(string[] a)
 
 string CmdCommentAdd(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var text = Require(a, 3, "text");
     var anchorText = OptNamed(a, "--anchor-text");
@@ -240,7 +250,7 @@ string CmdCommentAdd(string[] a)
 
 string CmdCommentList(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var author = OptNamed(a, "--author");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
     var limit = ParseIntOpt(OptNamed(a, "--limit"));
@@ -249,7 +259,7 @@ string CmdCommentList(string[] a)
 
 string CmdCommentDelete(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var commentId = ParseIntOpt(OptNamed(a, "--id"));
     var author = OptNamed(a, "--author");
     return CommentTools.CommentDelete(sessions, docId, commentId, author);
@@ -257,7 +267,7 @@ string CmdCommentDelete(string[] a)
 
 string CmdReadSection(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var sectionIndex = ParseIntOpt(OptNamed(a, "--index"));
     var format = OptNamed(a, "--format");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
@@ -267,7 +277,7 @@ string CmdReadSection(string[] a)
 
 string CmdReadHeading(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var headingText = OptNamed(a, "--text");
     var headingIndex = ParseIntOpt(OptNamed(a, "--index"));
     var headingLevel = ParseIntOpt(OptNamed(a, "--level"));
@@ -281,7 +291,7 @@ string CmdReadHeading(string[] a)
 
 string CmdRevisionList(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var author = OptNamed(a, "--author");
     var type = OptNamed(a, "--type");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
@@ -291,8 +301,8 @@ string CmdRevisionList(string[] a)
 
 string CmdDiff(string[] a)
 {
-    // diff <doc_id> [file_path] - compare session with file (default: source file)
-    var docId = Require(a, 1, "doc_id");
+    // diff <doc_id_or_path> [file_path] - compare session with file (default: source file)
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var filePath = Opt(a, 2);
     var threshold = ParseDouble(OptNamed(a, "--threshold"), DiffEngine.DefaultSimilarityThreshold);
     var format = OptNamed(a, "--format") ?? "text";
@@ -390,7 +400,7 @@ string FormatDiffResult(DiffResult diff, string format, string original, string 
 
 string CmdCheckExternal(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var acknowledge = HasFlag(a, "--acknowledge");
 
     // Check for pending changes first, then check for new changes
@@ -432,7 +442,7 @@ string CmdCheckExternal(string[] a)
 
 string CmdSyncExternal(string[] a)
 {
-    var docId = Require(a, 1, "doc_id");
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var changeId = OptNamed(a, "--change-id");
 
     var result = externalTracker.SyncExternalChanges(docId, changeId);
@@ -517,6 +527,71 @@ string CmdWatch(string[] a)
     }
 
     return "[DAEMON] Stopped.";
+}
+
+string CmdInspect(string[] a)
+{
+    var idOrPath = Require(a, 1, "doc_id_or_path");
+    var session = sessions.ResolveSession(idOrPath);
+    var history = sessions.GetHistory(session.Id);
+
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine($"Session: {session.Id}");
+    sb.AppendLine($"  Source Path: {session.SourcePath ?? "(none)"}");
+
+    if (session.SourcePath is not null)
+    {
+        var sourceExists = File.Exists(session.SourcePath);
+        sb.AppendLine($"  Source Exists: {(sourceExists ? "Yes" : "No")}");
+        if (sourceExists)
+        {
+            var fileInfo = new FileInfo(session.SourcePath);
+            sb.AppendLine($"  Source Modified: {fileInfo.LastWriteTimeUtc:yyyy-MM-dd HH:mm:ss} UTC");
+            sb.AppendLine($"  Source Size: {fileInfo.Length:N0} bytes");
+        }
+    }
+
+    sb.AppendLine();
+    sb.AppendLine("WAL Status:");
+    sb.AppendLine($"  Total Entries: {history.TotalEntries}");
+    sb.AppendLine($"  Current Position: {history.CursorPosition}");
+    sb.AppendLine($"  Can Undo: {(history.CanUndo ? $"Yes ({history.CursorPosition} steps)" : "No")}");
+    sb.AppendLine($"  Can Redo: {(history.CanRedo ? $"Yes ({history.TotalEntries - 1 - history.CursorPosition} steps)" : "No")}");
+
+    // Find last external sync
+    var lastSync = history.Entries
+        .Where(e => e.IsExternalSync)
+        .OrderByDescending(e => e.Position)
+        .FirstOrDefault();
+
+    if (lastSync is not null)
+    {
+        sb.AppendLine();
+        sb.AppendLine("Last External Sync:");
+        sb.AppendLine($"  Position: {lastSync.Position}");
+        sb.AppendLine($"  Timestamp: {lastSync.Timestamp:yyyy-MM-dd HH:mm:ss} UTC");
+        if (lastSync.SyncSummary is not null)
+        {
+            sb.AppendLine($"  Changes: +{lastSync.SyncSummary.Added} -{lastSync.SyncSummary.Removed} ~{lastSync.SyncSummary.Modified}");
+            if (lastSync.SyncSummary.UncoveredCount > 0)
+            {
+                sb.AppendLine($"  Uncovered: {lastSync.SyncSummary.UncoveredCount} ({string.Join(", ", lastSync.SyncSummary.UncoveredTypes)})");
+            }
+        }
+    }
+
+    // Check for pending external changes
+    var pending = externalTracker.GetLatestUnacknowledgedChange(session.Id);
+    if (pending is not null)
+    {
+        sb.AppendLine();
+        sb.AppendLine("Pending External Change:");
+        sb.AppendLine($"  Change ID: {pending.Id}");
+        sb.AppendLine($"  Detected: {pending.DetectedAt:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"  Summary: +{pending.Summary.Added} -{pending.Summary.Removed} ~{pending.Summary.Modified}");
+    }
+
+    return sb.ToString();
 }
 
 string FindOrCreateSession(string filePath)
@@ -604,14 +679,19 @@ static void PrintUsage()
 
     Usage: docx-cli <command> [arguments] [options]
 
+    Note: Most commands accept either a session ID or a file path.
+          When using a file path, an existing session is reused if one exists,
+          otherwise a new session is auto-opened.
+
     Document commands:
       open [path]                          Open file or create new document
       list                                 List open sessions
-      save <doc_id> [output_path]          Save document to disk
+      save <doc_id|path> [output_path]     Save document to disk
+      inspect <doc_id|path>                Show detailed session information
 
     Administrative commands (CLI-only, not exposed to MCP):
-      close <doc_id>                       Close session and delete all persisted data
-      snapshot <doc_id> [--discard-redo]   Force WAL compaction into new baseline
+      close <doc_id|path>                  Close session and delete all persisted data
+      snapshot <doc_id|path> [--discard-redo]   Force WAL compaction into new baseline
 
     Query commands:
       query <doc_id> <path> [--format json|text|summary] [--offset N] [--limit N]
@@ -666,9 +746,9 @@ static void PrintUsage()
                                  Compare two DOCX files on disk
 
     External change commands:
-      check-external <doc_id> [--acknowledge]
+      check-external <doc_id|path> [--acknowledge]
                                  Check for external changes and optionally acknowledge
-      sync-external <doc_id> [--change-id id]
+      sync-external <doc_id|path> [--change-id id]
                                  Sync session with external file (records in WAL)
       watch <path> [--auto-sync] [--debounce ms] [--pattern *.docx] [--recursive]
                                  Watch file or folder for changes (daemon mode)
@@ -677,9 +757,10 @@ static void PrintUsage()
       --dry-run    Simulate operation without applying changes
 
     Environment:
-      DOCX_MCP_SESSIONS_DIR            Override sessions directory (shared with MCP server)
-      DOCX_MCP_WAL_COMPACT_THRESHOLD   Auto-compact WAL after N entries (default: 50)
-      DOCX_MCP_CHECKPOINT_INTERVAL     Create checkpoint every N entries (default: 10)
+      DOCX_SESSIONS_DIR            Override sessions directory (shared with MCP server)
+      DOCX_WAL_COMPACT_THRESHOLD   Auto-compact WAL after N entries (default: 50)
+      DOCX_CHECKPOINT_INTERVAL     Create checkpoint every N entries (default: 10)
+      DEBUG                            Enable debug logging for sync operations
 
     Sessions persist between invocations and are shared with the MCP server.
     WAL history is preserved automatically; use 'close' to permanently delete a session.
