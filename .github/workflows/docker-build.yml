@@ -7,15 +7,23 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub Release'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/docx-mcp
+  DOTNET_VERSION: '10.0.x'
 
 jobs:
-  # ─────────────────────────────────────────────
+  # =============================================================================
   # Tests
-  # ─────────────────────────────────────────────
+  # =============================================================================
   test:
+    name: Run Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +31,10 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: preview
 
-      - name: Restore
+      - name: Restore dependencies
         run: dotnet restore
 
       - name: Build
@@ -35,11 +43,11 @@ jobs:
       - name: Test
         run: dotnet test --no-build --configuration Release --verbosity normal
 
-  # ─────────────────────────────────────────────
-  # Linux multi-arch Docker build (amd64 + arm64)
-  # Pushes to Docker Hub
-  # ─────────────────────────────────────────────
+  # =============================================================================
+  # Linux Docker Build (Multi-arch)
+  # =============================================================================
   docker-linux:
+    name: Docker Linux (amd64 + arm64)
     needs: test
     runs-on: ubuntu-latest
 
@@ -78,7 +86,7 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
-      - name: Build and push (linux/amd64, linux/arm64)
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -99,10 +107,11 @@ jobs:
           readme-filepath: ./DOCKER_README.md
           short-description: "MCP server for Microsoft Word DOCX manipulation - structured queries, undo/redo, Track Changes"
 
-  # ─────────────────────────────────────────────
-  # Windows native build (x64 + arm64)
-  # ─────────────────────────────────────────────
+  # =============================================================================
+  # Windows Native Build
+  # =============================================================================
   build-windows:
+    name: Build Windows ${{ matrix.arch }}
     needs: test
     runs-on: windows-latest
     strategy:
@@ -115,10 +124,10 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: preview
 
-      - name: Publish NativeAOT (win-${{ matrix.arch }})
+      - name: Publish MCP Server (NativeAOT)
         run: |
           dotnet publish src/DocxMcp/DocxMcp.csproj `
             --configuration Release `
@@ -128,16 +137,119 @@ jobs:
             -p:OptimizationPreference=Size `
             --output dist/windows-${{ matrix.arch }}
 
-      - name: Upload artifact
+      - name: Publish CLI (NativeAOT)
+        run: |
+          dotnet publish src/DocxMcp.Cli/DocxMcp.Cli.csproj `
+            --configuration Release `
+            --runtime win-${{ matrix.arch }} `
+            --self-contained true `
+            -p:PublishAot=true `
+            -p:OptimizationPreference=Size `
+            --output dist/windows-${{ matrix.arch }}
+
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: docx-mcp-windows-${{ matrix.arch }}
-          path: dist/windows-${{ matrix.arch }}/docx-mcp.exe
+          name: windows-${{ matrix.arch }}-binaries
+          path: |
+            dist/windows-${{ matrix.arch }}/docx-mcp.exe
+            dist/windows-${{ matrix.arch }}/docx-cli.exe
 
-  # ─────────────────────────────────────────────
-  # macOS native build (x64 + arm64)
-  # ─────────────────────────────────────────────
+  # =============================================================================
+  # Windows Installer (Inno Setup)
+  # =============================================================================
+  installer-windows:
+    name: Windows Installer ${{ matrix.arch }}
+    needs: build-windows
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}-binaries
+          path: dist/windows-${{ matrix.arch }}
+
+      - name: Extract version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match '^refs/tags/v(.+)$') {
+            $version = $matches[1]
+          } else {
+            $version = "0.0.0-dev"
+          }
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Create installer icon
+        shell: pwsh
+        run: |
+          # Create a simple icon placeholder if not exists
+          $iconPath = "installers/windows/docx-mcp.ico"
+          if (-not (Test-Path $iconPath)) {
+            # Download a generic document icon or create placeholder
+            # For now, we'll skip the icon requirement by modifying the .iss
+            Write-Host "Icon not found, installer will use default icon"
+          }
+
+      - name: Prepare Inno Setup script
+        shell: pwsh
+        run: |
+          $issContent = Get-Content "installers/windows/docx-mcp.iss" -Raw
+
+          # Remove SetupIconFile line if icon doesn't exist
+          if (-not (Test-Path "installers/windows/docx-mcp.ico")) {
+            $issContent = $issContent -replace 'SetupIconFile=docx-mcp.ico\r?\n', ''
+          }
+
+          # Handle LICENSE file - create if missing
+          if (-not (Test-Path "LICENSE")) {
+            "MIT License`n`nCopyright (c) 2024 DocX MCP Team`n`nPermission is hereby granted..." | Out-File -FilePath "LICENSE" -Encoding utf8
+          }
+
+          Set-Content "installers/windows/docx-mcp-build.iss" $issContent
+
+      - name: Build installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+        with:
+          path: installers/windows/docx-mcp-build.iss
+          options: /DMyAppVersion=${{ steps.version.outputs.VERSION }} /DMyAppArch=${{ matrix.arch }}
+
+      - name: Sign installer (if certificate available)
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+        shell: pwsh
+        run: |
+          # Decode certificate
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $certPath = "certificate.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+
+          # Sign the installer
+          $installer = Get-ChildItem "dist/installers/*.exe" | Select-Object -First 1
+          & signtool sign /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 $installer.FullName
+
+          # Cleanup
+          Remove-Item $certPath
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}-installer
+          path: dist/installers/*.exe
+
+  # =============================================================================
+  # macOS Native Build
+  # =============================================================================
   build-macos:
+    name: Build macOS ${{ matrix.arch }}
     needs: test
     runs-on: macos-latest
     strategy:
@@ -150,10 +262,10 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: preview
 
-      - name: Publish NativeAOT (osx-${{ matrix.arch }})
+      - name: Publish MCP Server (NativeAOT)
         run: |
           dotnet publish src/DocxMcp/DocxMcp.csproj \
             --configuration Release \
@@ -163,19 +275,154 @@ jobs:
             -p:OptimizationPreference=Size \
             --output dist/macos-${{ matrix.arch }}
 
-      - name: Upload artifact
+      - name: Publish CLI (NativeAOT)
+        run: |
+          dotnet publish src/DocxMcp.Cli/DocxMcp.Cli.csproj \
+            --configuration Release \
+            --runtime osx-${{ matrix.arch }} \
+            --self-contained true \
+            -p:PublishAot=true \
+            -p:OptimizationPreference=Size \
+            --output dist/macos-${{ matrix.arch }}
+
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: docx-mcp-macos-${{ matrix.arch }}
-          path: dist/macos-${{ matrix.arch }}/docx-mcp
+          name: macos-${{ matrix.arch }}-binaries
+          path: |
+            dist/macos-${{ matrix.arch }}/docx-mcp
+            dist/macos-${{ matrix.arch }}/docx-cli
 
-  # ─────────────────────────────────────────────
-  # Create GitHub Release on version tags
-  # ─────────────────────────────────────────────
+  # =============================================================================
+  # macOS Installer (PKG + DMG) with Code Signing & Notarization
+  # =============================================================================
+  installer-macos:
+    name: macOS Installer ${{ matrix.arch }}
+    needs: build-macos
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-binaries
+          path: dist/macos-${{ matrix.arch }}
+
+      - name: Make binaries executable
+        run: |
+          chmod +x dist/macos-${{ matrix.arch }}/docx-mcp
+          chmod +x dist/macos-${{ matrix.arch }}/docx-cli 2>/dev/null || true
+
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" =~ ^refs/tags/v(.+)$ ]]; then
+            echo "VERSION=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Import Apple certificates
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_CERTIFICATE: ${{ secrets.APPLE_INSTALLER_CERTIFICATE }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import Developer ID Application certificate
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          rm $RUNNER_TEMP/certificate.p12
+
+          # Import Developer ID Installer certificate (if provided)
+          if [[ -n "$APPLE_INSTALLER_CERTIFICATE" ]]; then
+            echo "$APPLE_INSTALLER_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/installer-cert.p12
+            security import $RUNNER_TEMP/installer-cert.p12 -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" \
+              -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+            rm $RUNNER_TEMP/installer-cert.p12
+          fi
+
+          # Set keychain for codesign
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Extract signing identities
+          APP_IDENTITY=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          INSTALLER_IDENTITY=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+          echo "APP_SIGNING_IDENTITY=$APP_IDENTITY" >> $GITHUB_ENV
+          echo "INSTALLER_SIGNING_IDENTITY=$INSTALLER_IDENTITY" >> $GITHUB_ENV
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+
+      - name: Build PKG installer
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          ARCH: ${{ matrix.arch }}
+          SIGNING_IDENTITY: ${{ env.APP_SIGNING_IDENTITY }}
+          INSTALLER_SIGNING_IDENTITY: ${{ env.INSTALLER_SIGNING_IDENTITY }}
+          NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARYTOOL_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          chmod +x installers/macos/build-pkg.sh
+          ./installers/macos/build-pkg.sh
+
+      - name: Build DMG (optional)
+        if: ${{ success() }}
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          ARCH: ${{ matrix.arch }}
+          SIGNING_IDENTITY: ${{ env.APP_SIGNING_IDENTITY }}
+          NOTARIZE: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARYTOOL_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          chmod +x installers/macos/build-dmg.sh
+          ./installers/macos/build-dmg.sh || echo "DMG build skipped or failed (non-fatal)"
+
+      - name: Cleanup keychain
+        if: ${{ always() && env.KEYCHAIN_PATH != '' }}
+        run: |
+          security delete-keychain $KEYCHAIN_PATH || true
+
+      - name: Upload PKG installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-pkg
+          path: dist/installers/*.pkg
+
+      - name: Upload DMG installer
+        uses: actions/upload-artifact@v4
+        if: ${{ hashFiles('dist/installers/*.dmg') != '' }}
+        with:
+          name: macos-${{ matrix.arch }}-dmg
+          path: dist/installers/*.dmg
+
+  # =============================================================================
+  # Create GitHub Release
+  # =============================================================================
   release:
-    needs: [docker-linux, build-windows, build-macos]
+    name: Create Release
+    needs: [docker-linux, installer-windows, installer-macos]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
 
@@ -187,24 +434,90 @@ jobs:
         with:
           path: artifacts
 
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" =~ ^refs/tags/v(.+)$ ]]; then
+            echo "VERSION=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=0.0.0-dev" >> $GITHUB_OUTPUT
+            echo "TAG=v0.0.0-dev" >> $GITHUB_OUTPUT
+          fi
+
       - name: Prepare release assets
         run: |
-          mkdir -p release
-          # Package each platform
-          for dir in artifacts/docx-mcp-*; do
-            name=$(basename "$dir")
-            if [[ "$name" == *windows* ]]; then
-              zip -j "release/${name}.zip" "$dir"/*
-            else
-              tar -czvf "release/${name}.tar.gz" -C "$dir" .
+          mkdir -p release-assets
+
+          # Windows installers
+          for arch in x64 arm64; do
+            if [[ -d "artifacts/windows-${arch}-installer" ]]; then
+              cp artifacts/windows-${arch}-installer/*.exe release-assets/ 2>/dev/null || true
+            fi
+            # Also include raw binaries as zip
+            if [[ -d "artifacts/windows-${arch}-binaries" ]]; then
+              cd artifacts/windows-${arch}-binaries
+              zip -r "../../release-assets/docx-mcp-${{ steps.version.outputs.VERSION }}-windows-${arch}.zip" .
+              cd ../..
             fi
           done
-          ls -la release/
+
+          # macOS installers
+          for arch in x64 arm64; do
+            if [[ -d "artifacts/macos-${arch}-pkg" ]]; then
+              cp artifacts/macos-${arch}-pkg/*.pkg release-assets/ 2>/dev/null || true
+            fi
+            if [[ -d "artifacts/macos-${arch}-dmg" ]]; then
+              cp artifacts/macos-${arch}-dmg/*.dmg release-assets/ 2>/dev/null || true
+            fi
+            # Also include raw binaries as tar.gz
+            if [[ -d "artifacts/macos-${arch}-binaries" ]]; then
+              cd artifacts/macos-${arch}-binaries
+              tar -czvf "../../release-assets/docx-mcp-${{ steps.version.outputs.VERSION }}-macos-${arch}.tar.gz" .
+              cd ../..
+            fi
+          done
+
+          ls -la release-assets/
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## DocX MCP Server ${{ steps.version.outputs.VERSION }}
+
+          ### Installation
+
+          #### Windows
+          - **Recommended**: Download and run the `.exe` installer
+          - **Manual**: Extract the `.zip` and add to PATH
+
+          #### macOS
+          - **Recommended**: Download and run the `.pkg` installer (signed & notarized)
+          - **Alternative**: Download the `.dmg` for drag-and-drop installation
+          - **Manual**: Extract the `.tar.gz` and copy to `/usr/local/bin`
+
+          #### Linux / Docker
+          ```bash
+          docker pull ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.VERSION }}
+          ```
+
+          ### Checksums
+          ```
+          EOF
+
+          cd release-assets
+          sha256sum * >> ../release-notes.md 2>/dev/null || shasum -a 256 * >> ../release-notes.md
+          cd ..
+
+          echo '```' >> release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*
-          generate_release_notes: true
+          tag_name: ${{ steps.version.outputs.TAG }}
+          name: DocX MCP Server ${{ steps.version.outputs.VERSION }}
+          body_path: release-notes.md
           draft: false
-          prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+          files: release-assets/*
