@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DocxMcp.ExternalChanges;
 using ModelContextProtocol.Server;
 
@@ -12,6 +13,8 @@ namespace DocxMcp.Tools;
 [McpServerToolType]
 public sealed class ExternalChangeTools
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
     /// <summary>
     /// Check for external changes, get details, and optionally acknowledge them.
     /// This is the single tool for all external change operations.
@@ -23,8 +26,8 @@ public sealed class ExternalChangeTools
         "2. Shows detailed diff (what was added, removed, modified, moved)\n" +
         "3. Can acknowledge changes to allow continued editing\n\n" +
         "IMPORTANT: If external changes are detected, you MUST acknowledge them " +
-        "(set acknowledge=true) before you can use apply_patch on this document.")]
-    public static ExternalChangeResult GetExternalChanges(
+        "(set acknowledge=true) before you can continue editing this document.")]
+    public static string GetExternalChanges(
         ExternalChangeTracker tracker,
         [Description("Session ID to check for external changes")]
         string doc_id,
@@ -43,12 +46,13 @@ public sealed class ExternalChangeTools
         // No changes detected
         if (pending is null)
         {
-            return new ExternalChangeResult
+            var noChangesResult = new JsonObject
             {
-                HasChanges = false,
-                Message = "No external changes detected. The document is in sync with the source file.",
-                CanEdit = true
+                ["has_changes"] = false,
+                ["can_edit"] = true,
+                ["message"] = "No external changes detected. The document is in sync with the source file."
             };
+            return noChangesResult.ToJsonString(JsonOptions);
         }
 
         // Acknowledge if requested
@@ -56,74 +60,152 @@ public sealed class ExternalChangeTools
         {
             tracker.AcknowledgeChange(doc_id, pending.Id);
 
-            return new ExternalChangeResult
+            var ackResult = new JsonObject
             {
-                HasChanges = true,
-                Acknowledged = true,
-                CanEdit = true,
-                ChangeId = pending.Id,
-                DetectedAt = pending.DetectedAt,
-                SourcePath = pending.SourcePath,
-                Summary = new ChangeSummary
-                {
-                    TotalChanges = pending.Summary.TotalChanges,
-                    Added = pending.Summary.Added,
-                    Removed = pending.Summary.Removed,
-                    Modified = pending.Summary.Modified,
-                    Moved = pending.Summary.Moved
-                },
-                Changes = pending.Changes.Select(c => new ChangeDetail
-                {
-                    Type = c.ChangeType,
-                    ElementType = c.ElementType,
-                    Description = c.Description,
-                    OldText = c.OldText,
-                    NewText = c.NewText
-                }).ToList(),
-                Message = $"External changes acknowledged. You may now continue editing.\n\n" +
-                          $"Summary: {pending.Summary.TotalChanges} change(s) were made externally:\n" +
-                          $"  • {pending.Summary.Added} added\n" +
-                          $"  • {pending.Summary.Removed} removed\n" +
-                          $"  • {pending.Summary.Modified} modified\n" +
-                          $"  • {pending.Summary.Moved} moved"
+                ["has_changes"] = true,
+                ["acknowledged"] = true,
+                ["can_edit"] = true,
+                ["change_id"] = pending.Id,
+                ["detected_at"] = pending.DetectedAt.ToString("o"),
+                ["source_path"] = pending.SourcePath,
+                ["summary"] = BuildSummaryJson(pending.Summary),
+                ["changes"] = BuildChangesJson(pending.Changes),
+                ["message"] = $"External changes acknowledged. You may now continue editing.\n\n" +
+                              $"Summary: {pending.Summary.TotalChanges} change(s) were made externally:\n" +
+                              $"  • {pending.Summary.Added} added\n" +
+                              $"  • {pending.Summary.Removed} removed\n" +
+                              $"  • {pending.Summary.Modified} modified\n" +
+                              $"  • {pending.Summary.Moved} moved"
             };
+            return ackResult.ToJsonString(JsonOptions);
         }
 
         // Return details without acknowledging
-        return new ExternalChangeResult
+        var result = new JsonObject
         {
-            HasChanges = true,
-            Acknowledged = false,
-            CanEdit = false,
-            ChangeId = pending.Id,
-            DetectedAt = pending.DetectedAt,
-            SourcePath = pending.SourcePath,
-            Summary = new ChangeSummary
-            {
-                TotalChanges = pending.Summary.TotalChanges,
-                Added = pending.Summary.Added,
-                Removed = pending.Summary.Removed,
-                Modified = pending.Summary.Modified,
-                Moved = pending.Summary.Moved
-            },
-            Changes = pending.Changes.Select(c => new ChangeDetail
-            {
-                Type = c.ChangeType,
-                ElementType = c.ElementType,
-                Description = c.Description,
-                OldText = c.OldText,
-                NewText = c.NewText
-            }).ToList(),
-            Patches = pending.Patches.Select(p => p.ToJsonString()).ToList(),
-            Message = BuildChangeMessage(pending)
+            ["has_changes"] = true,
+            ["acknowledged"] = false,
+            ["can_edit"] = false,
+            ["change_id"] = pending.Id,
+            ["detected_at"] = pending.DetectedAt.ToString("o"),
+            ["source_path"] = pending.SourcePath,
+            ["summary"] = BuildSummaryJson(pending.Summary),
+            ["changes"] = BuildChangesJson(pending.Changes),
+            ["patches"] = new JsonArray(pending.Patches.Select(p => (JsonNode)p.ToJsonString()).ToArray()),
+            ["message"] = BuildChangeMessage(pending)
         };
+        return result.ToJsonString(JsonOptions);
+    }
+
+    /// <summary>
+    /// Synchronize the session with external file changes.
+    /// Reloads the document from disk, re-assigns all element IDs, detects uncovered changes,
+    /// and records the sync in the WAL for undo/redo support.
+    /// </summary>
+    [McpServerTool(Name = "sync_external_changes"), Description(
+        "Synchronize session with external file changes. This is the recommended way to handle " +
+        "external modifications as it:\n\n" +
+        "1. Reloads the document from disk\n" +
+        "2. Re-assigns all element IDs for consistency\n" +
+        "3. Detects uncovered changes (headers, footers, images, styles, etc.)\n" +
+        "4. Records the sync in the edit history (supports undo)\n" +
+        "5. Optionally acknowledges a pending change\n\n" +
+        "Use this tool when you want to accept external changes and continue editing.")]
+    public static string SyncExternalChanges(
+        ExternalChangeTracker tracker,
+        [Description("Session ID to sync")]
+        string doc_id,
+        [Description("Optional change ID to acknowledge (from get_external_changes)")]
+        string? change_id = null)
+    {
+        var syncResult = tracker.SyncExternalChanges(doc_id, change_id);
+
+        var result = new JsonObject
+        {
+            ["success"] = syncResult.Success,
+            ["has_changes"] = syncResult.HasChanges,
+            ["message"] = syncResult.Message
+        };
+
+        if (syncResult.Summary is not null)
+        {
+            result["summary"] = BuildSummaryJson(syncResult.Summary);
+        }
+
+        if (syncResult.UncoveredChanges is { Count: > 0 })
+        {
+            var uncoveredArr = new JsonArray();
+            foreach (var u in syncResult.UncoveredChanges)
+            {
+                var uObj = new JsonObject
+                {
+                    ["type"] = u.Type.ToString(),
+                    ["description"] = u.Description,
+                    ["change_kind"] = u.ChangeKind
+                };
+                if (u.PartUri is not null)
+                {
+                    uObj["part_uri"] = u.PartUri;
+                }
+                uncoveredArr.Add((JsonNode?)uObj);
+            }
+            result["uncovered_changes"] = uncoveredArr;
+        }
+
+        if (syncResult.WalPosition.HasValue)
+        {
+            result["wal_position"] = syncResult.WalPosition.Value;
+        }
+
+        if (syncResult.AcknowledgedChangeId is not null)
+        {
+            result["acknowledged_change_id"] = syncResult.AcknowledgedChangeId;
+        }
+
+        return result.ToJsonString(JsonOptions);
+    }
+
+    private static JsonObject BuildSummaryJson(Diff.DiffSummary summary)
+    {
+        return new JsonObject
+        {
+            ["total_changes"] = summary.TotalChanges,
+            ["added"] = summary.Added,
+            ["removed"] = summary.Removed,
+            ["modified"] = summary.Modified,
+            ["moved"] = summary.Moved
+        };
+    }
+
+    private static JsonArray BuildChangesJson(IReadOnlyList<ExternalElementChange> changes)
+    {
+        var arr = new JsonArray();
+        foreach (var c in changes)
+        {
+            var obj = new JsonObject
+            {
+                ["type"] = c.ChangeType,
+                ["element_type"] = c.ElementType,
+                ["description"] = c.Description
+            };
+            if (c.OldText is not null)
+            {
+                obj["old_text"] = c.OldText;
+            }
+            if (c.NewText is not null)
+            {
+                obj["new_text"] = c.NewText;
+            }
+            arr.Add((JsonNode?)obj);
+        }
+        return arr;
     }
 
     private static string BuildChangeMessage(ExternalChangePatch patch)
     {
         var lines = new List<string>
         {
-            "⚠️ EXTERNAL CHANGES DETECTED",
+            "EXTERNAL CHANGES DETECTED",
             "",
             $"The file '{Path.GetFileName(patch.SourcePath)}' was modified externally.",
             $"Detected at: {patch.DetectedAt:yyyy-MM-dd HH:mm:ss UTC}",
@@ -152,63 +234,9 @@ public sealed class ExternalChangeTools
         }
 
         lines.Add("## Action Required");
-        lines.Add("Call `get_external_changes` with `acknowledge=true` to continue editing.");
+        lines.Add("Call `get_external_changes` with `acknowledge=true` to continue editing,");
+        lines.Add("or use `sync_external_changes` to reload the document and record in history.");
 
         return string.Join("\n", lines);
     }
 }
-
-#region Result Types
-
-public sealed class ExternalChangeResult
-{
-    /// <summary>Whether external changes were detected.</summary>
-    public required bool HasChanges { get; init; }
-
-    /// <summary>Whether the changes have been acknowledged.</summary>
-    public bool Acknowledged { get; init; }
-
-    /// <summary>Whether editing is allowed (true if no changes or acknowledged).</summary>
-    public required bool CanEdit { get; init; }
-
-    /// <summary>Unique identifier for this change event.</summary>
-    public string? ChangeId { get; init; }
-
-    /// <summary>When the change was detected.</summary>
-    public DateTime? DetectedAt { get; init; }
-
-    /// <summary>Path to the source file.</summary>
-    public string? SourcePath { get; init; }
-
-    /// <summary>Summary counts of changes.</summary>
-    public ChangeSummary? Summary { get; init; }
-
-    /// <summary>List of individual changes.</summary>
-    public List<ChangeDetail>? Changes { get; init; }
-
-    /// <summary>Generated patches (for reference).</summary>
-    public List<string>? Patches { get; init; }
-
-    /// <summary>Human-readable message.</summary>
-    public required string Message { get; init; }
-}
-
-public sealed class ChangeSummary
-{
-    public int TotalChanges { get; init; }
-    public int Added { get; init; }
-    public int Removed { get; init; }
-    public int Modified { get; init; }
-    public int Moved { get; init; }
-}
-
-public sealed class ChangeDetail
-{
-    public required string Type { get; init; }
-    public required string ElementType { get; init; }
-    public required string Description { get; init; }
-    public string? OldText { get; init; }
-    public string? NewText { get; init; }
-}
-
-#endregion

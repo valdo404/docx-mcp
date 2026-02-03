@@ -1,7 +1,11 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DocxMcp.Diff;
+using DocxMcp.Helpers;
+using DocxMcp.Persistence;
+using DocumentFormat.OpenXml.Packaging;
 using Microsoft.Extensions.Logging;
 
 namespace DocxMcp.ExternalChanges;
@@ -217,6 +221,143 @@ public sealed class ExternalChangeTracker : IDisposable
             }
         }
         return count;
+    }
+
+    /// <summary>
+    /// Synchronize the session with external file changes.
+    /// This is the full sync workflow:
+    /// 1. Reload document from disk (store FULL bytes in WAL)
+    /// 2. Re-assign ALL dmcp:ids
+    /// 3. Detect uncovered changes (headers, images, etc.)
+    /// 4. Create WAL entry with full document snapshot
+    /// 5. Force checkpoint
+    /// 6. Replace in-memory session
+    /// </summary>
+    /// <param name="sessionId">Session ID to sync.</param>
+    /// <param name="changeId">Optional change ID to acknowledge.</param>
+    /// <returns>Result of the sync operation.</returns>
+    public SyncResult SyncExternalChanges(string sessionId, string? changeId = null)
+    {
+        lock (_lock)
+        {
+            try
+            {
+                var session = _sessions.Get(sessionId);
+                if (session.SourcePath is null)
+                    return SyncResult.Failure("Session has no source path. Cannot sync.");
+
+                if (!File.Exists(session.SourcePath))
+                    return SyncResult.Failure($"Source file not found: {session.SourcePath}");
+
+                // 1. Read external file (store FULL bytes)
+                var newBytes = File.ReadAllBytes(session.SourcePath);
+                var previousBytes = session.ToBytes();
+
+                // 2. Compute hashes
+                var previousHash = ComputeBytesHash(previousBytes);
+                var newHash = ComputeBytesHash(newBytes);
+
+                if (previousHash == newHash)
+                    return SyncResult.NoChanges();
+
+                _logger.LogInformation(
+                    "Syncing external changes for session {SessionId}. Previous hash: {Old}, New hash: {New}",
+                    sessionId, previousHash, newHash);
+
+                // 3. Open new document and detect changes BEFORE replacing session
+                List<UncoveredChange> uncoveredChanges;
+                DiffResult diff;
+
+                using (var newStream = new MemoryStream(newBytes))
+                using (var newDoc = WordprocessingDocument.Open(newStream, isEditable: false))
+                {
+                    // Detect uncovered changes (headers, footers, images, etc.)
+                    uncoveredChanges = DiffEngine.DetectUncoveredChanges(session.Document, newDoc);
+
+                    // Detect body changes
+                    diff = DiffEngine.Compare(previousBytes, newBytes);
+                }
+
+                // 4. Create new session with re-assigned IDs
+                var newSession = DocxSession.FromBytes(newBytes, session.Id, session.SourcePath);
+                ElementIdManager.EnsureNamespace(newSession.Document);
+                ElementIdManager.EnsureAllIds(newSession.Document);
+
+                // Get updated bytes after ID assignment
+                var finalBytes = newSession.ToBytes();
+
+                // 5. Build WAL entry with FULL document snapshot
+                var walEntry = new WalEntry
+                {
+                    EntryType = WalEntryType.ExternalSync,
+                    Timestamp = DateTime.UtcNow,
+                    Patches = JsonSerializer.Serialize(diff.ToPatches(), DocxMcp.Models.DocxJsonContext.Default.ListJsonObject),
+                    Description = BuildSyncDescription(diff.Summary, uncoveredChanges),
+                    SyncMeta = new ExternalSyncMeta
+                    {
+                        SourcePath = session.SourcePath,
+                        PreviousHash = previousHash,
+                        NewHash = newHash,
+                        Summary = diff.Summary,
+                        UncoveredChanges = uncoveredChanges,
+                        DocumentSnapshot = finalBytes
+                    }
+                };
+
+                // 6. Append to WAL + checkpoint + replace session
+                var walPosition = _sessions.AppendExternalSync(sessionId, walEntry, newSession);
+
+                // 7. Update watched session state
+                if (_watchedSessions.TryGetValue(sessionId, out var watched))
+                {
+                    watched.LastKnownHash = newHash;
+                    watched.SessionSnapshot = finalBytes;
+                    watched.LastChecked = DateTime.UtcNow;
+                }
+
+                // 8. Acknowledge change if specified
+                if (changeId is not null)
+                    AcknowledgeChange(sessionId, changeId);
+
+                _logger.LogInformation(
+                    "External sync completed for session {SessionId}. Body: +{Added} -{Removed} ~{Modified}. Uncovered: {Uncovered}",
+                    sessionId, diff.Summary.Added, diff.Summary.Removed, diff.Summary.Modified, uncoveredChanges.Count);
+
+                return SyncResult.Synced(diff.Summary, uncoveredChanges, changeId, walPosition);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to sync external changes for session {SessionId}.", sessionId);
+                return SyncResult.Failure($"Sync failed: {ex.Message}");
+            }
+        }
+    }
+
+    private static string BuildSyncDescription(DiffSummary summary, List<UncoveredChange> uncovered)
+    {
+        var parts = new List<string> { "[EXTERNAL SYNC]" };
+
+        if (summary.TotalChanges > 0)
+            parts.Add($"+{summary.Added} -{summary.Removed} ~{summary.Modified}");
+        else
+            parts.Add("no body changes");
+
+        if (uncovered.Count > 0)
+        {
+            var types = uncovered
+                .Select(u => u.Type.ToString().ToLowerInvariant())
+                .Distinct()
+                .Take(3);
+            parts.Add($"({uncovered.Count} uncovered: {string.Join(", ", types)})");
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    private static string ComputeBytesHash(byte[] bytes)
+    {
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private void OnFileChanged(string sessionId, string filePath)

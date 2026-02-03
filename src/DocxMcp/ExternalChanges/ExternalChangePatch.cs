@@ -183,13 +183,81 @@ public sealed class PendingExternalChanges
 }
 
 /// <summary>
+/// Result of a sync external changes operation.
+/// </summary>
+public sealed class SyncResult
+{
+    /// <summary>Whether the sync was successful.</summary>
+    public required bool Success { get; init; }
+
+    /// <summary>Human-readable message.</summary>
+    public required string Message { get; init; }
+
+    /// <summary>Whether any changes were detected.</summary>
+    public bool HasChanges { get; init; }
+
+    /// <summary>Summary of body changes (if any).</summary>
+    public DiffSummary? Summary { get; init; }
+
+    /// <summary>List of uncovered changes (headers, footers, images, etc.).</summary>
+    public List<UncoveredChange>? UncoveredChanges { get; init; }
+
+    /// <summary>The change ID that was acknowledged (if any).</summary>
+    public string? AcknowledgedChangeId { get; init; }
+
+    /// <summary>Position in WAL after sync.</summary>
+    public int? WalPosition { get; init; }
+
+    public static SyncResult NoChanges() => new()
+    {
+        Success = true,
+        HasChanges = false,
+        Message = "No external changes detected. Document is in sync."
+    };
+
+    public static SyncResult Failure(string message) => new()
+    {
+        Success = false,
+        HasChanges = false,
+        Message = message
+    };
+
+    public static SyncResult Synced(
+        DiffSummary summary,
+        List<UncoveredChange> uncoveredChanges,
+        string? acknowledgedChangeId,
+        int walPosition)
+    {
+        var uncoveredCount = uncoveredChanges.Count;
+        var uncoveredMsg = uncoveredCount > 0
+            ? $" ({uncoveredCount} uncovered: {string.Join(", ", uncoveredChanges.Select(u => u.Type.ToString().ToLowerInvariant()).Distinct().Take(3))})"
+            : "";
+
+        return new SyncResult
+        {
+            Success = true,
+            HasChanges = true,
+            Summary = summary,
+            UncoveredChanges = uncoveredChanges,
+            AcknowledgedChangeId = acknowledgedChangeId,
+            WalPosition = walPosition,
+            Message = $"Synced: +{summary.Added} -{summary.Removed} ~{summary.Modified}{uncoveredMsg}. WAL position: {walPosition}"
+        };
+    }
+}
+
+/// <summary>
 /// JSON serialization context for external changes (AOT-safe).
 /// </summary>
 [JsonSerializable(typeof(ExternalChangePatch))]
 [JsonSerializable(typeof(ExternalElementChange))]
 [JsonSerializable(typeof(PendingExternalChanges))]
 [JsonSerializable(typeof(DiffSummary))]
+[JsonSerializable(typeof(SyncResult))]
+[JsonSerializable(typeof(UncoveredChange))]
+[JsonSerializable(typeof(UncoveredChangeType))]
 [JsonSerializable(typeof(List<ExternalElementChange>))]
+[JsonSerializable(typeof(List<UncoveredChange>))]
 [JsonSerializable(typeof(List<JsonObject>))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 public partial class ExternalChangeJsonContext : JsonSerializerContext

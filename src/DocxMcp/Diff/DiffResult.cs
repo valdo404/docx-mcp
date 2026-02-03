@@ -248,3 +248,74 @@ public enum ChangeType
     /// <summary>Element was moved to a different position (same ID, same content, different index).</summary>
     Moved
 }
+
+/// <summary>
+/// Type of change to a document part that cannot be represented as a body patch.
+/// These are "uncovered" changes that the LLM should be informed about.
+/// </summary>
+public enum UncoveredChangeType
+{
+    /// <summary>Change to header part (/word/header*.xml).</summary>
+    Header,
+
+    /// <summary>Change to footer part (/word/footer*.xml).</summary>
+    Footer,
+
+    /// <summary>Change to embedded image (/word/media/*).</summary>
+    Image,
+
+    /// <summary>Change to DrawingML content (inline drawings).</summary>
+    Drawing,
+
+    /// <summary>Change to footnotes (/word/footnotes.xml).</summary>
+    Footnote,
+
+    /// <summary>Change to endnotes (/word/endnotes.xml).</summary>
+    Endnote,
+
+    /// <summary>Change to comments (/word/comments.xml).</summary>
+    Comment,
+
+    /// <summary>Change to style definitions (/word/styles.xml).</summary>
+    StyleDefinition,
+
+    /// <summary>Change to numbering definitions (/word/numbering.xml).</summary>
+    Numbering,
+
+    /// <summary>Change to theme (/word/theme/*.xml).</summary>
+    Theme,
+
+    /// <summary>Change to document settings (/word/settings.xml).</summary>
+    Settings,
+
+    /// <summary>Change to document properties (/docProps/*).</summary>
+    DocumentProperty,
+
+    /// <summary>Change to custom XML data (/customXml/*).</summary>
+    CustomXml,
+
+    /// <summary>Change to relationships (*.rels).</summary>
+    Relationship,
+
+    /// <summary>Fallback for unrecognized part changes.</summary>
+    Unknown
+}
+
+/// <summary>
+/// Represents a change to a document part that cannot be represented as a patch.
+/// Used to inform the LLM about external modifications to headers, footers, images, etc.
+/// </summary>
+public sealed class UncoveredChange
+{
+    /// <summary>Type of the uncovered change.</summary>
+    public required UncoveredChangeType Type { get; init; }
+
+    /// <summary>Human-readable description of the change.</summary>
+    public required string Description { get; init; }
+
+    /// <summary>URI of the affected part (e.g., "/word/header1.xml").</summary>
+    public string? PartUri { get; init; }
+
+    /// <summary>Whether the part was added, removed, or modified.</summary>
+    public string ChangeKind { get; init; } = "modified";
+}

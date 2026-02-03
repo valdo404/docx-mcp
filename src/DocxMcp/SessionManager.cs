@@ -213,6 +213,84 @@ public sealed class SessionManager
         }
     }
 
+    /// <summary>
+    /// Append an external sync entry to the WAL.
+    /// Truncates future entries if in undo state, creates checkpoint from the sync's DocumentSnapshot,
+    /// and replaces the in-memory session.
+    /// </summary>
+    /// <param name="id">Session ID.</param>
+    /// <param name="syncEntry">The WAL entry with ExternalSync type and SyncMeta.</param>
+    /// <param name="newSession">The new session to replace the current one.</param>
+    /// <returns>The new WAL position after append.</returns>
+    public int AppendExternalSync(string id, WalEntry syncEntry, DocxSession newSession)
+    {
+        try
+        {
+            var cursor = _cursors.GetOrAdd(id, 0);
+            var walCount = _store.WalEntryCount(id);
+
+            // If cursor < walCount, we're in an undo state — truncate future
+            if (cursor < walCount)
+            {
+                _store.TruncateWalAt(id, cursor);
+
+                WithLockedIndex(index =>
+                {
+                    var entry = index.Sessions.Find(e => e.Id == id);
+                    if (entry is not null)
+                    {
+                        _store.DeleteCheckpointsAfter(id, cursor, entry.CheckpointPositions);
+                        entry.CheckpointPositions.RemoveAll(p => p > cursor);
+                    }
+                });
+            }
+
+            // Serialize and append WAL entry
+            var walLine = System.Text.Json.JsonSerializer.Serialize(syncEntry, WalJsonContext.Default.WalEntry);
+            _store.GetOrCreateWal(id).Append(walLine);
+
+            var newCursor = cursor + 1;
+            _cursors[id] = newCursor;
+
+            // Create checkpoint using the stored DocumentSnapshot (sync always forces a checkpoint)
+            if (syncEntry.SyncMeta?.DocumentSnapshot is not null)
+            {
+                _store.PersistCheckpoint(id, newCursor, syncEntry.SyncMeta.DocumentSnapshot);
+            }
+
+            // Replace in-memory session
+            var oldSession = _sessions[id];
+            _sessions[id] = newSession;
+            oldSession.Dispose();
+
+            // Update index
+            WithLockedIndex(index =>
+            {
+                var entry = index.Sessions.Find(e => e.Id == id);
+                if (entry is not null)
+                {
+                    entry.WalCount = _store.WalEntryCount(id);
+                    entry.CursorPosition = newCursor;
+                    entry.LastModifiedAt = DateTime.UtcNow;
+                    if (!entry.CheckpointPositions.Contains(newCursor))
+                    {
+                        entry.CheckpointPositions.Add(newCursor);
+                    }
+                }
+            });
+
+            _logger.LogInformation("Appended external sync entry at position {Position} for session {SessionId}.",
+                newCursor, id);
+
+            return newCursor;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to append external sync for session {SessionId}.", id);
+            throw;
+        }
+    }
+
     // --- Undo / Redo / JumpTo / History ---
 
     /// <summary>
@@ -241,6 +319,7 @@ public sealed class SessionManager
 
     /// <summary>
     /// Redo N steps by incrementing the cursor and replaying patches on the current DOM.
+    /// For ExternalSync entries, uses checkpoint-based rebuild instead of patch replay.
     /// </summary>
     public UndoRedoResult Redo(string id, int steps = 1)
     {
@@ -254,23 +333,43 @@ public sealed class SessionManager
         var actualSteps = Math.Min(steps, walCount - cursor);
         var newCursor = cursor + actualSteps;
 
-        // Replay patches [cursor, newCursor) on current DOM (fast, no rebuild)
-        var patches = _store.ReadWalRange(id, cursor, newCursor);
-        foreach (var patchJson in patches)
+        // Check if any entries in the redo range are ExternalSync
+        var walEntries = _store.ReadWalEntries(id);
+        var hasExternalSync = false;
+        for (int i = cursor; i < newCursor && i < walEntries.Count; i++)
         {
-            ReplayPatch(session, patchJson);
+            if (walEntries[i].EntryType == WalEntryType.ExternalSync)
+            {
+                hasExternalSync = true;
+                break;
+            }
         }
 
-        _cursors[id] = newCursor;
-
-        WithLockedIndex(index =>
+        if (hasExternalSync)
         {
-            var entry = index.Sessions.Find(e => e.Id == id);
-            if (entry is not null)
+            // ExternalSync entries have checkpoints, so rebuild from checkpoint
+            RebuildDocumentAtPosition(id, newCursor);
+        }
+        else
+        {
+            // Regular patches: replay on current DOM (fast, no rebuild)
+            var patches = _store.ReadWalRange(id, cursor, newCursor);
+            foreach (var patchJson in patches)
             {
-                entry.CursorPosition = newCursor;
+                ReplayPatch(session, patchJson);
             }
-        });
+
+            _cursors[id] = newCursor;
+
+            WithLockedIndex(index =>
+            {
+                var entry = index.Sessions.Find(e => e.Id == id);
+                if (entry is not null)
+                {
+                    entry.CursorPosition = newCursor;
+                }
+            });
+        }
 
         return new UndoRedoResult
         {
@@ -354,14 +453,34 @@ public sealed class SessionManager
                 if (walIdx < walEntries.Count)
                 {
                     var we = walEntries[walIdx];
-                    entries.Add(new HistoryEntry
+                    var historyEntry = new HistoryEntry
                     {
                         Position = i,
                         Timestamp = we.Timestamp,
                         Description = we.Description ?? "",
                         IsCurrent = cursor == i,
-                        IsCheckpoint = checkpointPositions.Contains(i)
-                    });
+                        IsCheckpoint = checkpointPositions.Contains(i),
+                        IsExternalSync = we.EntryType == WalEntryType.ExternalSync
+                    };
+
+                    // Populate sync summary for external sync entries
+                    if (we.EntryType == WalEntryType.ExternalSync && we.SyncMeta is not null)
+                    {
+                        historyEntry.SyncSummary = new ExternalSyncSummary
+                        {
+                            SourcePath = we.SyncMeta.SourcePath,
+                            Added = we.SyncMeta.Summary.Added,
+                            Removed = we.SyncMeta.Summary.Removed,
+                            Modified = we.SyncMeta.Summary.Modified,
+                            UncoveredCount = we.SyncMeta.UncoveredChanges.Count,
+                            UncoveredTypes = we.SyncMeta.UncoveredChanges
+                                .Select(u => u.Type.ToString().ToLowerInvariant())
+                                .Distinct()
+                                .ToList()
+                        };
+                    }
+
+                    entries.Add(historyEntry);
                 }
             }
         }

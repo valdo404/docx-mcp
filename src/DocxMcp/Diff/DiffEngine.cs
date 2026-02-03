@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -452,6 +453,329 @@ public static class DiffEngine
     {
         Exact,  // Identical fingerprint
         Similar // Fuzzy match above threshold
+    }
+
+    /// <summary>
+    /// Detect changes to document parts outside the main body.
+    /// These are "uncovered" changes that can't be represented as body patches.
+    /// </summary>
+    public static List<UncoveredChange> DetectUncoveredChanges(
+        WordprocessingDocument original,
+        WordprocessingDocument modified)
+    {
+        var changes = new List<UncoveredChange>();
+
+        var origMain = original.MainDocumentPart;
+        var modMain = modified.MainDocumentPart;
+
+        if (origMain is null || modMain is null)
+            return changes;
+
+        // Compare headers
+        CompareHeaderFooterParts(
+            origMain.HeaderParts.Select(h => (h.Uri, h.Header?.OuterXml)),
+            modMain.HeaderParts.Select(h => (h.Uri, h.Header?.OuterXml)),
+            UncoveredChangeType.Header, "header", changes);
+
+        // Compare footers
+        CompareHeaderFooterParts(
+            origMain.FooterParts.Select(f => (f.Uri, f.Footer?.OuterXml)),
+            modMain.FooterParts.Select(f => (f.Uri, f.Footer?.OuterXml)),
+            UncoveredChangeType.Footer, "footer", changes);
+
+        // Compare styles
+        CompareSinglePart(
+            origMain.StyleDefinitionsPart?.Styles?.OuterXml,
+            modMain.StyleDefinitionsPart?.Styles?.OuterXml,
+            UncoveredChangeType.StyleDefinition,
+            "Style definitions",
+            "/word/styles.xml",
+            changes);
+
+        // Compare numbering
+        CompareSinglePart(
+            origMain.NumberingDefinitionsPart?.Numbering?.OuterXml,
+            modMain.NumberingDefinitionsPart?.Numbering?.OuterXml,
+            UncoveredChangeType.Numbering,
+            "Numbering definitions",
+            "/word/numbering.xml",
+            changes);
+
+        // Compare settings
+        CompareSinglePart(
+            origMain.DocumentSettingsPart?.Settings?.OuterXml,
+            modMain.DocumentSettingsPart?.Settings?.OuterXml,
+            UncoveredChangeType.Settings,
+            "Document settings",
+            "/word/settings.xml",
+            changes);
+
+        // Compare footnotes
+        CompareSinglePart(
+            origMain.FootnotesPart?.Footnotes?.OuterXml,
+            modMain.FootnotesPart?.Footnotes?.OuterXml,
+            UncoveredChangeType.Footnote,
+            "Footnotes",
+            "/word/footnotes.xml",
+            changes);
+
+        // Compare endnotes
+        CompareSinglePart(
+            origMain.EndnotesPart?.Endnotes?.OuterXml,
+            modMain.EndnotesPart?.Endnotes?.OuterXml,
+            UncoveredChangeType.Endnote,
+            "Endnotes",
+            "/word/endnotes.xml",
+            changes);
+
+        // Compare comments
+        CompareSinglePart(
+            origMain.WordprocessingCommentsPart?.Comments?.OuterXml,
+            modMain.WordprocessingCommentsPart?.Comments?.OuterXml,
+            UncoveredChangeType.Comment,
+            "Comments",
+            "/word/comments.xml",
+            changes);
+
+        // Compare theme
+        CompareSinglePart(
+            origMain.ThemePart?.Theme?.OuterXml,
+            modMain.ThemePart?.Theme?.OuterXml,
+            UncoveredChangeType.Theme,
+            "Document theme",
+            "/word/theme/theme1.xml",
+            changes);
+
+        // Compare embedded images/media
+        CompareImageParts(original, modified, changes);
+
+        // Compare document properties
+        CompareDocumentProperties(original, modified, changes);
+
+        return changes;
+    }
+
+    private static void CompareHeaderFooterParts(
+        IEnumerable<(Uri Uri, string? Xml)> originalParts,
+        IEnumerable<(Uri Uri, string? Xml)> modifiedParts,
+        UncoveredChangeType changeType,
+        string partName,
+        List<UncoveredChange> changes)
+    {
+        var origDict = originalParts
+            .Where(p => p.Xml is not null)
+            .ToDictionary(p => p.Uri.ToString(), p => ComputeHash(p.Xml!));
+        var modDict = modifiedParts
+            .Where(p => p.Xml is not null)
+            .ToDictionary(p => p.Uri.ToString(), p => ComputeHash(p.Xml!));
+
+        // Check for removed or modified
+        foreach (var (uri, hash) in origDict)
+        {
+            if (!modDict.TryGetValue(uri, out var modHash))
+            {
+                changes.Add(new UncoveredChange
+                {
+                    Type = changeType,
+                    Description = $"{char.ToUpper(partName[0])}{partName[1..]} removed",
+                    PartUri = uri,
+                    ChangeKind = "removed"
+                });
+            }
+            else if (hash != modHash)
+            {
+                changes.Add(new UncoveredChange
+                {
+                    Type = changeType,
+                    Description = $"{char.ToUpper(partName[0])}{partName[1..]} modified",
+                    PartUri = uri,
+                    ChangeKind = "modified"
+                });
+            }
+        }
+
+        // Check for added
+        foreach (var (uri, _) in modDict)
+        {
+            if (!origDict.ContainsKey(uri))
+            {
+                changes.Add(new UncoveredChange
+                {
+                    Type = changeType,
+                    Description = $"{char.ToUpper(partName[0])}{partName[1..]} added",
+                    PartUri = uri,
+                    ChangeKind = "added"
+                });
+            }
+        }
+    }
+
+    private static void CompareSinglePart(
+        string? originalXml,
+        string? modifiedXml,
+        UncoveredChangeType changeType,
+        string description,
+        string partUri,
+        List<UncoveredChange> changes)
+    {
+        var origHash = originalXml is not null ? ComputeHash(originalXml) : null;
+        var modHash = modifiedXml is not null ? ComputeHash(modifiedXml) : null;
+
+        if (origHash is null && modHash is not null)
+        {
+            changes.Add(new UncoveredChange
+            {
+                Type = changeType,
+                Description = $"{description} added",
+                PartUri = partUri,
+                ChangeKind = "added"
+            });
+        }
+        else if (origHash is not null && modHash is null)
+        {
+            changes.Add(new UncoveredChange
+            {
+                Type = changeType,
+                Description = $"{description} removed",
+                PartUri = partUri,
+                ChangeKind = "removed"
+            });
+        }
+        else if (origHash is not null && modHash is not null && origHash != modHash)
+        {
+            changes.Add(new UncoveredChange
+            {
+                Type = changeType,
+                Description = $"{description} modified",
+                PartUri = partUri,
+                ChangeKind = "modified"
+            });
+        }
+    }
+
+    private static void CompareImageParts(
+        WordprocessingDocument original,
+        WordprocessingDocument modified,
+        List<UncoveredChange> changes)
+    {
+        var origImages = GetImagePartHashes(original);
+        var modImages = GetImagePartHashes(modified);
+
+        foreach (var (uri, hash) in origImages)
+        {
+            if (!modImages.TryGetValue(uri, out var modHash))
+            {
+                changes.Add(new UncoveredChange
+                {
+                    Type = UncoveredChangeType.Image,
+                    Description = $"Image removed: {Path.GetFileName(uri)}",
+                    PartUri = uri,
+                    ChangeKind = "removed"
+                });
+            }
+            else if (hash != modHash)
+            {
+                changes.Add(new UncoveredChange
+                {
+                    Type = UncoveredChangeType.Image,
+                    Description = $"Image modified: {Path.GetFileName(uri)}",
+                    PartUri = uri,
+                    ChangeKind = "modified"
+                });
+            }
+        }
+
+        foreach (var (uri, _) in modImages)
+        {
+            if (!origImages.ContainsKey(uri))
+            {
+                changes.Add(new UncoveredChange
+                {
+                    Type = UncoveredChangeType.Image,
+                    Description = $"Image added: {Path.GetFileName(uri)}",
+                    PartUri = uri,
+                    ChangeKind = "added"
+                });
+            }
+        }
+    }
+
+    private static Dictionary<string, string> GetImagePartHashes(WordprocessingDocument doc)
+    {
+        var result = new Dictionary<string, string>();
+        var mainPart = doc.MainDocumentPart;
+        if (mainPart is null) return result;
+
+        foreach (var imagePart in mainPart.ImageParts)
+        {
+            try
+            {
+                using var stream = imagePart.GetStream();
+                var hash = SHA256.HashData(stream);
+                result[imagePart.Uri.ToString()] = Convert.ToHexString(hash);
+            }
+            catch
+            {
+                // Skip parts that can't be read
+            }
+        }
+
+        return result;
+    }
+
+    private static void CompareDocumentProperties(
+        WordprocessingDocument original,
+        WordprocessingDocument modified,
+        List<UncoveredChange> changes)
+    {
+        // Compare core properties
+        var origCore = original.PackageProperties;
+        var modCore = modified.PackageProperties;
+
+        var coreChanged = false;
+        if (origCore.Title != modCore.Title ||
+            origCore.Subject != modCore.Subject ||
+            origCore.Creator != modCore.Creator ||
+            origCore.Keywords != modCore.Keywords ||
+            origCore.Description != modCore.Description ||
+            origCore.Category != modCore.Category)
+        {
+            coreChanged = true;
+        }
+
+        if (coreChanged)
+        {
+            changes.Add(new UncoveredChange
+            {
+                Type = UncoveredChangeType.DocumentProperty,
+                Description = "Document properties modified",
+                PartUri = "/docProps/core.xml",
+                ChangeKind = "modified"
+            });
+        }
+
+        // Compare extended properties
+        var origExtProps = original.ExtendedFilePropertiesPart?.Properties?.OuterXml;
+        var modExtProps = modified.ExtendedFilePropertiesPart?.Properties?.OuterXml;
+
+        if (origExtProps != modExtProps)
+        {
+            var kind = origExtProps is null ? "added" : modExtProps is null ? "removed" : "modified";
+            changes.Add(new UncoveredChange
+            {
+                Type = UncoveredChangeType.DocumentProperty,
+                Description = $"Extended document properties {kind}",
+                PartUri = "/docProps/app.xml",
+                ChangeKind = kind
+            });
+        }
+    }
+
+    private static string ComputeHash(string content)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash);
     }
 }
 
