@@ -73,8 +73,8 @@ public sealed class SessionManager
     {
         var session = Get(id);
         session.Save(path);
-        // Compact after explicit save — baseline = saved state
-        Compact(id);
+        // Note: WAL is intentionally preserved after save.
+        // Compaction should only be triggered explicitly via CLI.
     }
 
     public void Close(string id)
@@ -107,7 +107,7 @@ public sealed class SessionManager
     /// Append a patch to the WAL after a successful mutation.
     /// If the cursor is behind the WAL tip (after undo), truncates future entries first.
     /// Creates checkpoints at interval boundaries.
-    /// Triggers compaction if the WAL exceeds the threshold.
+    /// Triggers automatic compaction when WAL exceeds threshold (default 50 entries).
     /// </summary>
     public void AppendWal(string id, string patchesJson, string? description = null)
     {
@@ -379,6 +379,7 @@ public sealed class SessionManager
     /// <summary>
     /// Restore all persisted sessions from disk on startup.
     /// Acquires file lock for the entire duration to prevent mutations during startup replay.
+    /// Note: Sessions are never auto-deleted. Use CLI to manually close/clean sessions.
     /// </summary>
     public int RestoreSessions()
     {
@@ -391,23 +392,9 @@ public sealed class SessionManager
         }
 
         int restored = 0;
-        var stale = new List<string>();
-
-        var maxAgeDaysEnv = Environment.GetEnvironmentVariable("DOCX_MCP_SESSION_MAX_AGE_DAYS");
-        var maxAge = TimeSpan.FromDays(int.TryParse(maxAgeDaysEnv, out var d) && d > 0 ? d : 7);
-        var cutoff = DateTime.UtcNow - maxAge;
 
         foreach (var entry in _index.Sessions.ToList())
         {
-            // Stale session cleanup
-            if (entry.LastModifiedAt < cutoff)
-            {
-                _logger.LogInformation("Removing stale session {SessionId} (last modified {LastModified}).",
-                    entry.Id, entry.LastModifiedAt);
-                stale.Add(entry.Id);
-                continue;
-            }
-
             try
             {
                 var bytes = _store.LoadBaseline(entry.Id);
@@ -450,22 +437,9 @@ public sealed class SessionManager
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to restore session {SessionId}; removing.", entry.Id);
-                stale.Add(entry.Id);
-            }
-        }
-
-        // Clean up stale/corrupt entries
-        if (stale.Count > 0)
-        {
-            lock (_indexLock)
-            {
-                foreach (var id in stale)
-                {
-                    _index.Sessions.RemoveAll(e => e.Id == id);
-                    _store.DeleteSession(id);
-                }
-                _store.SaveIndex(_index);
+                // Log but don't delete — WAL history is preserved.
+                // Use CLI 'close' command to manually remove corrupt sessions.
+                _logger.LogWarning(ex, "Failed to restore session {SessionId}; skipping (WAL preserved).", entry.Id);
             }
         }
 
