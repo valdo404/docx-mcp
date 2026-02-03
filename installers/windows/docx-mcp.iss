@@ -20,6 +20,13 @@
   #define MyAppArch "x64"
 #endif
 
+; ArchitecturesAllowed value (x64compatible for x64, arm64 for arm64)
+#if MyAppArch == "x64"
+  #define ArchAllowed "x64compatible"
+#else
+  #define ArchAllowed "arm64"
+#endif
+
 [Setup]
 AppId={{B8F4E3A2-7C91-4D5E-A6B3-9E8F1C2D4A5B}
 AppName={#MyAppName}
@@ -40,7 +47,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
-ArchitecturesAllowed={#MyAppArch}compatible
+ArchitecturesAllowed={#ArchAllowed}
 ArchitecturesInstallIn64BitMode={#MyAppArch}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion={#NumericVersion}
