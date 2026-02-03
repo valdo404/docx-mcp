@@ -1,0 +1,92 @@
+# Koyeb deployment configuration for docx-mcp
+# Deploy with: koyeb deploy -f koyeb.yaml
+
+name: docx-mcp
+
+service:
+  name: docx-mcp
+  type: web
+
+  # Build from Dockerfile
+  docker:
+    dockerfile: Dockerfile.koyeb
+    # Or use pre-built image:
+    # image: ghcr.io/valdo404/docx-mcp:latest
+
+  # Instance configuration
+  instance_type: nano  # Upgrade for production
+  regions:
+    - par  # Paris (or fra, was, sgp, sfo)
+
+  # Scaling
+  scaling:
+    min: 1
+    max: 3
+
+  # Port configuration
+  ports:
+    - port: 8080
+      protocol: http
+
+  # Health check
+  health_checks:
+    - type: http
+      port: 8080
+      path: /health
+      interval: 30
+      timeout: 5
+      healthy_threshold: 2
+      unhealthy_threshold: 3
+
+  # Environment variables
+  env:
+    # Transport mode
+    - name: DOCX_MCP_TRANSPORT
+      value: "sse"
+
+    # Storage provider: "local" or "gcs"
+    - name: DOCX_MCP_STORAGE_PROVIDER
+      value: "gcs"
+
+    # GCS configuration (required if using gcs storage)
+    - name: GCS_BUCKET
+      value: ""  # Set your bucket name
+      # Or use secret: secret:gcs-bucket
+
+    - name: GCS_PREFIX
+      value: "docx-mcp/sessions/"
+
+    # OAuth configuration (Microsoft Entra ID)
+    # Use Koyeb secrets for sensitive values
+    - name: AZURE_TENANT_ID
+      value: "common"  # Or specific tenant ID
+
+    - name: AZURE_CLIENT_ID
+      secret: azure-client-id  # Create this secret in Koyeb
+
+    - name: AZURE_CLIENT_SECRET
+      secret: azure-client-secret  # Create this secret in Koyeb
+
+    # Base URL for OAuth callbacks
+    - name: DOCX_MCP_BASE_URL
+      value: "https://docx-mcp-<your-org>.koyeb.app"
+
+    # CORS origins (comma-separated)
+    - name: DOCX_MCP_CORS_ORIGINS
+      value: "*"
+
+    # GCS credentials (if not using workload identity)
+    # Mount the service account JSON as a secret
+    - name: GOOGLE_APPLICATION_CREDENTIALS
+      value: "/secrets/gcs-credentials.json"
+
+  # Secrets as files
+  volumes:
+    - name: gcs-credentials
+      secret: gcs-service-account
+      mount_path: /secrets
+
+  # Routes
+  routes:
+    - path: /
+      port: 8080

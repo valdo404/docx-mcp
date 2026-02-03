@@ -1,0 +1,59 @@
+# Dockerfile optimized for Koyeb deployment with SSE transport
+# Supports both local and GCS storage backends
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
+
+# NativeAOT requires clang as the platform linker
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends clang zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy project files first for better layer caching
+COPY *.sln ./
+COPY src/DocxMcp/DocxMcp.csproj src/DocxMcp/
+COPY src/DocxMcp.Cli/DocxMcp.Cli.csproj src/DocxMcp.Cli/
+COPY tests/DocxMcp.Tests/DocxMcp.Tests.csproj tests/DocxMcp.Tests/
+
+# Restore dependencies
+RUN dotnet restore
+
+# Copy source code
+COPY . .
+
+# Build MCP server (HTTP/SSE mode)
+RUN dotnet publish src/DocxMcp/DocxMcp.csproj \
+    --configuration Release \
+    --no-restore \
+    -o /app
+
+# Runtime: minimal image
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-preview AS runtime
+
+WORKDIR /app
+
+# Copy the built binary
+COPY --from=build /app/docx-mcp .
+
+# Create non-root user (runtime-deps already has 'app' user)
+RUN mkdir -p /home/app/.docx-mcp/sessions && \
+    chown -R app:app /home/app/.docx-mcp
+
+# Volume for local storage mode (optional on Koyeb)
+VOLUME /home/app/.docx-mcp/sessions
+
+USER app
+
+# Environment variables for Koyeb
+ENV DOCX_MCP_TRANSPORT=sse
+ENV DOCX_MCP_SESSIONS_DIR=/home/app/.docx-mcp/sessions
+# PORT is set by Koyeb automatically (default 8080)
+
+# Health check for Koyeb
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
+
+EXPOSE 8080
+
+ENTRYPOINT ["./docx-mcp"]
