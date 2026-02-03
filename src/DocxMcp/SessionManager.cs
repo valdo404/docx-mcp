@@ -572,6 +572,7 @@ public sealed class SessionManager
     /// <summary>
     /// Restore all persisted sessions from disk on startup.
     /// Acquires file lock for the entire duration to prevent mutations during startup replay.
+    /// Loads from the nearest checkpoint when available to properly restore ExternalSync state.
     /// Note: Sessions are never auto-deleted. Use CLI to manually close/clean sessions.
     /// </summary>
     public int RestoreSessions()
@@ -590,9 +591,6 @@ public sealed class SessionManager
         {
             try
             {
-                var bytes = _store.LoadBaseline(entry.Id);
-                var session = DocxSession.FromBytes(bytes, entry.Id, entry.SourcePath);
-
                 // Determine how many WAL entries to replay (up to cursor position)
                 var walCount = _store.WalEntryCount(entry.Id);
                 var cursorTarget = entry.CursorPosition;
@@ -602,9 +600,21 @@ public sealed class SessionManager
                     cursorTarget = walCount;
 
                 var replayCount = Math.Min(cursorTarget, walCount);
-                if (replayCount > 0)
+
+                // Load from nearest checkpoint instead of baseline + full replay.
+                // This is critical for ExternalSync entries which store document snapshots
+                // in checkpoints rather than as replayable patches.
+                var (ckptPos, ckptBytes) = _store.LoadNearestCheckpoint(
+                    entry.Id,
+                    replayCount,
+                    entry.CheckpointPositions);
+
+                var session = DocxSession.FromBytes(ckptBytes, entry.Id, entry.SourcePath);
+
+                // Only replay patches AFTER the checkpoint position
+                if (replayCount > ckptPos)
                 {
-                    var patches = _store.ReadWalRange(entry.Id, 0, replayCount);
+                    var patches = _store.ReadWalRange(entry.Id, ckptPos, replayCount);
                     foreach (var patchJson in patches)
                     {
                         try

@@ -209,6 +209,84 @@ public class SyncDuplicateTests : IDisposable
         Assert.Throws<KeyNotFoundException>(() => _sessionManager.ResolveSession("invalid123456"));
     }
 
+    [Fact]
+    public void RestoreSessions_WithExternalSyncCheckpoint_RestoresFromCheckpoint()
+    {
+        // Arrange
+        var session = _sessionManager.Open(_tempFile);
+        var sessionId = session.Id;
+
+        // Sync external (creates checkpoint with new content)
+        Thread.Sleep(100);
+        ModifyTestDocx(_tempFile, "New content from external");
+        var syncResult = _tracker.SyncExternalChanges(sessionId);
+        Assert.True(syncResult.HasChanges, "Sync should detect changes");
+
+        // Verify synced content is in memory
+        var syncedText = GetParagraphText(_sessionManager.Get(sessionId));
+        Assert.Contains("New content from external", syncedText);
+
+        // Simulate server restart by creating a new SessionManager
+        // (keep the same store to share the persisted data)
+        var newSessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
+
+        // Act - restore sessions
+        var restoredCount = newSessionManager.RestoreSessions();
+
+        // Assert - should have restored the session with checkpoint content
+        Assert.Equal(1, restoredCount);
+        var restoredSession = newSessionManager.Get(sessionId);
+        var restoredText = GetParagraphText(restoredSession);
+        Assert.Contains("New content from external", restoredText);
+
+        // Additional check: syncing again should NOT create a new WAL entry
+        var secondSyncResult = newTracker.SyncExternalChanges(sessionId);
+        Assert.False(secondSyncResult.HasChanges, "Sync after restore should report no changes");
+
+        // Cleanup the new tracker
+        newTracker.Dispose();
+    }
+
+    [Fact]
+    public void RestoreSessions_ThenSync_NoDuplicateWalEntries()
+    {
+        // This test specifically targets the original bug:
+        // When RestoreSessions loaded from baseline (ignoring ExternalSync checkpoints),
+        // subsequent syncs would detect "changes" and create duplicate WAL entries.
+
+        // Arrange
+        var session = _sessionManager.Open(_tempFile);
+        var sessionId = session.Id;
+
+        // Create external sync entry
+        Thread.Sleep(100);
+        ModifyTestDocx(_tempFile, "Externally modified content");
+        _tracker.SyncExternalChanges(sessionId);
+
+        var historyBefore = _sessionManager.GetHistory(sessionId);
+        var syncEntriesBefore = historyBefore.Entries.Count(e => e.IsExternalSync);
+
+        // Simulate server restart
+        var newSessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        newSessionManager.RestoreSessions();
+
+        // Act - sync multiple times after restart
+        newTracker.SyncExternalChanges(sessionId);
+        newTracker.SyncExternalChanges(sessionId);
+        newTracker.SyncExternalChanges(sessionId);
+
+        // Assert - should still have the same number of sync entries
+        var historyAfter = newSessionManager.GetHistory(sessionId);
+        var syncEntriesAfter = historyAfter.Entries.Count(e => e.IsExternalSync);
+
+        Assert.Equal(syncEntriesBefore, syncEntriesAfter);
+
+        // Cleanup
+        newTracker.Dispose();
+    }
+
     #region Helpers
 
     private static void CreateTestDocx(string path, string content)
@@ -240,6 +318,12 @@ public class SyncDuplicateTests : IDisposable
         // Add new content
         body.AppendChild(new Paragraph(new Run(new Text(newContent))));
         doc.Save();
+    }
+
+    private static string GetParagraphText(DocxSession session)
+    {
+        var para = session.GetBody().Elements<Paragraph>().FirstOrDefault();
+        return para?.InnerText ?? "";
     }
 
     #endregion
