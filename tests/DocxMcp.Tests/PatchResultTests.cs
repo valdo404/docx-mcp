@@ -20,7 +20,7 @@ public class PatchResultTests : IDisposable
         _session = _sessions.Create();
 
         var body = _session.GetBody();
-        body.AppendChild(new Paragraph(new Run(new Text("Hello world, hello universe, hello everyone"))));
+        body.AppendChild(new Paragraph(new Run(new Text("hello world, hello universe, hello everyone"))));
         body.AppendChild(new Paragraph(new Run(new Text("Second paragraph with hello"))));
     }
 
@@ -198,7 +198,8 @@ public class PatchResultTests : IDisposable
 
         Assert.Equal("success", op.GetProperty("status").GetString());
         Assert.Equal(3, op.GetProperty("matches_found").GetInt32());
-        Assert.Equal(0, op.GetProperty("replacements_made").GetInt32());
+        // replacements_made is omitted when 0 due to JsonIgnoreCondition.WhenWritingDefault
+        Assert.False(op.TryGetProperty("replacements_made", out _));
 
         // Verify document was not modified
         Assert.Equal(originalText, _session.GetBody().Elements<Paragraph>().First().InnerText);
@@ -303,6 +304,10 @@ public class PatchResultTests : IDisposable
     [Fact]
     public void RemoveOperation_ReturnsRemovedId()
     {
+        // First add a paragraph via patch so it gets an ID
+        var addJson = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "Paragraph to remove"}}]""";
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addJson);
+
         var json = """[{"op": "remove", "path": "/body/paragraph[0]"}]""";
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
 
@@ -316,20 +321,28 @@ public class PatchResultTests : IDisposable
     [Fact]
     public void MoveOperation_ReturnsMovedIdAndFrom()
     {
-        var json = """[{"op": "move", "from": "/body/paragraph[1]", "path": "/body/children/0"}]""";
+        // First add a paragraph via patch so it gets an ID
+        var addJson = """[{"op": "add", "path": "/body/children/999", "value": {"type": "paragraph", "text": "Paragraph to move"}}]""";
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addJson);
+
+        var json = """[{"op": "move", "from": "/body/paragraph[-1]", "path": "/body/children/0"}]""";
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
 
         Assert.True(op.TryGetProperty("moved_id", out _));
-        Assert.Equal("/body/paragraph[1]", op.GetProperty("from").GetString());
+        Assert.Equal("/body/paragraph[-1]", op.GetProperty("from").GetString());
     }
 
     [Fact]
     public void CopyOperation_ReturnsSourceIdAndCopyId()
     {
-        var json = """[{"op": "copy", "from": "/body/paragraph[0]", "path": "/body/children/0"}]""";
+        // First add a paragraph via patch so it gets an ID
+        var addJson = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "Paragraph to copy"}}]""";
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addJson);
+
+        var json = """[{"op": "copy", "from": "/body/paragraph[0]", "path": "/body/children/999"}]""";
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);

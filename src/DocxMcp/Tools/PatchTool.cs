@@ -14,10 +14,6 @@ namespace DocxMcp.Tools;
 [McpServerToolType]
 public sealed class PatchTool
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
 
     [McpServerTool(Name = "apply_patch"), Description(
         "Modify a document using JSON patches (RFC 6902 adapted for OOXML).\n" +
@@ -117,7 +113,7 @@ public sealed class PatchTool
             try
             {
                 // Deserialize to typed operation
-                operation = JsonSerializer.Deserialize<PatchOperation>(patchElement.GetRawText(), JsonOptions);
+                operation = JsonSerializer.Deserialize(patchElement.GetRawText(), DocxJsonContext.Default.PatchOperation);
                 if (operation is null)
                     throw new ArgumentException("Failed to parse patch operation.");
 
@@ -222,43 +218,43 @@ public sealed class PatchTool
     // Replay methods for WAL (kept for backwards compatibility)
     internal static void ReplayAdd(JsonElement patch, WordprocessingDocument wpDoc, MainDocumentPart mainPart)
     {
-        var op = JsonSerializer.Deserialize<AddPatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.AddPatchOperation)!;
         ExecuteAdd(op, wpDoc, mainPart, false);
     }
 
     internal static void ReplayReplace(JsonElement patch, WordprocessingDocument wpDoc, MainDocumentPart mainPart)
     {
-        var op = JsonSerializer.Deserialize<ReplacePatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.ReplacePatchOperation)!;
         ExecuteReplace(op, wpDoc, mainPart, false);
     }
 
     internal static void ReplayRemove(JsonElement patch, WordprocessingDocument wpDoc)
     {
-        var op = JsonSerializer.Deserialize<RemovePatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.RemovePatchOperation)!;
         ExecuteRemove(op, wpDoc, false);
     }
 
     internal static void ReplayMove(JsonElement patch, WordprocessingDocument wpDoc)
     {
-        var op = JsonSerializer.Deserialize<MovePatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.MovePatchOperation)!;
         ExecuteMove(op, wpDoc, false);
     }
 
     internal static void ReplayCopy(JsonElement patch, WordprocessingDocument wpDoc)
     {
-        var op = JsonSerializer.Deserialize<CopyPatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.CopyPatchOperation)!;
         ExecuteCopy(op, wpDoc, false);
     }
 
     internal static void ReplayReplaceText(JsonElement patch, WordprocessingDocument wpDoc)
     {
-        var op = JsonSerializer.Deserialize<ReplaceTextPatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.ReplaceTextPatchOperation)!;
         ExecuteReplaceText(op, wpDoc, false);
     }
 
     internal static void ReplayRemoveColumn(JsonElement patch, WordprocessingDocument wpDoc)
     {
-        var op = JsonSerializer.Deserialize<RemoveColumnPatchOperation>(patch.GetRawText(), JsonOptions)!;
+        var op = JsonSerializer.Deserialize(patch.GetRawText(), DocxJsonContext.Default.RemoveColumnPatchOperation)!;
         ExecuteRemoveColumn(op, wpDoc, false);
     }
 

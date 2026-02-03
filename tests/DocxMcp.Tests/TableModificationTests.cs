@@ -465,7 +465,7 @@ public class TableModificationTests : IDisposable
         var result = PatchTool.ApplyPatch(_sessions, _session.Id,
             """[{"op": "remove", "path": "/body/table[0]/row[2]"}]""");
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var rows = table.Elements<TableRow>().ToList();
@@ -478,7 +478,7 @@ public class TableModificationTests : IDisposable
         var result = PatchTool.ApplyPatch(_sessions, _session.Id,
             """[{"op": "remove", "path": "/body/table[0]/row[1]/cell[2]"}]""");
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var row = table.Elements<TableRow>().ElementAt(1);
@@ -502,7 +502,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var cell = table.Elements<TableRow>().ElementAt(1).Elements<TableCell>().First();
@@ -528,7 +528,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var row = table.Elements<TableRow>().Last();
@@ -544,7 +544,7 @@ public class TableModificationTests : IDisposable
         var result = PatchTool.ApplyPatch(_sessions, _session.Id,
             """[{"op": "remove_column", "path": "/body/table[0]", "column": 1}]""");
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         foreach (var row in table.Elements<TableRow>())
@@ -565,7 +565,7 @@ public class TableModificationTests : IDisposable
         var result = PatchTool.ApplyPatch(_sessions, _session.Id,
             """[{"op": "remove_column", "path": "/body/table[0]", "column": 0}]""");
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var headerCells = table.Elements<TableRow>().First().Elements<TableCell>().ToList();
@@ -579,7 +579,7 @@ public class TableModificationTests : IDisposable
         var result = PatchTool.ApplyPatch(_sessions, _session.Id,
             """[{"op": "remove_column", "path": "/body/table[0]", "column": 2}]""");
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var headerCells = table.Elements<TableRow>().First().Elements<TableCell>().ToList();
@@ -610,7 +610,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         // Find the paragraph that was modified
         var modified = body.Elements<Paragraph>()
@@ -640,7 +640,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var cell = table.Elements<TableRow>().ElementAt(1).Elements<TableCell>().First();
@@ -662,7 +662,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var rows = table.Elements<TableRow>().ToList();
@@ -688,7 +688,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var row = table.Elements<TableRow>().ElementAt(1);
@@ -782,7 +782,7 @@ public class TableModificationTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
 
         var table = _session.GetBody().Elements<Table>().First();
         var tblProps = table.GetFirstChild<TableProperties>();
@@ -815,7 +815,8 @@ public class TableModificationTests : IDisposable
         ]
         """);
 
-        Assert.Contains("Applied 2 patch(es) successfully", result);
+        Assert.Contains("\"success\": true", result);
+        Assert.Contains("\"applied\": 2", result);
 
         var table = _session.GetBody().Elements<Table>().First();
 

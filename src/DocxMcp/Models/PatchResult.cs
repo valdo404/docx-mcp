@@ -34,14 +34,8 @@ public sealed class PatchResult
 
     public string ToJson()
     {
-        return JsonSerializer.Serialize(this, JsonOptions);
+        return JsonSerializer.Serialize(this, DocxJsonContext.Default.PatchResult);
     }
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
 }
 
 /// <summary>

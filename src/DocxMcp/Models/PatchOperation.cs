@@ -141,17 +141,12 @@ public sealed class RemoveColumnPatchOperation : PatchOperation
 /// </summary>
 public static class PatchOperationParser
 {
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     /// <summary>
     /// Parses a JSON array of patch operations.
     /// </summary>
     public static List<PatchOperation> Parse(string json)
     {
-        var array = JsonSerializer.Deserialize<List<PatchOperation>>(json, Options)
+        var array = JsonSerializer.Deserialize(json, DocxJsonContext.Default.ListPatchOperation)
             ?? throw new ArgumentException("Failed to parse patches.");
         return array;
     }
@@ -161,7 +156,7 @@ public static class PatchOperationParser
     /// </summary>
     public static PatchOperation Parse(JsonElement element)
     {
-        return JsonSerializer.Deserialize<PatchOperation>(element.GetRawText(), Options)
+        return JsonSerializer.Deserialize(element.GetRawText(), DocxJsonContext.Default.PatchOperation)
             ?? throw new ArgumentException("Failed to parse patch operation.");
     }
 }
