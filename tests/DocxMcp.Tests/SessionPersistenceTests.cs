@@ -94,6 +94,60 @@ public class SessionPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void AppendWal_AutoCompacts_WhenThresholdReached()
+    {
+        // Use a custom store with a low compaction threshold
+        var customTempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
+        var customStore = new SessionStore(NullLogger<SessionStore>.Instance, customTempDir);
+
+        try
+        {
+            // Set threshold to 5 via environment variable before creating the manager
+            var originalThreshold = Environment.GetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD");
+            Environment.SetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD", "5");
+
+            try
+            {
+                var mgr = new SessionManager(customStore, NullLogger<SessionManager>.Instance);
+                var session = mgr.Create();
+                var id = session.Id;
+
+                // Append 4 WAL entries (threshold is 5, so no compaction yet)
+                for (int i = 0; i < 4; i++)
+                {
+                    session.GetBody().AppendChild(new Paragraph(new Run(new Text($"Entry {i}"))));
+                    mgr.AppendWal(id, $"[{{\"op\":\"add\",\"path\":\"/body/children/{i}\",\"value\":{{\"type\":\"paragraph\",\"text\":\"Entry {i}\"}}}}]");
+                }
+
+                var indexBefore = customStore.LoadIndex();
+                Assert.Equal(4, indexBefore.Sessions[0].WalCount);
+
+                // Append the 5th entry — should trigger auto-compaction
+                session.GetBody().AppendChild(new Paragraph(new Run(new Text("Entry 4"))));
+                mgr.AppendWal(id, "[{\"op\":\"add\",\"path\":\"/body/children/4\",\"value\":{\"type\":\"paragraph\",\"text\":\"Entry 4\"}}]");
+
+                var indexAfter = customStore.LoadIndex();
+                Assert.Equal(0, indexAfter.Sessions[0].WalCount); // Compaction reset WAL count
+
+                // WAL should be empty after compaction
+                var walEntries = customStore.ReadWal(id);
+                Assert.Empty(walEntries);
+            }
+            finally
+            {
+                // Restore original environment variable
+                Environment.SetEnvironmentVariable("DOCX_MCP_WAL_COMPACT_THRESHOLD", originalThreshold);
+            }
+        }
+        finally
+        {
+            customStore.Dispose();
+            if (Directory.Exists(customTempDir))
+                Directory.Delete(customTempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RestoreSessions_RehydratesFromBaseline()
     {
         // Create a session and persist it
@@ -156,7 +210,7 @@ public class SessionPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void RestoreSessions_CorruptBaseline_SkipsAndCleansUp()
+    public void RestoreSessions_CorruptBaseline_SkipsButPreservesIndex()
     {
         var mgr = CreateManager();
         var session = mgr.Create();
@@ -171,11 +225,12 @@ public class SessionPersistenceTests : IDisposable
         var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
 
         var restored = mgr2.RestoreSessions();
-        Assert.Equal(0, restored);
+        Assert.Equal(0, restored); // Session not restored to memory
 
-        // Index should be cleaned up
+        // Index entry should be preserved (WAL history preservation)
         var index = store2.LoadIndex();
-        Assert.Empty(index.Sessions);
+        Assert.Single(index.Sessions);
+        Assert.Equal(id, index.Sessions[0].Id);
 
         store2.Dispose();
     }

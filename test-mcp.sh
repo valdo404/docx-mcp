@@ -80,6 +80,8 @@ check "has apply_patch" "apply_patch" "$TOOLS"
 check "has export_markdown" "export_markdown" "$TOOLS"
 check "has export_html" "export_html" "$TOOLS"
 check_not "no apply_xml_patch" "apply_xml_patch" "$TOOLS"
+check_not "no document_close (CLI-only)" "document_close" "$TOOLS"
+check_not "no document_snapshot (CLI-only)" "document_snapshot" "$TOOLS"
 
 # ── Test 2: Create document (standalone call) ──
 echo ""
@@ -292,13 +294,18 @@ else
         fail "docx file created" "File not found: $DOCX_FILE"
     fi
 
-    # Close document
-    echo "Test: Close Document"
-    R=$(send_cmd "call document_close -p {\"doc_id\":\"${DOC_ID}\"}")
-    check "document closed" "closed" "$R"
+    # Note: document_close is now CLI-only (not exposed via MCP)
+    # Cleanup happens automatically when the shell session ends
+    echo "Test: Close Document (CLI-only, skipped in MCP test)"
+    pass "document_close is CLI-only (expected)"
 
     echo "/q" >&3; exec 3>&-; wait "$SHELL_PID" 2>/dev/null || true; SHELL_PID=""
     rm -f "$FIFO_IN" "$OUT_FILE"
+
+    # Clean up via CLI if available
+    if [[ -x "$SCRIPT_DIR/dist/macos-arm64/docx-cli" ]]; then
+        "$SCRIPT_DIR/dist/macos-arm64/docx-cli" close "$DOC_ID" 2>/dev/null || true
+    fi
 fi
 
 # ── Test 4: Open real document ──
@@ -388,13 +395,18 @@ if [[ -n "$REAL_FILE" && -f "$REAL_FILE" ]]; then
         check "real doc saved copy" "saved" "$R"
         rm -f "$REAL_SAVE"
 
-        R=$(send_cmd_real "call document_close -p {\"doc_id\":\"${REAL_ID}\"}")
-        check "real doc closed" "closed" "$R"
+        # Note: document_close is CLI-only, cleanup happens via CLI
+        pass "real doc test complete (cleanup via CLI)"
     else
         fail "real doc opened" "$(cat "$OUT_REAL")"
     fi
 
     echo "/q" >&4; exec 4>&-; wait "$SHELL_PID" 2>/dev/null || true; SHELL_PID=""
+
+    # Clean up via CLI if available
+    if [[ -x "$SCRIPT_DIR/dist/macos-arm64/docx-cli" && -n "$REAL_ID" ]]; then
+        "$SCRIPT_DIR/dist/macos-arm64/docx-cli" close "$REAL_ID" 2>/dev/null || true
+    fi
 fi
 
 echo ""

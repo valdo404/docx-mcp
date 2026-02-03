@@ -226,9 +226,11 @@ static void PrintUsage()
     Document commands:
       open [path]                          Open file or create new document
       list                                 List open sessions
-      close <doc_id>                       Close a session
       save <doc_id> [output_path]          Save document to disk
-      snapshot <doc_id> [--discard-redo]    Compact WAL into baseline
+
+    Administrative commands (CLI-only, not exposed to MCP):
+      close <doc_id>                       Close session and delete all persisted data
+      snapshot <doc_id> [--discard-redo]   Force WAL compaction into new baseline
 
     Query commands:
       query <doc_id> <path> [--format json|text|summary] [--offset N] [--limit N]
@@ -260,8 +262,11 @@ static void PrintUsage()
       export-pdf <doc_id> <output_path>
 
     Environment:
-      DOCX_MCP_SESSIONS_DIR   Override sessions directory (shared with MCP server)
+      DOCX_MCP_SESSIONS_DIR            Override sessions directory (shared with MCP server)
+      DOCX_MCP_WAL_COMPACT_THRESHOLD   Auto-compact WAL after N entries (default: 50)
+      DOCX_MCP_CHECKPOINT_INTERVAL     Create checkpoint every N entries (default: 10)
 
     Sessions persist between invocations and are shared with the MCP server.
+    WAL history is preserved automatically; use 'close' to permanently delete a session.
     """);
 }

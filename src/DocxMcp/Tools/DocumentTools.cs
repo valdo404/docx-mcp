@@ -43,17 +43,6 @@ public sealed class DocumentTools
         return $"Document saved to '{target}'.";
     }
 
-    [McpServerTool(Name = "document_close"), Description(
-        "Close a document session and release resources.")]
-    public static string DocumentClose(
-        SessionManager sessions,
-        [Description("Session ID of the document to close.")]
-        string doc_id)
-    {
-        sessions.Close(doc_id);
-        return $"Document session '{doc_id}' closed.";
-    }
-
     [McpServerTool(Name = "document_list"), Description(
         "List all currently open document sessions.")]
     public static string DocumentList(SessionManager sessions)
@@ -67,11 +56,26 @@ public sealed class DocumentTools
         return $"Open documents:\n{string.Join('\n', lines)}";
     }
 
-    [McpServerTool(Name = "document_snapshot"), Description(
-        "Create a snapshot of the document's current state. " +
-        "This compacts the write-ahead log by writing a new baseline and clearing pending changes. " +
-        "Useful before long-running operations or to ensure durability. " +
-        "WARNING: If there are redo entries (after undo), this will fail unless discard_redo is true.")]
+    /// <summary>
+    /// Close a document session and release resources.
+    /// WARNING: This operation is intentionally NOT exposed as an MCP tool.
+    /// Sessions should only be closed via the CLI for administrative purposes.
+    /// This will delete all persisted data (baseline, WAL, checkpoints).
+    /// </summary>
+    public static string DocumentClose(
+        SessionManager sessions,
+        string doc_id)
+    {
+        sessions.Close(doc_id);
+        return $"Document session '{doc_id}' closed.";
+    }
+
+    /// <summary>
+    /// Create a snapshot of the document's current state.
+    /// This compacts the write-ahead log by writing a new baseline and clearing pending changes.
+    /// WARNING: This operation is intentionally NOT exposed as an MCP tool.
+    /// WAL compaction should only be performed via the CLI for administrative purposes.
+    /// </summary>
     public static string DocumentSnapshot(
         SessionManager sessions,
         [Description("Session ID of the document to snapshot.")]
