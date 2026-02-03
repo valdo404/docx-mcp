@@ -26,16 +26,26 @@ builder.Services
         options.ServerInfo = new()
         {
             Name = "docx-mcp",
-            Version = "2.1.0"
+            Version = "2.2.0"
         };
     })
     .WithStdioServerTransport()
+    // Document management
     .WithTools<DocumentTools>()
+    // Query tools
     .WithTools<QueryTool>()
     .WithTools<CountTool>()
     .WithTools<ReadSectionTool>()
     .WithTools<ReadHeadingContentTool>()
+    // Element operations (individual tools with focused documentation)
+    .WithTools<ElementTools>()
+    .WithTools<TextTools>()
+    .WithTools<TableTools>()
+    // Generic patch (multi-operation)
     .WithTools<PatchTool>()
+    // Help and documentation
+    .WithTools<PathHelpTool>()
+    // Export, history, comments, styles
     .WithTools<ExportTools>()
     .WithTools<HistoryTools>()
     .WithTools<CommentTools>()

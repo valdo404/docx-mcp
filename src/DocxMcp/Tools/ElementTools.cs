@@ -26,8 +26,16 @@ public sealed class ElementTools
 
     [McpServerTool(Name = "add_element"), Description(
         "Add a new element to the document at a specific position.\n\n" +
-        "Use /body/children/N to insert at position N (0-indexed).\n" +
-        "Use /body/table[0]/row to append a row to a table.\n\n" +
+        "Path syntax:\n" +
+        "  /body/children/N — insert at position N (0-indexed)\n" +
+        "  /body/children/0 — insert at the beginning\n" +
+        "  /body/table[0]/row — append a row to first table\n" +
+        "  /body/table[id='1A2B3C4D']/row — append row to table by stable ID\n" +
+        "  /body/paragraph[id='AABBCCDD'] — target paragraph by ID (use with replace/remove)\n\n" +
+        "Stable IDs (preferred for existing elements):\n" +
+        "  Use id='HEXVALUE' selector to target elements by their unique ID.\n" +
+        "  IDs are 1-8 hex characters (e.g., id='1A2B3C4D').\n" +
+        "  Query the document to discover element IDs.\n\n" +
         "Element types:\n" +
         "  paragraph — {\"type\": \"paragraph\", \"text\": \"Simple text\"}\n" +
         "              {\"type\": \"paragraph\", \"runs\": [{\"text\": \"bold\", \"style\": {\"bold\": true}}, {\"text\": \"normal\"}]}\n" +
@@ -59,13 +67,20 @@ public sealed class ElementTools
 
     [McpServerTool(Name = "replace_element"), Description(
         "Replace an existing element in the document.\n\n" +
-        "Target by index: /body/paragraph[0], /body/table[1]\n" +
-        "Target by ID: /body/paragraph[id='1A2B3C4D'] (preferred for existing elements)\n" +
-        "Target by text: /body/paragraph[text='Hello'] (matches containing text)\n\n" +
+        "Path selectors:\n" +
+        "  By index: /body/paragraph[0], /body/table[1]\n" +
+        "  By ID: /body/paragraph[id='1A2B3C4D'] (PREFERRED for stability)\n" +
+        "  By text: /body/paragraph[text~='Hello'] (contains text)\n" +
+        "  By text exact: /body/paragraph[text='Hello World']\n" +
+        "  By style: /body/paragraph[style='Heading1']\n\n" +
+        "Stable IDs:\n" +
+        "  IDs are 1-8 hex characters (e.g., id='1A2B3C4D').\n" +
+        "  Using IDs prevents issues when document structure changes.\n" +
+        "  Query the document to discover element IDs.\n\n" +
         "The new element completely replaces the old one.\n" +
         "Element format is the same as add_element.\n\n" +
-        "Example: Replace first paragraph with a heading:\n" +
-        "  path: /body/paragraph[0]\n" +
+        "Example: Replace paragraph by ID with a heading:\n" +
+        "  path: /body/paragraph[id='1A2B3C4D']\n" +
         "  value: {\"type\": \"heading\", \"level\": 1, \"text\": \"New Title\"}")]
     public static string ReplaceElement(
         SessionManager sessions,
@@ -82,9 +97,14 @@ public sealed class ElementTools
 
     [McpServerTool(Name = "remove_element"), Description(
         "Remove an element from the document.\n\n" +
-        "Target by index: /body/paragraph[0], /body/table[1]\n" +
-        "Target by ID: /body/paragraph[id='1A2B3C4D'] (preferred)\n" +
-        "Target by text: /body/paragraph[text='Delete me']\n\n" +
+        "Path selectors:\n" +
+        "  By index: /body/paragraph[0], /body/table[1]\n" +
+        "  By ID: /body/paragraph[id='1A2B3C4D'] (PREFERRED for stability)\n" +
+        "  By text: /body/paragraph[text~='Delete me'] (contains)\n" +
+        "  Wildcards: /body/paragraph[*] (remove all paragraphs)\n\n" +
+        "Stable IDs (1-8 hex chars):\n" +
+        "  Using IDs ensures you remove the exact intended element.\n" +
+        "  Query the document first to get element IDs.\n\n" +
         "The element and all its contents are removed.\n" +
         "Returns the ID of the removed element for reference.")]
     public static string RemoveElement(
@@ -100,12 +120,19 @@ public sealed class ElementTools
     [McpServerTool(Name = "move_element"), Description(
         "Move an element from one location to another.\n\n" +
         "The element is removed from its original location and inserted at the new location.\n\n" +
-        "Use cases:\n" +
-        "  - Reorder paragraphs\n" +
-        "  - Move a table to a different position\n" +
-        "  - Reorganize document structure\n\n" +
-        "Example: Move paragraph[2] to be the first element:\n" +
-        "  from: /body/paragraph[2]\n" +
+        "Path selectors (for 'from'):\n" +
+        "  By index: /body/paragraph[2]\n" +
+        "  By ID: /body/paragraph[id='1A2B3C4D'] (PREFERRED)\n" +
+        "  By text: /body/paragraph[text~='Move this']\n\n" +
+        "Destination (for 'to'):\n" +
+        "  /body/children/0 — move to beginning\n" +
+        "  /body/children/5 — move to position 5\n" +
+        "  /body/table[id='AABB1122']/row — append as row to table by ID\n\n" +
+        "Stable IDs (1-8 hex chars):\n" +
+        "  Using IDs for 'from' ensures you move the exact intended element.\n" +
+        "  The element keeps its ID after moving.\n\n" +
+        "Example: Move paragraph by ID to beginning:\n" +
+        "  from: /body/paragraph[id='1A2B3C4D']\n" +
         "  to: /body/children/0")]
     public static string MoveElement(
         SessionManager sessions,
@@ -121,13 +148,20 @@ public sealed class ElementTools
     [McpServerTool(Name = "copy_element"), Description(
         "Duplicate an element to another location.\n\n" +
         "The original element is preserved, and a copy is created at the destination.\n" +
-        "The copy receives a new unique ID.\n\n" +
-        "Use cases:\n" +
-        "  - Duplicate a paragraph\n" +
-        "  - Copy a table structure\n" +
-        "  - Create templates from existing content\n\n" +
-        "Example: Copy first table to end of document:\n" +
-        "  from: /body/table[0]\n" +
+        "The copy receives a NEW unique ID (returned as copy_id in result).\n\n" +
+        "Path selectors (for 'from'):\n" +
+        "  By index: /body/table[0]\n" +
+        "  By ID: /body/table[id='1A2B3C4D'] (PREFERRED)\n" +
+        "  By text: /body/paragraph[text~='Template']\n\n" +
+        "Destination (for 'to'):\n" +
+        "  /body/children/0 — copy to beginning\n" +
+        "  /body/children/999 — copy to end (high index = append)\n" +
+        "  /body/table[id='AABB1122']/row — copy as new row\n\n" +
+        "Stable IDs (1-8 hex chars):\n" +
+        "  Using IDs for 'from' ensures you copy the exact intended element.\n" +
+        "  Result includes source_id and copy_id (new ID of the copy).\n\n" +
+        "Example: Copy table by ID to end of document:\n" +
+        "  from: /body/table[id='1A2B3C4D']\n" +
         "  to: /body/children/999")]
     public static string CopyElement(
         SessionManager sessions,
@@ -153,8 +187,13 @@ public sealed class TextTools
         "  - Font size and font family\n" +
         "  - Text color\n" +
         "  - All other run-level formatting\n\n" +
+        "Path selectors:\n" +
+        "  /body — Search entire document body\n" +
+        "  /body/paragraph[0] — First paragraph only\n" +
+        "  /body/paragraph[id='1A2B3C4D'] — Specific paragraph by ID (PREFERRED)\n" +
+        "  /body/table[id='AABB1122'] — Specific table by ID\n" +
+        "  /body/paragraph[*] — All paragraphs\n\n" +
         "Parameters:\n" +
-        "  path — Target element(s): /body, /body/paragraph[0], /body/table[0]\n" +
         "  find — Text to search for (case-sensitive, exact match)\n" +
         "  replace — Replacement text (CANNOT be empty)\n" +
         "  max_count — Maximum replacements (default: 1)\n" +
@@ -188,11 +227,15 @@ public sealed class TableTools
         "Remove a column from a table by index.\n\n" +
         "This removes the cell at the specified column index from every row.\n" +
         "Column indices are 0-based (first column = 0).\n\n" +
+        "Path selectors:\n" +
+        "  /body/table[0] — First table by index\n" +
+        "  /body/table[id='1A2B3C4D'] — Table by stable ID (PREFERRED)\n" +
+        "  /body/table[*] — All tables (removes column from each)\n\n" +
         "Returns:\n" +
         "  column_index — The index of the removed column\n" +
         "  rows_affected — Number of rows that had cells removed\n\n" +
-        "Example: Remove the second column from the first table:\n" +
-        "  path: /body/table[0]\n" +
+        "Example: Remove the second column from table by ID:\n" +
+        "  path: /body/table[id='1A2B3C4D']\n" +
         "  column: 1")]
     public static string RemoveTableColumn(
         SessionManager sessions,
