@@ -10,8 +10,8 @@
   <Version>1.0.0.0</Version>
   <ProviderName>docx-mcp</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="LLM Document Assistant"/>
-  <Description DefaultValue="AI-powered document editing with real-time streaming patches"/>
+  <DisplayName DefaultValue="Doccy"/>
+  <Description DefaultValue="Your friendly document assistant - like Clippy, but smarter!"/>
 
   <IconUrl DefaultValue="https://localhost:3000/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://localhost:3000/assets/icon-64.png"/>
@@ -91,15 +91,15 @@
       </bt:Urls>
 
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="Get Started with LLM Assistant"/>
-        <bt:String id="LlmGroup.Label" DefaultValue="LLM"/>
-        <bt:String id="ShowTaskpane.Label" DefaultValue="Assistant"/>
-        <bt:String id="ShowTaskpane.Title" DefaultValue="Open LLM Assistant"/>
+        <bt:String id="GetStarted.Title" DefaultValue="Meet Doccy!"/>
+        <bt:String id="LlmGroup.Label" DefaultValue="Doccy"/>
+        <bt:String id="ShowTaskpane.Label" DefaultValue="Doccy"/>
+        <bt:String id="ShowTaskpane.Title" DefaultValue="Ask Doccy"/>
       </bt:ShortStrings>
 
       <bt:LongStrings>
-        <bt:String id="GetStarted.Description" DefaultValue="Click the Assistant button to start using AI-powered document editing."/>
-        <bt:String id="ShowTaskpane.Description" DefaultValue="Opens the LLM Assistant panel for AI-powered document editing with real-time streaming."/>
+        <bt:String id="GetStarted.Description" DefaultValue="It looks like you're writing a document. Would you like help with that?"/>
+        <bt:String id="ShowTaskpane.Description" DefaultValue="Open Doccy, your friendly document assistant. Like Clippy, but actually helpful!"/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

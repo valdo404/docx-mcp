@@ -253,7 +253,7 @@ export const App: React.FC = () => {
     return (
       <div className={styles.container}>
         <div className={styles.header}>
-          <Text className={styles.title}>Settings</Text>
+          <Text className={styles.title}>📎 Doccy Settings</Text>
           <Button
             appearance="subtle"
             icon={<DocumentRegular />}
@@ -305,7 +305,7 @@ export const App: React.FC = () => {
     <div className={styles.container}>
       {/* Header */}
       <div className={styles.header}>
-        <Text className={styles.title}>LLM Assistant</Text>
+        <Text className={styles.title}>📎 Doccy</Text>
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           <Badge
             appearance="filled"
@@ -354,9 +354,12 @@ export const App: React.FC = () => {
       <div className={styles.content} ref={contentScrollRef}>
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', padding: '20px', color: tokens.colorNeutralForeground3 }}>
-            <DocumentRegular style={{ fontSize: '32px', marginBottom: '8px' }} />
+            <div style={{ fontSize: '48px', marginBottom: '8px' }}>📎</div>
+            <Text block weight="semibold" style={{ marginBottom: '8px' }}>
+              Hi! I'm Doccy!
+            </Text>
             <Text block>
-              Describe what you want to change in your document, and I'll help you edit it.
+              It looks like you're writing a document. Would you like help with that?
             </Text>
           </div>
         )}
@@ -406,7 +409,7 @@ export const App: React.FC = () => {
         {isLoading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px' }}>
             <Spinner size="tiny" />
-            <Text size={200}>Generating...</Text>
+            <Text size={200}>Doccy is thinking...</Text>
           </div>
         )}
       </div>
@@ -414,7 +417,7 @@ export const App: React.FC = () => {
       {/* Input */}
       <div className={styles.inputArea}>
         <Textarea
-          placeholder="Describe your edit... (e.g., 'Make the first paragraph more concise')"
+          placeholder="Ask Doccy anything... (e.g., 'Make this paragraph more concise')"
           value={input}
           onChange={(_, data) => setInput(data.value)}
           onKeyDown={handleKeyDown}

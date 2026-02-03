@@ -33,7 +33,7 @@ var app = builder.Build();
 app.UseCors();
 
 // --- Health Check ---
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "docx-word-addin" }));
+app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "doccy" }));
 
 // --- LLM Streaming Endpoint (SSE) ---
 app.MapPost("/api/llm/stream", async (
@@ -127,11 +127,11 @@ app.MapDelete("/api/changes/{sessionId}", (string sessionId, UserChangeService u
     return Results.Ok(new { message = $"Cleared change history for session {sessionId}" });
 });
 
-Console.Error.WriteLine($"docx-word-addin listening on http://localhost:{port}");
+Console.Error.WriteLine($"📎 Doccy backend listening on http://localhost:{port}");
 Console.Error.WriteLine("Endpoints:");
-Console.Error.WriteLine("  POST /api/llm/stream    - Stream LLM patches (SSE)");
+Console.Error.WriteLine("  POST /api/llm/stream     - Stream LLM patches (SSE)");
 Console.Error.WriteLine("  POST /api/changes/report - Report user changes");
-Console.Error.WriteLine("  GET  /api/changes/:id   - Get recent changes");
-Console.Error.WriteLine("  GET  /health            - Health check");
+Console.Error.WriteLine("  GET  /api/changes/:id    - Get recent changes");
+Console.Error.WriteLine("  GET  /health             - Health check");
 
 app.Run();

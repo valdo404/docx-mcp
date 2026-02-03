@@ -1,7 +1,7 @@
 {
-  "name": "docx-llm-addin",
+  "name": "doccy",
   "version": "1.0.0",
-  "description": "Word Add-in for LLM-powered document editing with real-time patch streaming",
+  "description": "Doccy - Your friendly document assistant. Like Clippy, but smarter!",
   "main": "dist/taskpane.js",
   "scripts": {
     "build": "webpack --mode production",
