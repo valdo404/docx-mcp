@@ -7,6 +7,7 @@ using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Models;
 using DocxMcp.Paths;
+using DocxMcp.ExternalChanges;
 using static DocxMcp.Helpers.ElementIdManager;
 
 namespace DocxMcp.Tools;
@@ -22,10 +23,28 @@ public sealed class PatchTool
     /// </summary>
     public static string ApplyPatch(
         SessionManager sessions,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON array of patch operations (max 10 per call).")] string patches,
         [Description("If true, simulates operations without applying changes.")] bool dry_run = false)
     {
+        // Check for pending external changes that must be acknowledged first
+        if (externalChangeTracker is not null)
+        {
+            var pendingChange = externalChangeTracker.GetLatestUnacknowledgedChange(doc_id);
+            if (pendingChange is not null)
+            {
+                return new PatchResult
+                {
+                    Success = false,
+                    Error = $"External changes detected. {pendingChange.Summary.TotalChanges} change(s) " +
+                            $"(+{pendingChange.Summary.Added} -{pendingChange.Summary.Removed} " +
+                            $"~{pendingChange.Summary.Modified} ↔{pendingChange.Summary.Moved}). " +
+                            $"Call get_external_changes with acknowledge=true to proceed."
+                }.ToJson();
+            }
+        }
+
         var session = sessions.Get(doc_id);
         var wpDoc = session.Document;
         var mainPart = wpDoc.MainDocumentPart

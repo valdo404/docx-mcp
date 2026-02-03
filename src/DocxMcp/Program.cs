@@ -5,6 +5,7 @@ using ModelContextProtocol.Server;
 using DocxMcp;
 using DocxMcp.Persistence;
 using DocxMcp.Tools;
+using DocxMcp.ExternalChanges;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -18,6 +19,10 @@ builder.Logging.AddConsole(options =>
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHostedService<SessionRestoreService>();
+
+// Register external change tracking
+builder.Services.AddSingleton<ExternalChangeTracker>();
+builder.Services.AddHostedService<ExternalChangeNotificationService>();
 
 // Register MCP server with stdio transport and explicit tool types (AOT-safe)
 builder.Services
@@ -46,6 +51,7 @@ builder.Services
     .WithTools<HistoryTools>()
     .WithTools<CommentTools>()
     .WithTools<StyleTools>()
-    .WithTools<RevisionTools>();
+    .WithTools<RevisionTools>()
+    .WithTools<ExternalChangeTools>();
 
 await builder.Build().RunAsync();
