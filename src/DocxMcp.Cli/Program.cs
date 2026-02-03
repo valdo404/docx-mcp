@@ -82,6 +82,15 @@ try
         "read-section" => CmdReadSection(args),
         "read-heading" => CmdReadHeading(args),
 
+        // Revision (Track Changes) commands
+        "revision-list" => CmdRevisionList(args),
+        "revision-accept" => RevisionTools.RevisionAccept(sessions, Require(args, 1, "doc_id"),
+            int.Parse(Require(args, 2, "revision_id"))),
+        "revision-reject" => RevisionTools.RevisionReject(sessions, Require(args, 1, "doc_id"),
+            int.Parse(Require(args, 2, "revision_id"))),
+        "track-changes-enable" => RevisionTools.TrackChangesEnable(sessions, Require(args, 1, "doc_id"),
+            ParseBool(Require(args, 2, "enabled"))),
+
         "help" or "--help" or "-h" => Usage(),
         _ => $"Unknown command: '{command}'. Run 'docx-cli help' for usage."
     };
@@ -256,6 +265,16 @@ string CmdReadHeading(string[] a)
         headingText, headingIndex, headingLevel, includeSubHeadings, format, offset, limit);
 }
 
+string CmdRevisionList(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var author = OptNamed(a, "--author");
+    var type = OptNamed(a, "--type");
+    var offset = ParseIntOpt(OptNamed(a, "--offset"));
+    var limit = ParseIntOpt(OptNamed(a, "--limit"));
+    return RevisionTools.RevisionList(sessions, docId, author, type, offset, limit);
+}
+
 // --- Argument helpers ---
 
 static string Require(string[] a, int idx, string name)
@@ -296,6 +315,9 @@ static int ParseInt(string? s, int def) =>
 
 static int? ParseIntOpt(string? s) =>
     s is not null && int.TryParse(s, out var v) ? v : null;
+
+static bool ParseBool(string s) =>
+    s.ToLowerInvariant() is "true" or "1" or "yes" or "on";
 
 static string ReadStdin()
 {
@@ -360,6 +382,12 @@ static void PrintUsage()
       comment-add <doc_id> <path> <text> [--anchor-text str] [--author name] [--initials str]
       comment-list <doc_id> [--author name] [--offset N] [--limit N]
       comment-delete <doc_id> [--id N] [--author name]
+
+    Revision (Track Changes) commands:
+      revision-list <doc_id> [--author name] [--type type] [--offset N] [--limit N]
+      revision-accept <doc_id> <revision_id>     Accept a single revision by ID
+      revision-reject <doc_id> <revision_id>     Reject a single revision by ID
+      track-changes-enable <doc_id> <true|false> Enable/disable Track Changes
 
     Export commands:
       export-html <doc_id> <output_path>

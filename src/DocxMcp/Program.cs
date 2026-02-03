@@ -45,6 +45,7 @@ builder.Services
     .WithTools<ExportTools>()
     .WithTools<HistoryTools>()
     .WithTools<CommentTools>()
-    .WithTools<StyleTools>();
+    .WithTools<StyleTools>()
+    .WithTools<RevisionTools>();
 
 await builder.Build().RunAsync();

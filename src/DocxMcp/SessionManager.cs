@@ -698,6 +698,15 @@ public sealed class SessionManager
                 case "style_table":
                     Tools.StyleTools.ReplayStyleTable(patch, wpDoc);
                     break;
+                case "accept_revision":
+                    Tools.RevisionTools.ReplayAcceptRevision(patch, wpDoc);
+                    break;
+                case "reject_revision":
+                    Tools.RevisionTools.ReplayRejectRevision(patch, wpDoc);
+                    break;
+                case "track_changes_enable":
+                    Tools.RevisionTools.ReplayTrackChangesEnable(patch, wpDoc);
+                    break;
             }
         }
     }

@@ -1,5 +1,8 @@
 using System.ComponentModel;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using ModelContextProtocol.Server;
+using DocxMcp.Helpers;
 
 namespace DocxMcp.Tools;
 
@@ -44,16 +47,36 @@ public sealed class DocumentTools
     }
 
     [McpServerTool(Name = "document_list"), Description(
-        "List all currently open document sessions.")]
+        "List all currently open document sessions with track changes status.")]
     public static string DocumentList(SessionManager sessions)
     {
         var list = sessions.List();
         if (list.Count == 0)
             return "No open documents.";
 
-        var lines = list.Select(s =>
-            $"  {s.Id}: {s.Path ?? "(new document)"}");
-        return $"Open documents:\n{string.Join('\n', lines)}";
+        var arr = new JsonArray();
+        foreach (var s in list)
+        {
+            var session = sessions.Get(s.Id);
+            var stats = RevisionHelper.GetRevisionStats(session.Document);
+
+            var obj = new JsonObject
+            {
+                ["id"] = s.Id,
+                ["path"] = s.Path,
+                ["track_changes_enabled"] = stats.TrackChangesEnabled,
+                ["pending_revisions"] = stats.TotalCount
+            };
+            arr.Add((JsonNode)obj);
+        }
+
+        var result = new JsonObject
+        {
+            ["count"] = list.Count,
+            ["sessions"] = arr
+        };
+
+        return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     /// <summary>
