@@ -139,9 +139,12 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
       - name: Create and push manifests
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           # For each tag, create a manifest combining amd64 and arm64
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          echo "$TAGS" | while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
             echo "Creating manifest for $tag"
             docker manifest create "$tag" \
               "${tag}-amd64" \
