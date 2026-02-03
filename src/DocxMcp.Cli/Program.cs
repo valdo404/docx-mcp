@@ -1,4 +1,8 @@
+using System.Text.Json;
 using DocxMcp;
+using DocxMcp.Cli;
+using DocxMcp.Diff;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Persistence;
 using DocxMcp.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,6 +15,7 @@ var sessionsDir = Environment.GetEnvironmentVariable("DOCX_MCP_SESSIONS_DIR")
 
 var store = new SessionStore(NullLogger<SessionStore>.Instance, sessionsDir);
 var sessions = new SessionManager(store, NullLogger<SessionManager>.Instance);
+var externalTracker = new ExternalChangeTracker(sessions, NullLogger<ExternalChangeTracker>.Instance);
 sessions.RestoreSessions();
 
 if (args.Length == 0)
@@ -27,8 +32,8 @@ try
     {
         "open" => CmdOpen(args),
         "list" => DocumentTools.DocumentList(sessions),
-        "close" => DocumentTools.DocumentClose(sessions, Require(args, 1, "doc_id")),
-        "save" => DocumentTools.DocumentSave(sessions, Require(args, 1, "doc_id"), Opt(args, 2)),
+        "close" => DocumentTools.DocumentClose(sessions, null, Require(args, 1, "doc_id")),
+        "save" => DocumentTools.DocumentSave(sessions, null, Require(args, 1, "doc_id"), Opt(args, 2)),
         "snapshot" => DocumentTools.DocumentSnapshot(sessions, Require(args, 1, "doc_id"),
             HasFlag(args, "--discard-redo")),
         "query" => QueryTool.Query(sessions, Require(args, 1, "doc_id"), Require(args, 2, "path"),
@@ -91,6 +96,15 @@ try
         "track-changes-enable" => RevisionTools.TrackChangesEnable(sessions, Require(args, 1, "doc_id"),
             ParseBool(Require(args, 2, "enabled"))),
 
+        // Diff commands
+        "diff" => CmdDiff(args),
+        "diff-files" => CmdDiffFiles(args),
+
+        // External change commands
+        "check-external" => CmdCheckExternal(args),
+        "sync-external" => CmdSyncExternal(args),
+        "watch" => CmdWatch(args),
+
         "help" or "--help" or "-h" => Usage(),
         _ => $"Unknown command: '{command}'. Run 'docx-cli help' for usage."
     };
@@ -111,7 +125,7 @@ string CmdOpen(string[] a)
     var path = Opt(a, 1);
     // Skip if it looks like a flag
     if (path is not null && path.StartsWith('-')) path = null;
-    return DocumentTools.DocumentOpen(sessions, path);
+    return DocumentTools.DocumentOpen(sessions, null, path);
 }
 
 string CmdPatch(string[] a)
@@ -120,7 +134,7 @@ string CmdPatch(string[] a)
     var dryRun = HasFlag(a, "--dry-run");
     // patches can be arg[2] or read from stdin
     var patches = GetNonFlagArg(a, 2) ?? ReadStdin();
-    return PatchTool.ApplyPatch(sessions, docId, patches, dryRun);
+    return PatchTool.ApplyPatch(sessions, null, docId, patches, dryRun);
 }
 
 string CmdAdd(string[] a)
@@ -129,7 +143,7 @@ string CmdAdd(string[] a)
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.AddElement(sessions, docId, path, value, dryRun);
+    return ElementTools.AddElement(sessions, null, docId, path, value, dryRun);
 }
 
 string CmdReplace(string[] a)
@@ -138,7 +152,7 @@ string CmdReplace(string[] a)
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.ReplaceElement(sessions, docId, path, value, dryRun);
+    return ElementTools.ReplaceElement(sessions, null, docId, path, value, dryRun);
 }
 
 string CmdRemove(string[] a)
@@ -146,7 +160,7 @@ string CmdRemove(string[] a)
     var docId = Require(a, 1, "doc_id");
     var path = Require(a, 2, "path");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.RemoveElement(sessions, docId, path, dryRun);
+    return ElementTools.RemoveElement(sessions, null, docId, path, dryRun);
 }
 
 string CmdMove(string[] a)
@@ -155,7 +169,7 @@ string CmdMove(string[] a)
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.MoveElement(sessions, docId, from, to, dryRun);
+    return ElementTools.MoveElement(sessions, null, docId, from, to, dryRun);
 }
 
 string CmdCopy(string[] a)
@@ -164,7 +178,7 @@ string CmdCopy(string[] a)
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.CopyElement(sessions, docId, from, to, dryRun);
+    return ElementTools.CopyElement(sessions, null, docId, from, to, dryRun);
 }
 
 string CmdReplaceText(string[] a)
@@ -175,7 +189,7 @@ string CmdReplaceText(string[] a)
     var replace = Require(a, 4, "replace");
     var maxCount = ParseInt(OptNamed(a, "--max-count"), 1);
     var dryRun = HasFlag(a, "--dry-run");
-    return TextTools.ReplaceText(sessions, docId, path, find, replace, maxCount, dryRun);
+    return TextTools.ReplaceText(sessions, null, docId, path, find, replace, maxCount, dryRun);
 }
 
 string CmdRemoveColumn(string[] a)
@@ -184,7 +198,7 @@ string CmdRemoveColumn(string[] a)
     var path = Require(a, 2, "path");
     var column = int.Parse(Require(a, 3, "column"));
     var dryRun = HasFlag(a, "--dry-run");
-    return TableTools.RemoveTableColumn(sessions, docId, path, column, dryRun);
+    return TableTools.RemoveTableColumn(sessions, null, docId, path, column, dryRun);
 }
 
 string CmdStyleElement(string[] a)
@@ -275,6 +289,254 @@ string CmdRevisionList(string[] a)
     return RevisionTools.RevisionList(sessions, docId, author, type, offset, limit);
 }
 
+string CmdDiff(string[] a)
+{
+    // diff <doc_id> [file_path] - compare session with file (default: source file)
+    var docId = Require(a, 1, "doc_id");
+    var filePath = Opt(a, 2);
+    var threshold = ParseDouble(OptNamed(a, "--threshold"), DiffEngine.DefaultSimilarityThreshold);
+    var format = OptNamed(a, "--format") ?? "text";
+
+    var session = sessions.Get(docId);
+    var targetPath = filePath ?? session.SourcePath
+        ?? throw new ArgumentException("No file path specified and session has no source file.");
+
+    if (!File.Exists(targetPath))
+        throw new ArgumentException($"File not found: {targetPath}");
+
+    var diff = DiffEngine.CompareSessionWithFile(session, targetPath, threshold);
+    return FormatDiffResult(diff, format, $"Session '{docId}'", targetPath);
+}
+
+string CmdDiffFiles(string[] a)
+{
+    // diff-files <file1> <file2> - compare two files on disk
+    var file1 = Require(a, 1, "file1");
+    var file2 = Require(a, 2, "file2");
+    var threshold = ParseDouble(OptNamed(a, "--threshold"), DiffEngine.DefaultSimilarityThreshold);
+    var format = OptNamed(a, "--format") ?? "text";
+
+    if (!File.Exists(file1))
+        throw new ArgumentException($"File not found: {file1}");
+    if (!File.Exists(file2))
+        throw new ArgumentException($"File not found: {file2}");
+
+    var diff = DiffEngine.Compare(file1, file2, threshold);
+    return FormatDiffResult(diff, format, file1, file2);
+}
+
+string FormatDiffResult(DiffResult diff, string format, string original, string modified)
+{
+    if (format == "json")
+        return diff.ToJson();
+
+    // Text format
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine($"Diff: {original} → {modified}");
+    sb.AppendLine(new string('=', 60));
+
+    if (!diff.HasChanges)
+    {
+        sb.AppendLine("No changes detected.");
+        return sb.ToString();
+    }
+
+    sb.AppendLine($"Total changes: {diff.Changes.Count}");
+    sb.AppendLine($"  Removed: {diff.Changes.Count(c => c.ChangeType == ChangeType.Removed)}");
+    sb.AppendLine($"  Added: {diff.Changes.Count(c => c.ChangeType == ChangeType.Added)}");
+    sb.AppendLine($"  Modified: {diff.Changes.Count(c => c.ChangeType == ChangeType.Modified)}");
+    sb.AppendLine($"  Moved: {diff.Changes.Count(c => c.ChangeType == ChangeType.Moved)}");
+    sb.AppendLine();
+
+    foreach (var change in diff.Changes)
+    {
+        var symbol = change.ChangeType switch
+        {
+            ChangeType.Removed => "[-]",
+            ChangeType.Added => "[+]",
+            ChangeType.Modified => "[~]",
+            ChangeType.Moved => "[>]",
+            _ => "[?]"
+        };
+
+        sb.AppendLine($"{symbol} {change.ChangeType}: {change.ElementType}");
+
+        if (change.OldIndex.HasValue)
+            sb.AppendLine($"    Old index: {change.OldIndex}");
+        if (change.NewIndex.HasValue)
+            sb.AppendLine($"    New index: {change.NewIndex}");
+
+        if (!string.IsNullOrEmpty(change.OldText))
+        {
+            var oldText = change.OldText.Length > 80
+                ? change.OldText[..77] + "..."
+                : change.OldText;
+            sb.AppendLine($"    Old: \"{oldText.Replace("\n", "\\n")}\"");
+        }
+
+        if (!string.IsNullOrEmpty(change.NewText))
+        {
+            var newText = change.NewText.Length > 80
+                ? change.NewText[..77] + "..."
+                : change.NewText;
+            sb.AppendLine($"    New: \"{newText.Replace("\n", "\\n")}\"");
+        }
+
+        sb.AppendLine();
+    }
+
+    return sb.ToString();
+}
+
+string CmdCheckExternal(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var acknowledge = HasFlag(a, "--acknowledge");
+
+    // Check for pending changes first, then check for new changes
+    var pending = externalTracker.GetLatestUnacknowledgedChange(docId);
+    if (pending is null)
+    {
+        pending = externalTracker.CheckForChanges(docId);
+    }
+
+    if (pending is null)
+    {
+        return "No external changes detected. The document is in sync with the source file.";
+    }
+
+    // Acknowledge if requested
+    if (acknowledge)
+    {
+        externalTracker.AcknowledgeChange(docId, pending.Id);
+    }
+
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine($"External changes detected in '{Path.GetFileName(pending.SourcePath)}'");
+    sb.AppendLine($"Detected at: {pending.DetectedAt:yyyy-MM-dd HH:mm:ss UTC}");
+    sb.AppendLine();
+    sb.AppendLine($"Summary: +{pending.Summary.Added} -{pending.Summary.Removed} ~{pending.Summary.Modified}");
+    sb.AppendLine();
+    sb.AppendLine($"Change ID: {pending.Id}");
+    sb.AppendLine($"Source: {pending.SourcePath}");
+    sb.AppendLine($"Status: {(pending.Acknowledged || acknowledge ? "Acknowledged" : "Pending")}");
+
+    if (!pending.Acknowledged && !acknowledge)
+    {
+        sb.AppendLine();
+        sb.AppendLine("Use --acknowledge to acknowledge, or use 'sync-external' to sync.");
+    }
+
+    return sb.ToString();
+}
+
+string CmdSyncExternal(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var changeId = OptNamed(a, "--change-id");
+
+    var result = externalTracker.SyncExternalChanges(docId, changeId);
+
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine(result.Message);
+
+    if (result.Success && result.HasChanges)
+    {
+        sb.AppendLine();
+        sb.AppendLine($"WAL Position: {result.WalPosition}");
+
+        if (result.Summary is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Body Changes:");
+            sb.AppendLine($"  Added: {result.Summary.Added}");
+            sb.AppendLine($"  Removed: {result.Summary.Removed}");
+            sb.AppendLine($"  Modified: {result.Summary.Modified}");
+        }
+
+        if (result.UncoveredChanges?.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Uncovered Changes ({result.UncoveredChanges.Count}):");
+            foreach (var uc in result.UncoveredChanges.Take(10))
+            {
+                sb.AppendLine($"  [{uc.ChangeKind}] {uc.Type}: {uc.Description}");
+            }
+            if (result.UncoveredChanges.Count > 10)
+            {
+                sb.AppendLine($"  ... and {result.UncoveredChanges.Count - 10} more");
+            }
+        }
+    }
+
+    return sb.ToString();
+}
+
+string CmdWatch(string[] a)
+{
+    var path = Require(a, 1, "path");
+    var autoSync = HasFlag(a, "--auto-sync");
+    var debounceMs = ParseInt(OptNamed(a, "--debounce"), 500);
+    var pattern = OptNamed(a, "--pattern") ?? "*.docx";
+    var recursive = HasFlag(a, "--recursive");
+
+    using var daemon = new WatchDaemon(sessions, externalTracker, debounceMs, autoSync);
+
+    var fullPath = Path.GetFullPath(path);
+    if (File.Exists(fullPath))
+    {
+        // Watch a single file
+        var sessionId = FindOrCreateSession(fullPath);
+        daemon.WatchFile(sessionId, fullPath);
+    }
+    else if (Directory.Exists(fullPath))
+    {
+        // Watch a folder
+        daemon.WatchFolder(fullPath, pattern, recursive);
+    }
+    else
+    {
+        return $"Path not found: {fullPath}";
+    }
+
+    // Handle Ctrl+C
+    var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    try
+    {
+        daemon.RunAsync(cts.Token).GetAwaiter().GetResult();
+    }
+    catch (OperationCanceledException)
+    {
+        // Expected on Ctrl+C
+    }
+
+    return "[DAEMON] Stopped.";
+}
+
+string FindOrCreateSession(string filePath)
+{
+    // Check if session already exists for this file
+    foreach (var (id, sessPath) in sessions.List())
+    {
+        if (sessPath is not null && Path.GetFullPath(sessPath) == Path.GetFullPath(filePath))
+        {
+            return id;
+        }
+    }
+
+    // Create new session
+    var session = sessions.Open(filePath);
+    externalTracker.StartWatching(session.Id);
+    Console.WriteLine($"[SESSION] Created session {session.Id} for {Path.GetFileName(filePath)}");
+    return session.Id;
+}
+
 // --- Argument helpers ---
 
 static string Require(string[] a, int idx, string name)
@@ -318,6 +580,9 @@ static int? ParseIntOpt(string? s) =>
 
 static bool ParseBool(string s) =>
     s.ToLowerInvariant() is "true" or "1" or "yes" or "on";
+
+static double ParseDouble(string? s, double def) =>
+    s is not null && double.TryParse(s, out var v) ? v : def;
 
 static string ReadStdin()
 {
@@ -393,6 +658,20 @@ static void PrintUsage()
       export-html <doc_id> <output_path>
       export-markdown <doc_id> <output_path>
       export-pdf <doc_id> <output_path>
+
+    Diff commands:
+      diff <doc_id> [file_path] [--threshold 0.6] [--format text|json]
+                                 Compare session with file (default: source file)
+      diff-files <file1> <file2> [--threshold 0.6] [--format text|json]
+                                 Compare two DOCX files on disk
+
+    External change commands:
+      check-external <doc_id> [--acknowledge]
+                                 Check for external changes and optionally acknowledge
+      sync-external <doc_id> [--change-id id]
+                                 Sync session with external file (records in WAL)
+      watch <path> [--auto-sync] [--debounce ms] [--pattern *.docx] [--recursive]
+                                 Watch file or folder for changes (daemon mode)
 
     Options:
       --dry-run    Simulate operation without applying changes

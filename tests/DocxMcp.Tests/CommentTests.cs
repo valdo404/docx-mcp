@@ -42,7 +42,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
 
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Needs revision");
         Assert.Contains("Comment 0 added", result);
@@ -76,7 +76,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello beautiful world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello beautiful world"));
 
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Nice word",
             anchor_text: "beautiful");
@@ -106,7 +106,7 @@ public class CommentTests : IDisposable
 
         // Create paragraph with two runs: "Hello " and "world today"
         var patches = "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"runs\":[{\"text\":\"Hello \"},{\"text\":\"world today\"}]}}]";
-        PatchTool.ApplyPatch(mgr, id, patches);
+        PatchTool.ApplyPatch(mgr, null, id, patches);
 
         // Anchor to text that crosses the run boundary
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Spans runs",
@@ -128,7 +128,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
 
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Line 1\nLine 2");
         Assert.Contains("Comment 0 added", result);
@@ -150,7 +150,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
 
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Review this",
             author: "John Doe", initials: "JD");
@@ -170,7 +170,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
 
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Default author test");
 
@@ -190,7 +190,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Test comment",
             anchor_text: "world", author: "Tester", initials: "T");
 
@@ -216,8 +216,8 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Text A"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Text B"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Text A"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Text B"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "By Alice", author: "Alice");
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[1]", "By Bob", author: "Bob");
 
@@ -237,7 +237,7 @@ public class CommentTests : IDisposable
 
         for (int i = 0; i < 5; i++)
         {
-            PatchTool.ApplyPatch(mgr, id, AddParagraphPatch($"Para {i}"));
+            PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"Para {i}"));
             CommentTools.CommentAdd(mgr, id, $"/body/paragraph[{i}]", $"Comment {i}");
         }
 
@@ -258,7 +258,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Test");
 
         var deleteResult = CommentTools.CommentDelete(mgr, id, comment_id: 0);
@@ -284,8 +284,8 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Text A"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Text B"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Text A"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Text B"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "By Alice", author: "Alice");
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[1]", "By Bob", author: "Bob");
 
@@ -332,7 +332,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Test comment");
 
         // Verify comment exists
@@ -364,7 +364,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Test comment");
         CommentTools.CommentDelete(mgr, id, comment_id: 0);
 
@@ -391,7 +391,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Some text with feedback"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Some text with feedback"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Needs revision");
 
         var result = QueryTool.Query(mgr, id, "/body/paragraph[0]");
@@ -411,7 +411,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Clean paragraph"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Clean paragraph"));
 
         var result = QueryTool.Query(mgr, id, "/body/paragraph[0]");
         var json = JsonDocument.Parse(result).RootElement;
@@ -428,9 +428,9 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Para 0"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Para 1"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Para 2"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Para 0"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Para 1"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Para 2"));
 
         var r0 = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "C0");
         var r1 = CommentTools.CommentAdd(mgr, id, "/body/paragraph[1]", "C1");
@@ -448,8 +448,8 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Para 0"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Para 1"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Para 0"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Para 1"));
 
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "C0");
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[1]", "C1");
@@ -458,7 +458,7 @@ public class CommentTests : IDisposable
         CommentTools.CommentDelete(mgr, id, comment_id: 0);
 
         // Next ID should be 2 (max existing=1, +1=2), not 0
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Para 2"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Para 2"));
         var r = CommentTools.CommentAdd(mgr, id, "/body/paragraph[2]", "C2");
         Assert.Contains("Comment 2", r);
     }
@@ -483,8 +483,8 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
 
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[*]", "Test");
         Assert.Contains("Error", result);
@@ -498,7 +498,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
 
         var result = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Test",
             anchor_text: "nonexistent");
@@ -515,7 +515,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Hello world"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Persisted comment");
 
         // Simulate server restart
@@ -554,8 +554,8 @@ public class CommentTests : IDisposable
         // Create file via a session, save, close
         var mgr0 = CreateManager();
         var s0 = mgr0.Create();
-        PatchTool.ApplyPatch(mgr0, s0.Id, AddParagraphPatch("Paragraph one"));
-        PatchTool.ApplyPatch(mgr0, s0.Id, AddParagraphPatch("Paragraph two"));
+        PatchTool.ApplyPatch(mgr0, null, s0.Id, AddParagraphPatch("Paragraph one"));
+        PatchTool.ApplyPatch(mgr0, null, s0.Id, AddParagraphPatch("Paragraph two"));
         mgr0.Save(s0.Id, tempFile);
         mgr0.Close(s0.Id);
 
@@ -602,7 +602,7 @@ public class CommentTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("Some text with feedback"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Some text with feedback"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Fix this",
             anchor_text: "with feedback");
 

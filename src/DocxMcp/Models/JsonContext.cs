@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace DocxMcp.Models;
@@ -37,6 +38,9 @@ namespace DocxMcp.Models;
 [JsonSerializable(typeof(ReplacePatchInput[]))]
 [JsonSerializable(typeof(ReplaceTextPatchInput))]
 [JsonSerializable(typeof(ReplaceTextPatchInput[]))]
+// For external sync patches
+[JsonSerializable(typeof(List<JsonObject>))]
+[JsonSerializable(typeof(JsonObject))]
 internal partial class DocxJsonContext : JsonSerializerContext
 {
 }

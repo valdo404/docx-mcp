@@ -51,7 +51,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddStyledParagraphPatch("test", "{\"italic\":true}"));
+        PatchTool.ApplyPatch(mgr, null, id, AddStyledParagraphPatch("test", "{\"italic\":true}"));
 
         var result = StyleTools.StyleElement(mgr, id, "{\"bold\":true}");
         Assert.Contains("Styled", result);
@@ -68,7 +68,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddStyledParagraphPatch("test", "{\"bold\":true}"));
+        PatchTool.ApplyPatch(mgr, null, id, AddStyledParagraphPatch("test", "{\"bold\":true}"));
 
         StyleTools.StyleElement(mgr, id, "{\"bold\":false}");
 
@@ -83,7 +83,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleElement(mgr, id, "{\"color\":\"FF0000\"}");
 
@@ -98,7 +98,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddStyledParagraphPatch("test", "{\"color\":\"00FF00\"}"));
+        PatchTool.ApplyPatch(mgr, null, id, AddStyledParagraphPatch("test", "{\"color\":\"00FF00\"}"));
 
         StyleTools.StyleElement(mgr, id, "{\"color\":null}");
 
@@ -113,7 +113,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleElement(mgr, id, "{\"font_size\":14,\"font_name\":\"Arial\"}");
 
@@ -129,7 +129,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleElement(mgr, id, "{\"highlight\":\"yellow\"}");
 
@@ -144,7 +144,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleElement(mgr, id, "{\"vertical_align\":\"superscript\"}");
 
@@ -159,7 +159,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleElement(mgr, id, "{\"underline\":true,\"strike\":true}");
 
@@ -180,8 +180,8 @@ public class StyleTests : IDisposable
         var id = session.Id;
 
         // Add paragraph, then set indent via patch
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
-        PatchTool.ApplyPatch(mgr, id,
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id,
             "[{\"op\":\"replace\",\"path\":\"/body/paragraph[0]/style\",\"value\":{\"indent_left\":720}}]");
 
         // Now merge alignment — indent should be preserved
@@ -199,7 +199,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         // Set spacing_before
         StyleTools.StyleParagraph(mgr, id, "{\"spacing_before\":200}", "/body/paragraph[0]");
@@ -222,7 +222,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleParagraph(mgr, id, "{\"shading\":\"FFFF00\"}");
 
@@ -237,7 +237,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleParagraph(mgr, id, "{\"style\":\"Heading1\"}");
 
@@ -252,7 +252,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleParagraph(mgr, id, "{\"indent_left\":720}", "/body/paragraph[0]");
         StyleTools.StyleParagraph(mgr, id, "{\"indent_first_line\":360}", "/body/paragraph[0]");
@@ -273,7 +273,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, style: "{\"border_style\":\"double\"}");
 
@@ -290,7 +290,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, cell_style: "{\"shading\":\"F0F0F0\"}");
 
@@ -309,7 +309,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, row_style: "{\"height\":400}");
 
@@ -329,7 +329,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, row_style: "{\"is_header\":true}");
 
@@ -347,7 +347,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, style: "{\"table_alignment\":\"center\"}");
 
@@ -363,7 +363,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, cell_style: "{\"vertical_align\":\"center\"}");
 
@@ -386,8 +386,8 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("body text"));
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("body text"));
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleElement(mgr, id, "{\"bold\":true}");
 
@@ -406,8 +406,8 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("body text"));
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("body text"));
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleParagraph(mgr, id, "{\"alignment\":\"center\"}");
 
@@ -430,8 +430,8 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("first"));
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("second"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("first"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("second"));
 
         StyleTools.StyleElement(mgr, id, "{\"italic\":true}", "/body/paragraph[*]");
 
@@ -453,7 +453,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         // Style it bold
         StyleTools.StyleElement(mgr, id, "{\"bold\":true}");
@@ -478,7 +478,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         StyleTools.StyleParagraph(mgr, id, "{\"alignment\":\"right\"}");
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
@@ -500,7 +500,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
 
         StyleTools.StyleTable(mgr, id, style: "{\"border_style\":\"double\"}");
         var table = mgr.Get(id).GetBody().Descendants<Table>().First();
@@ -527,7 +527,7 @@ public class StyleTests : IDisposable
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, id, AddParagraphPatch("persist"));
+        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("persist"));
         StyleTools.StyleElement(mgr1, id, "{\"bold\":true,\"color\":\"00FF00\"}");
 
         // Simulate restart
@@ -550,7 +550,7 @@ public class StyleTests : IDisposable
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, id, AddParagraphPatch("persist"));
+        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("persist"));
         StyleTools.StyleParagraph(mgr1, id, "{\"alignment\":\"center\"}");
 
         _store.Dispose();
@@ -571,7 +571,7 @@ public class StyleTests : IDisposable
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr1, null, id, AddTablePatch());
         StyleTools.StyleTable(mgr1, id, cell_style: "{\"shading\":\"AABBCC\"}");
 
         _store.Dispose();
@@ -607,7 +607,7 @@ public class StyleTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
 
         var result = StyleTools.StyleElement(mgr, id, "{\"bold\":true}", "/body/paragraph[99]");
         Assert.StartsWith("Error:", result);

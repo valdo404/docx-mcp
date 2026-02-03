@@ -30,7 +30,7 @@ public class PatchResultTests : IDisposable
     public void ApplyPatch_ReturnsStructuredJson()
     {
         var json = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "New"}}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -52,7 +52,7 @@ public class PatchResultTests : IDisposable
     public void ApplyPatch_ErrorReturnsStructuredJson()
     {
         var json = """[{"op": "remove", "path": "/body/paragraph[999]"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -69,7 +69,7 @@ public class PatchResultTests : IDisposable
     [Fact]
     public void ApplyPatch_InvalidJsonReturnsStructuredError()
     {
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, "not json");
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, "not json");
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -89,7 +89,7 @@ public class PatchResultTests : IDisposable
         }
 
         var json = JsonSerializer.Serialize(patches);
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -110,7 +110,7 @@ public class PatchResultTests : IDisposable
         var initialCount = body.Elements<Paragraph>().Count();
 
         var json = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "New"}}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json, dry_run: true);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json, dry_run: true);
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -128,7 +128,7 @@ public class PatchResultTests : IDisposable
     public void DryRun_ReturnsWouldSucceedStatus()
     {
         var json = """[{"op": "remove", "path": "/body/paragraph[0]"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json, dry_run: true);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json, dry_run: true);
 
         var doc = JsonDocument.Parse(result);
         var ops = doc.RootElement.GetProperty("operations");
@@ -140,7 +140,7 @@ public class PatchResultTests : IDisposable
     public void DryRun_ReturnsWouldFailForInvalidPath()
     {
         var json = """[{"op": "remove", "path": "/body/paragraph[999]"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json, dry_run: true);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json, dry_run: true);
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -153,7 +153,7 @@ public class PatchResultTests : IDisposable
     public void DryRun_ReplaceText_ReturnsMatchCountAndWouldReplace()
     {
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": "hi", "max_count": 2}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json, dry_run: true);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json, dry_run: true);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -171,7 +171,7 @@ public class PatchResultTests : IDisposable
     public void ReplaceText_DefaultMaxCountIsOne()
     {
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": "hi"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -191,7 +191,7 @@ public class PatchResultTests : IDisposable
         var originalText = _session.GetBody().Elements<Paragraph>().First().InnerText;
 
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": "hi", "max_count": 0}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -209,7 +209,7 @@ public class PatchResultTests : IDisposable
     public void ReplaceText_MaxCountNegative_ReturnsError()
     {
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": "hi", "max_count": -1}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -222,7 +222,7 @@ public class PatchResultTests : IDisposable
     public void ReplaceText_MaxCountHigherThanMatches_ReplacesAll()
     {
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": "hi", "max_count": 100}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -238,7 +238,7 @@ public class PatchResultTests : IDisposable
     public void ReplaceText_MaxCountTwo_ReplacesTwoOccurrences()
     {
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": "hi", "max_count": 2}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -258,7 +258,7 @@ public class PatchResultTests : IDisposable
     public void ReplaceText_EmptyReplace_ReturnsError()
     {
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": ""}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var root = doc.RootElement;
@@ -275,7 +275,7 @@ public class PatchResultTests : IDisposable
     {
         // JSON null for replace field
         var json = """[{"op": "replace_text", "path": "/body/paragraph[0]", "find": "hello", "replace": null}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -291,7 +291,7 @@ public class PatchResultTests : IDisposable
     public void AddOperation_ReturnsCreatedId()
     {
         var json = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "New"}}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -306,10 +306,10 @@ public class PatchResultTests : IDisposable
     {
         // First add a paragraph via patch so it gets an ID
         var addJson = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "Paragraph to remove"}}]""";
-        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addJson);
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, addJson);
 
         var json = """[{"op": "remove", "path": "/body/paragraph[0]"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -323,10 +323,10 @@ public class PatchResultTests : IDisposable
     {
         // First add a paragraph via patch so it gets an ID
         var addJson = """[{"op": "add", "path": "/body/children/999", "value": {"type": "paragraph", "text": "Paragraph to move"}}]""";
-        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addJson);
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, addJson);
 
         var json = """[{"op": "move", "from": "/body/paragraph[-1]", "path": "/body/children/0"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -340,10 +340,10 @@ public class PatchResultTests : IDisposable
     {
         // First add a paragraph via patch so it gets an ID
         var addJson = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "Paragraph to copy"}}]""";
-        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addJson);
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, addJson);
 
         var json = """[{"op": "copy", "from": "/body/paragraph[0]", "path": "/body/children/999"}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];
@@ -357,11 +357,11 @@ public class PatchResultTests : IDisposable
     {
         // First add a table
         var addTableJson = """[{"op": "add", "path": "/body/children/0", "value": {"type": "table", "headers": ["A", "B", "C"], "rows": [["1", "2", "3"], ["4", "5", "6"]]}}]""";
-        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, addTableJson);
+        DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, addTableJson);
 
         // Then remove a column
         var json = """[{"op": "remove_column", "path": "/body/table[0]", "column": 1}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         var op = doc.RootElement.GetProperty("operations")[0];

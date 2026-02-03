@@ -168,7 +168,7 @@ public class QueryRoundTripTests : IDisposable
     public void RoundTripCreateThenQueryParagraph()
     {
         // Create a paragraph with runs via patch
-        var patchResult = PatchTool.ApplyPatch(_sessions, _session.Id, """
+        var patchResult = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
         [{
             "op": "add",
             "path": "/body/children/0",
@@ -220,7 +220,7 @@ public class QueryRoundTripTests : IDisposable
     [Fact]
     public void RoundTripCreateThenQueryHeading()
     {
-        var patchResult = PatchTool.ApplyPatch(_sessions, _session.Id, """
+        var patchResult = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
         [{
             "op": "add",
             "path": "/body/children/0",

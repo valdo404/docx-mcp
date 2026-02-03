@@ -187,7 +187,7 @@ public class SessionPersistenceTests : IDisposable
         var id = session.Id;
 
         // Apply a patch through PatchTool
-        PatchTool.ApplyPatch(mgr1, id,
+        PatchTool.ApplyPatch(mgr1, null, id,
             "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"WAL entry\"}}]");
 
         // Verify WAL has entries

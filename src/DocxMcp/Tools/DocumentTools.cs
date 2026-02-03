@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
+using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -12,15 +13,23 @@ public sealed class DocumentTools
     [McpServerTool(Name = "document_open"), Description(
         "Open an existing DOCX file or create a new empty document. " +
         "Returns a session ID to use with other tools. " +
-        "If path is omitted, creates a new empty document.")]
+        "If path is omitted, creates a new empty document. " +
+        "For existing files, external changes will be monitored automatically.")]
     public static string DocumentOpen(
         SessionManager sessions,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Absolute path to the .docx file to open. Omit to create a new empty document.")]
         string? path = null)
     {
         var session = path is not null
             ? sessions.Open(path)
             : sessions.Create();
+
+        // Start watching for external changes if we have a source file
+        if (session.SourcePath is not null && externalChangeTracker is not null)
+        {
+            externalChangeTracker.StartWatching(session.Id);
+        }
 
         var source = session.SourcePath is not null
             ? $" from '{session.SourcePath}'"
@@ -32,15 +41,21 @@ public sealed class DocumentTools
     [McpServerTool(Name = "document_save"), Description(
         "Save the document to disk. " +
         "If output_path is provided, saves to that path (Save As). " +
-        "Otherwise saves to the original path.")]
+        "Otherwise saves to the original path. " +
+        "Updates the external change tracker snapshot after saving.")]
     public static string DocumentSave(
         SessionManager sessions,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document to save.")]
         string doc_id,
         [Description("Path to save the file to. If omitted, saves to the original path.")]
         string? output_path = null)
     {
         sessions.Save(doc_id, output_path);
+
+        // Update the external change tracker's snapshot after save
+        externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+
         var session = sessions.Get(doc_id);
         var target = output_path ?? session.SourcePath ?? "(unknown)";
         return $"Document saved to '{target}'.";
@@ -87,8 +102,12 @@ public sealed class DocumentTools
     /// </summary>
     public static string DocumentClose(
         SessionManager sessions,
+        ExternalChangeTracker? externalChangeTracker,
         string doc_id)
     {
+        // Stop watching for external changes before closing
+        externalChangeTracker?.StopWatching(doc_id);
+
         sessions.Close(doc_id);
         return $"Document session '{doc_id}' closed.";
     }

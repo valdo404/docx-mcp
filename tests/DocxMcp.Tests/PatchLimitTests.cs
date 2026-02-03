@@ -35,7 +35,7 @@ public class PatchLimitTests : IDisposable
         }
 
         var json = JsonSerializer.Serialize(patches);
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
@@ -57,7 +57,7 @@ public class PatchLimitTests : IDisposable
         }
 
         var json = JsonSerializer.Serialize(patches);
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
@@ -68,7 +68,7 @@ public class PatchLimitTests : IDisposable
     public void OnePatchIsAccepted()
     {
         var json = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "Hello"}}]""";
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, json);
 
         var doc = JsonDocument.Parse(result);
         Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
@@ -78,7 +78,7 @@ public class PatchLimitTests : IDisposable
     [Fact]
     public void EmptyPatchArrayIsAccepted()
     {
-        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, "[]");
+        var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, null, _session.Id, "[]");
 
         var doc = JsonDocument.Parse(result);
         Assert.True(doc.RootElement.GetProperty("success").GetBoolean());

@@ -58,7 +58,19 @@ public sealed class HistoryTools
             var marker = entry.IsCurrent ? " <-- current" : "";
             var ckpt = entry.IsCheckpoint ? " [checkpoint]" : "";
             var ts = entry.Timestamp != default ? entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss UTC") : "—";
-            lines.Add($"  [{entry.Position}] {ts} | {entry.Description}{ckpt}{marker}");
+
+            if (entry.IsExternalSync && entry.SyncSummary is not null)
+            {
+                var sync = entry.SyncSummary;
+                var uncoveredInfo = sync.UncoveredCount > 0
+                    ? $" ({sync.UncoveredCount} uncovered: {string.Join(", ", sync.UncoveredTypes.Take(3))})"
+                    : "";
+                lines.Add($"  [{entry.Position}] {ts} | [EXTERNAL SYNC] +{sync.Added} -{sync.Removed} ~{sync.Modified}{uncoveredInfo}{ckpt}{marker}");
+            }
+            else
+            {
+                lines.Add($"  [{entry.Position}] {ts} | {entry.Description}{ckpt}{marker}");
+            }
         }
 
         return string.Join("\n", lines);
