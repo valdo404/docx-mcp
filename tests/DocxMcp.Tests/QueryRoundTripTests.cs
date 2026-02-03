@@ -187,7 +187,7 @@ public class QueryRoundTripTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", patchResult);
+        Assert.Contains("\"success\": true", patchResult);
 
         // Query it back
         var queryResult = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
@@ -238,7 +238,7 @@ public class QueryRoundTripTests : IDisposable
         }]
         """);
 
-        Assert.Contains("Applied 1 patch(es) successfully", patchResult);
+        Assert.Contains("\"success\": true", patchResult);
 
         var queryResult = QueryTool.Query(_sessions, _session.Id, "/body/heading[0]");
         using var doc = JsonDocument.Parse(queryResult);

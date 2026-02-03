@@ -37,7 +37,9 @@ public class PatchLimitTests : IDisposable
         var json = JsonSerializer.Serialize(patches);
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
 
-        Assert.Contains("Applied 10 patch(es) successfully", result);
+        var doc = JsonDocument.Parse(result);
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(10, doc.RootElement.GetProperty("applied").GetInt32());
     }
 
     [Fact]
@@ -57,8 +59,9 @@ public class PatchLimitTests : IDisposable
         var json = JsonSerializer.Serialize(patches);
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
 
-        Assert.Contains("Error: Too many operations (11)", result);
-        Assert.Contains("Maximum is 10", result);
+        var doc = JsonDocument.Parse(result);
+        Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.Contains("Too many operations", doc.RootElement.GetProperty("error").GetString());
     }
 
     [Fact]
@@ -67,7 +70,9 @@ public class PatchLimitTests : IDisposable
         var json = """[{"op": "add", "path": "/body/children/0", "value": {"type": "paragraph", "text": "Hello"}}]""";
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, json);
 
-        Assert.Contains("Applied 1 patch(es) successfully", result);
+        var doc = JsonDocument.Parse(result);
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("applied").GetInt32());
     }
 
     [Fact]
@@ -75,7 +80,9 @@ public class PatchLimitTests : IDisposable
     {
         var result = DocxMcp.Tools.PatchTool.ApplyPatch(_sessions, _session.Id, "[]");
 
-        Assert.Contains("Applied 0 patch(es) successfully", result);
+        var doc = JsonDocument.Parse(result);
+        Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("applied").GetInt32());
     }
 
     public void Dispose()

@@ -36,10 +36,25 @@ try
             ParseIntOpt(OptNamed(args, "--offset")),
             ParseIntOpt(OptNamed(args, "--limit"))),
         "count" => CountTool.CountElements(sessions, Require(args, 1, "doc_id"), Require(args, 2, "path")),
+
+        // Generic patch (multi-operation)
         "patch" => CmdPatch(args),
+
+        // Individual element operations
+        "add" => CmdAdd(args),
+        "replace" => CmdReplace(args),
+        "remove" => CmdRemove(args),
+        "move" => CmdMove(args),
+        "copy" => CmdCopy(args),
+        "replace-text" => CmdReplaceText(args),
+        "remove-column" => CmdRemoveColumn(args),
+
+        // Style commands
         "style-element" => CmdStyleElement(args),
         "style-paragraph" => CmdStyleParagraph(args),
         "style-table" => CmdStyleTable(args),
+
+        // History commands
         "undo" => HistoryTools.DocumentUndo(sessions, Require(args, 1, "doc_id"),
             ParseInt(Opt(args, 2), 1)),
         "redo" => HistoryTools.DocumentRedo(sessions, Require(args, 1, "doc_id"),
@@ -49,17 +64,24 @@ try
             ParseInt(OptNamed(args, "--limit"), 20)),
         "jump-to" => HistoryTools.DocumentJumpTo(sessions, Require(args, 1, "doc_id"),
             int.Parse(Require(args, 2, "position"))),
+
+        // Comment commands
         "comment-add" => CmdCommentAdd(args),
         "comment-list" => CmdCommentList(args),
         "comment-delete" => CmdCommentDelete(args),
+
+        // Export commands
         "export-html" => ExportTools.ExportHtml(sessions, Require(args, 1, "doc_id"),
             Require(args, 2, "output_path")),
         "export-markdown" => ExportTools.ExportMarkdown(sessions, Require(args, 1, "doc_id"),
             Require(args, 2, "output_path")),
         "export-pdf" => ExportTools.ExportPdf(sessions, Require(args, 1, "doc_id"),
             Require(args, 2, "output_path")).GetAwaiter().GetResult(),
+
+        // Read commands
         "read-section" => CmdReadSection(args),
         "read-heading" => CmdReadHeading(args),
+
         "help" or "--help" or "-h" => Usage(),
         _ => $"Unknown command: '{command}'. Run 'docx-cli help' for usage."
     };
@@ -86,18 +108,81 @@ string CmdOpen(string[] a)
 string CmdPatch(string[] a)
 {
     var docId = Require(a, 1, "doc_id");
+    var dryRun = HasFlag(a, "--dry-run");
     // patches can be arg[2] or read from stdin
-    var patches = Opt(a, 2) ?? ReadStdin();
-    return PatchTool.ApplyPatch(sessions, docId, patches);
+    var patches = GetNonFlagArg(a, 2) ?? ReadStdin();
+    return PatchTool.ApplyPatch(sessions, docId, patches, dryRun);
+}
+
+string CmdAdd(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var path = Require(a, 2, "path");
+    var value = GetNonFlagArg(a, 3) ?? ReadStdin();
+    var dryRun = HasFlag(a, "--dry-run");
+    return ElementTools.AddElement(sessions, docId, path, value, dryRun);
+}
+
+string CmdReplace(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var path = Require(a, 2, "path");
+    var value = GetNonFlagArg(a, 3) ?? ReadStdin();
+    var dryRun = HasFlag(a, "--dry-run");
+    return ElementTools.ReplaceElement(sessions, docId, path, value, dryRun);
+}
+
+string CmdRemove(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var path = Require(a, 2, "path");
+    var dryRun = HasFlag(a, "--dry-run");
+    return ElementTools.RemoveElement(sessions, docId, path, dryRun);
+}
+
+string CmdMove(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var from = Require(a, 2, "from");
+    var to = Require(a, 3, "to");
+    var dryRun = HasFlag(a, "--dry-run");
+    return ElementTools.MoveElement(sessions, docId, from, to, dryRun);
+}
+
+string CmdCopy(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var from = Require(a, 2, "from");
+    var to = Require(a, 3, "to");
+    var dryRun = HasFlag(a, "--dry-run");
+    return ElementTools.CopyElement(sessions, docId, from, to, dryRun);
+}
+
+string CmdReplaceText(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var path = Require(a, 2, "path");
+    var find = Require(a, 3, "find");
+    var replace = Require(a, 4, "replace");
+    var maxCount = ParseInt(OptNamed(a, "--max-count"), 1);
+    var dryRun = HasFlag(a, "--dry-run");
+    return TextTools.ReplaceText(sessions, docId, path, find, replace, maxCount, dryRun);
+}
+
+string CmdRemoveColumn(string[] a)
+{
+    var docId = Require(a, 1, "doc_id");
+    var path = Require(a, 2, "path");
+    var column = int.Parse(Require(a, 3, "column"));
+    var dryRun = HasFlag(a, "--dry-run");
+    return TableTools.RemoveTableColumn(sessions, docId, path, column, dryRun);
 }
 
 string CmdStyleElement(string[] a)
 {
     var docId = Require(a, 1, "doc_id");
     var style = Require(a, 2, "style");
-    var path = OptNamed(a, "--path") ?? Opt(a, 3);
-    // Don't treat flags as path
-    if (path is not null && path.StartsWith('-')) path = null;
+    var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
     return StyleTools.StyleElement(sessions, docId, style, path);
 }
 
@@ -105,8 +190,7 @@ string CmdStyleParagraph(string[] a)
 {
     var docId = Require(a, 1, "doc_id");
     var style = Require(a, 2, "style");
-    var path = OptNamed(a, "--path") ?? Opt(a, 3);
-    if (path is not null && path.StartsWith('-')) path = null;
+    var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
     return StyleTools.StyleParagraph(sessions, docId, style, path);
 }
 
@@ -178,11 +262,21 @@ static string Require(string[] a, int idx, string name)
 {
     if (idx >= a.Length)
         throw new ArgumentException($"Missing required argument: <{name}>");
-    return a[idx];
+    var val = a[idx];
+    if (val.StartsWith('-'))
+        throw new ArgumentException($"Missing required argument: <{name}> (got flag '{val}')");
+    return val;
 }
 
 static string? Opt(string[] a, int idx) =>
     idx < a.Length ? a[idx] : null;
+
+static string? GetNonFlagArg(string[] a, int idx)
+{
+    if (idx >= a.Length) return null;
+    var val = a[idx];
+    return val.StartsWith('-') ? null : val;
+}
 
 static string? OptNamed(string[] a, string flag)
 {
@@ -239,8 +333,19 @@ static void PrintUsage()
       read-heading <doc_id> [--text str] [--index N] [--level N] [--format fmt]
                             [--offset N] [--limit N] [--no-sub-headings]
 
-    Mutation commands:
-      patch <doc_id> <patches_json>        Apply JSON patches (or pipe via stdin)
+    Element operations (all support --dry-run):
+      add <doc_id> <path> <value_json>     Add element at path
+      replace <doc_id> <path> <value_json> Replace element
+      remove <doc_id> <path>               Remove element
+      move <doc_id> <from> <to>            Move element
+      copy <doc_id> <from> <to>            Copy element
+      replace-text <doc_id> <path> <find> <replace> [--max-count N]
+      remove-column <doc_id> <table_path> <column_index>
+
+    Generic patch (multi-operation):
+      patch <doc_id> <patches_json> [--dry-run]
+
+    Style commands:
       style-element <doc_id> <style_json> [path | --path path]
       style-paragraph <doc_id> <style_json> [path | --path path]
       style-table <doc_id> --style json [--cell-style json] [--row-style json] [--path path]
@@ -260,6 +365,9 @@ static void PrintUsage()
       export-html <doc_id> <output_path>
       export-markdown <doc_id> <output_path>
       export-pdf <doc_id> <output_path>
+
+    Options:
+      --dry-run    Simulate operation without applying changes
 
     Environment:
       DOCX_MCP_SESSIONS_DIR            Override sessions directory (shared with MCP server)
