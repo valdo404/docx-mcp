@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="DocxMcp.Tests" />
-    <InternalsVisibleTo Include="DocxMcp.Ui" />
+    <InternalsVisibleTo Include="docx-ui" />
   </ItemGroup>
 
   <ItemGroup>
