@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "docx-mcp-website",
+  "compatibility_date": "2026-01-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "./dist",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "docx-mcp-auth",
+      "database_id": "<A_CREER_VIA_WRANGLER_CLI>"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SESSION",
+      "id": "<A_CREER_VIA_WRANGLER_CLI>"
+    }
+  ],
+  "vars": {
+    "BETTER_AUTH_URL": "https://docx.lapoule.dev",
+    "GCS_BUCKET_NAME": "docx-mcp-sessions"
+  }
+}

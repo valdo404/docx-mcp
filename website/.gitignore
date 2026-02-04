@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Astro generated
+.astro/
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# Environment / secrets
+*.local
+.env
+.env.*

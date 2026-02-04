@@ -1,0 +1,99 @@
+---
+import type { Lang } from '../i18n/ui';
+import { useTranslations } from '../i18n/utils';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const t = useTranslations(lang);
+---
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-content">
+      <div class="footer-brand">
+        <div class="logo">
+          <div class="logo-icon">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="3" y="2" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M7 7h6M7 11h6M7 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="18" cy="18" r="5" fill="#0078d4"/>
+              <path d="M16 18h4M18 16v4" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <span>docx-mcp</span>
+        </div>
+        <p>{t('footer.tagline')}</p>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/valdo404/docx-mcp" target="_blank">GitHub</a>
+        <a href="https://github.com/valdo404/docx-mcp/issues" target="_blank">Issues</a>
+        <a href="https://github.com/valdo404/docx-mcp/blob/main/LICENSE" target="_blank">MIT License</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing-xxl);
+  }
+
+  .footer {
+    padding: var(--spacing-xxxl) 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .footer-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    color: var(--text-primary);
+    font-weight: var(--font-weight-semibold);
+    font-size: var(--font-size-400);
+  }
+
+  .logo-icon {
+    width: 28px;
+    height: 28px;
+    color: var(--text-primary);
+  }
+
+  .logo-icon svg { width: 100%; height: 100%; }
+
+  .footer-brand p {
+    margin-top: var(--spacing-s);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+  }
+
+  .footer-links {
+    display: flex;
+    gap: var(--spacing-xxl);
+  }
+
+  .footer-links a {
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
+  }
+
+  .footer-links a:hover { color: var(--text-primary); }
+
+  @media (max-width: 640px) {
+    .footer-content {
+      flex-direction: column;
+      gap: var(--spacing-xxl);
+      text-align: center;
+    }
+  }
+</style>

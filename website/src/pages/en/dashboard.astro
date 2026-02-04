@@ -1,0 +1,191 @@
+---
+export const prerender = false;
+import Layout from '../../layouts/Layout.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+import { useTranslations } from '../../i18n/utils';
+
+const t = useTranslations('en');
+const user = Astro.locals.user!;
+const tenant = Astro.locals.tenant!;
+
+const usedMB = (tenant.storageUsedBytes / 1024 / 1024).toFixed(1);
+const quotaMB = (tenant.storageQuotaBytes / 1024 / 1024).toFixed(0);
+const usagePercent = Math.round((tenant.storageUsedBytes / tenant.storageQuotaBytes) * 100);
+---
+
+<Layout title={`${t('nav.dashboard')} — docx-mcp`}>
+  <Nav lang="en" authenticated={true} userName={user.name} />
+
+  <main class="dashboard">
+    <div class="container">
+      <h1>{t('dashboard.welcome')}, {user.name}</h1>
+
+      <div class="cards">
+        <div class="card">
+          <h3>{t('dashboard.storage')}</h3>
+          <div class="storage-bar">
+            <div class="storage-fill" style={`width: ${usagePercent}%`}></div>
+          </div>
+          <p class="storage-text">{usedMB} MB {t('dashboard.of')} {quotaMB} MB</p>
+        </div>
+
+        <div class="card">
+          <h3>{t('dashboard.documents')}</h3>
+          <p class="coming-soon">{t('dashboard.comingSoon')}</p>
+        </div>
+
+        <div class="card">
+          <h3>{t('dashboard.sessions')}</h3>
+          <p class="coming-soon">{t('dashboard.comingSoon')}</p>
+        </div>
+      </div>
+
+      <div class="tenant-info">
+        <div class="info-row">
+          <span class="info-label">{t('dashboard.tenantId')}</span>
+          <code>{tenant.id}</code>
+        </div>
+        <div class="info-row">
+          <span class="info-label">{t('dashboard.gcsPrefix')}</span>
+          <code>{tenant.gcsPrefix}</code>
+        </div>
+      </div>
+
+      <form method="POST" action="/api/auth/logout" class="logout-form">
+        <button type="submit" class="btn btn-secondary">{t('nav.logout')}</button>
+      </form>
+    </div>
+  </main>
+
+  <Footer lang="en" />
+</Layout>
+
+<style>
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing-xxl);
+  }
+
+  .dashboard {
+    padding: 120px 0 80px;
+    min-height: 80vh;
+  }
+
+  h1 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-xxl);
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .card {
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: var(--spacing-xxl);
+  }
+
+  .card h3 {
+    font-size: var(--font-size-400);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-l);
+  }
+
+  .storage-bar {
+    height: 8px;
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-circular);
+    overflow: hidden;
+    margin-bottom: var(--spacing-m);
+  }
+
+  .storage-fill {
+    height: 100%;
+    background: var(--brand-primary);
+    border-radius: var(--radius-circular);
+    transition: width 0.3s ease;
+  }
+
+  .storage-text {
+    font-size: var(--font-size-300);
+    color: var(--text-secondary);
+  }
+
+  .coming-soon {
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
+    font-style: italic;
+  }
+
+  .tenant-info {
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: var(--spacing-xxl);
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .info-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-l);
+    padding: var(--spacing-m) 0;
+  }
+
+  .info-row:not(:last-child) {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .info-label {
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
+    min-width: 160px;
+  }
+
+  .info-row code {
+    font-size: var(--font-size-300);
+    color: var(--text-secondary);
+    background: var(--bg-layer-3);
+    padding: var(--spacing-xs) var(--spacing-m);
+    border-radius: var(--radius-s);
+  }
+
+  .logout-form { display: flex; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-s);
+    padding: var(--spacing-m) var(--spacing-xl);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    transition: all 0.15s ease;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+  }
+
+  .btn-secondary:hover {
+    background: var(--bg-layer-3);
+    border-color: var(--border-strong);
+  }
+
+  @media (max-width: 1024px) {
+    .cards { grid-template-columns: 1fr; }
+  }
+</style>

@@ -1,8 +1,16 @@
 import { defineConfig } from 'astro/config';
+import cloudflare from '@astrojs/cloudflare';
 
 export default defineConfig({
   site: 'https://docx.lapoule.dev',
-  build: {
-    assets: 'assets'
-  }
+  adapter: cloudflare({
+    imageService: 'compile',
+  }),
+  i18n: {
+    defaultLocale: 'fr',
+    locales: ['fr', 'en'],
+    routing: {
+      prefixDefaultLocale: false,
+    },
+  },
 });

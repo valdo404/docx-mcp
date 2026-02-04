@@ -1,14 +1,17 @@
 ---
+import { getLangFromUrl } from '../i18n/utils';
+
 interface Props {
   title: string;
   description?: string;
 }
 
 const { title, description = "Intelligent Word Document Automation for AI Agents" } = Astro.props;
+const lang = getLangFromUrl(Astro.url);
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={lang}>
   <head>
     <meta charset="UTF-8" />
     <meta name="description" content={description} />
@@ -163,7 +166,6 @@ const { title, description = "Intelligent Word Document Automation for AI Agents
     color: white;
   }
 
-  /* Fluent focus visible */
   :focus-visible {
     outline: 2px solid var(--brand-primary);
     outline-offset: 2px;

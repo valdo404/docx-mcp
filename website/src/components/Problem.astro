@@ -1,0 +1,94 @@
+---
+import type { Lang } from '../i18n/ui';
+import { useTranslations } from '../i18n/utils';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const t = useTranslations(lang);
+---
+
+<section class="problem">
+  <div class="container">
+    <div class="problem-content">
+      <h2>{t('problem.title')}</h2>
+      <p>{t('problem.description')}</p>
+      <div class="problem-stats">
+        <div class="stat">
+          <span class="stat-number">{t('problem.stat1.number')}</span>
+          <span class="stat-label">{t('problem.stat1.label')}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-number">{t('problem.stat2.number')}</span>
+          <span class="stat-label">{t('problem.stat2.label')}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing-xxl);
+  }
+
+  .problem {
+    padding: 100px 0;
+    background: var(--bg-layer-2);
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .problem-content {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .problem-content h2 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .problem-content > p {
+    font-size: var(--font-size-400);
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .problem-stats {
+    display: flex;
+    justify-content: center;
+    gap: 80px;
+  }
+
+  .stat { text-align: center; }
+
+  .stat-number {
+    display: block;
+    font-size: var(--font-size-1000);
+    font-weight: var(--font-weight-bold);
+    color: var(--brand-primary);
+    line-height: 1;
+  }
+
+  .stat-label {
+    display: block;
+    margin-top: var(--spacing-m);
+    font-size: var(--font-size-300);
+    color: var(--text-tertiary);
+  }
+
+  @media (max-width: 640px) {
+    .problem-stats {
+      flex-direction: column;
+      gap: 40px;
+    }
+  }
+</style>

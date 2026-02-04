@@ -1,0 +1,269 @@
+---
+import type { Lang } from '../i18n/ui';
+import { useTranslations } from '../i18n/utils';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const t = useTranslations(lang);
+---
+
+<section id="products" class="products">
+  <div class="container">
+    <div class="section-header">
+      <h2>{t('products.title')}</h2>
+      <p>{t('products.subtitle')}</p>
+    </div>
+
+    <div class="products-grid">
+      <div class="product-card product-available">
+        <div class="product-status">
+          <span class="status-dot available"></span>
+          {t('products.available')}
+        </div>
+        <div class="product-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="8" y="4" width="32" height="40" rx="4" fill="#0078d4"/>
+            <path d="M16 16h16M16 24h16M16 32h10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>{t('products.mcp.title')}</h3>
+        <p>{t('products.mcp.description')}</p>
+        <a href="https://github.com/valdo404/docx-mcp" class="product-link" target="_blank">
+          {t('products.mcp.link')}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+      </div>
+
+      <div class="product-card product-coming">
+        <div class="product-status">
+          <span class="status-dot coming"></span>
+          {t('products.coming')}
+        </div>
+        <div class="product-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="6" y="8" width="36" height="32" rx="4" stroke="#0078d4" stroke-width="2"/>
+            <circle cx="24" cy="24" r="8" fill="#0078d4"/>
+            <path d="M24 20v4l3 3" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>{t('products.addin.title')}</h3>
+        <p>{t('products.addin.description')}</p>
+        <div class="product-platforms">
+          <span>Windows</span>
+          <span>macOS</span>
+          <span>iPad</span>
+        </div>
+      </div>
+
+      <div class="product-card product-coming">
+        <div class="product-status">
+          <span class="status-dot coming"></span>
+          {t('products.coming')}
+        </div>
+        <div class="product-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="#0078d4" stroke-width="2"/>
+            <circle cx="24" cy="24" r="6" fill="#0078d4"/>
+          </svg>
+        </div>
+        <h3>{t('products.skill.title')}</h3>
+        <p>{t('products.skill.description')}</p>
+        <div class="product-badge">{t('products.skill.badge')}</div>
+      </div>
+
+      <div class="product-card product-coming product-wide">
+        <div class="product-status">
+          <span class="status-dot coming"></span>
+          {t('products.coming')}
+        </div>
+        <div class="product-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 24h8l4-8 4 16 4-8h12" stroke="#0078d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="8" cy="24" r="3" fill="#0078d4"/>
+            <circle cx="40" cy="24" r="3" fill="#0078d4"/>
+          </svg>
+        </div>
+        <h3>{t('products.workflows.title')}</h3>
+        <p>{t('products.workflows.description')}</p>
+        <div class="product-integrations">
+          <div class="integration">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M21.007 8.222A3.738 3.738 0 0 0 17.227 5.5a3.727 3.727 0 0 0-2.69 1.157 5.452 5.452 0 0 0-2.532-.643 5.477 5.477 0 0 0-5.476 5.477v.057a3.738 3.738 0 0 0 .643 7.447h10.855a3.738 3.738 0 0 0 2.98-5.773z"/></svg>
+            <span>Microsoft 365</span>
+          </div>
+          <div class="integration">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12.5 2h-9a1.5 1.5 0 0 0-1.5 1.5v9a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.5-1.5zm7 7h-4a1.5 1.5 0 0 0-1.5 1.5v10a1.5 1.5 0 0 0 1.5 1.5h4a1.5 1.5 0 0 0 1.5-1.5v-10a1.5 1.5 0 0 0-1.5-1.5z"/></svg>
+            <span>SharePoint</span>
+          </div>
+          <div class="integration">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            <span>Amazon S3</span>
+          </div>
+          <div class="integration">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M22.46 6c-.77.35-1.6.58-2.46.69.88-.53 1.56-1.37 1.88-2.38-.83.5-1.75.85-2.72 1.05C18.37 4.5 17.26 4 16 4c-2.35 0-4.27 1.92-4.27 4.29 0 .34.04.67.11.98C8.28 9.09 5.11 7.38 3 4.79c-.37.63-.58 1.37-.58 2.15 0 1.49.75 2.81 1.91 3.56-.71 0-1.37-.2-1.95-.5v.03c0 2.08 1.48 3.82 3.44 4.21a4.22 4.22 0 0 1-1.93.07 4.28 4.28 0 0 0 4 2.98 8.521 8.521 0 0 1-5.33 1.84c-.34 0-.68-.02-1.02-.06C3.44 20.29 5.7 21 8.12 21 16 21 20.33 14.46 20.33 8.79c0-.19 0-.37-.01-.56.84-.6 1.56-1.36 2.14-2.23z"/></svg>
+            <span>ChatGPT</span>
+          </div>
+          <div class="integration">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><path d="M12 6a1 1 0 0 0-1 1v5a1 1 0 0 0 .29.71l3 3a1 1 0 0 0 1.42-1.42L13 11.59V7a1 1 0 0 0-1-1z"/></svg>
+            <span>Claude</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 var(--spacing-xxl);
+  }
+
+  .products { padding: 100px 0; }
+
+  .section-header {
+    text-align: center;
+    margin-bottom: 60px;
+  }
+
+  .section-header h2 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-m);
+  }
+
+  .section-header p {
+    font-size: var(--font-size-400);
+    color: var(--text-secondary);
+  }
+
+  .products-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-xxl);
+  }
+
+  .product-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: var(--spacing-xxl);
+    transition: all 0.2s ease;
+  }
+
+  .product-card:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--border-default);
+  }
+
+  .product-card.product-wide { grid-column: span 3; }
+
+  .product-card.product-available {
+    border-color: rgba(0, 120, 212, 0.3);
+    background: rgba(0, 120, 212, 0.05);
+  }
+
+  .product-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .status-dot.available {
+    background: #4caf50;
+    box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+  }
+
+  .status-dot.coming { background: var(--text-tertiary); }
+
+  .product-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .product-icon svg { width: 100%; height: 100%; }
+
+  .product-card h3 {
+    font-size: var(--font-size-500);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-m);
+  }
+
+  .product-card p {
+    font-size: var(--font-size-300);
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .product-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    color: var(--brand-primary);
+  }
+
+  .product-link:hover { text-decoration: underline; }
+
+  .product-platforms {
+    display: flex;
+    gap: var(--spacing-s);
+  }
+
+  .product-platforms span {
+    padding: var(--spacing-xs) var(--spacing-m);
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+  }
+
+  .product-badge {
+    display: inline-block;
+    padding: var(--spacing-xs) var(--spacing-m);
+    background: rgba(0, 120, 212, 0.15);
+    border: 1px solid rgba(0, 120, 212, 0.3);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    color: var(--brand-primary);
+  }
+
+  .product-integrations {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-l);
+  }
+
+  .integration {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    padding: var(--spacing-s) var(--spacing-l);
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    color: var(--text-secondary);
+  }
+
+  .integration svg { color: var(--brand-primary); }
+
+  @media (max-width: 1024px) {
+    .products-grid { grid-template-columns: 1fr; }
+    .product-card.product-wide { grid-column: span 1; }
+  }
+</style>
