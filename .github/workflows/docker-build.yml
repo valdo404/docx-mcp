@@ -442,10 +442,17 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history for tags
 
-      - name: Download all artifacts
+      - name: Download Windows installers
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: windows-*-installer
+
+      - name: Download macOS installer
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: macos-*-dmg
 
       - name: Extract version
         id: version
