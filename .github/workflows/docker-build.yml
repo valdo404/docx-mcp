@@ -119,6 +119,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -143,15 +146,13 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           # For each tag, create a manifest combining amd64 and arm64
+          # Use imagetools which handles manifest lists properly
           echo "$TAGS" | while IFS= read -r tag; do
             [ -z "$tag" ] && continue
             echo "Creating manifest for $tag"
-            docker manifest create "$tag" \
+            docker buildx imagetools create -t "$tag" \
               "${tag}-amd64" \
               "${tag}-arm64"
-            docker manifest annotate "$tag" "${tag}-amd64" --arch amd64
-            docker manifest annotate "$tag" "${tag}-arm64" --arch arm64
-            docker manifest push "$tag"
           done
 
       - name: Update Docker Hub README
