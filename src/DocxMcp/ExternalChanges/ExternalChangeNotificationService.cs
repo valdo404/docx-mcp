@@ -5,8 +5,8 @@ namespace DocxMcp.ExternalChanges;
 
 /// <summary>
 /// Background service that monitors for external changes.
-/// When an external change is detected, it stores the change and logs a warning.
-/// Patch operations will block until changes are acknowledged.
+/// When an external change is detected, it automatically syncs the session
+/// with the external file (same behavior as the CLI watch daemon).
 /// </summary>
 public sealed class ExternalChangeNotificationService : BackgroundService
 {
@@ -56,66 +56,33 @@ public sealed class ExternalChangeNotificationService : BackgroundService
         }
     }
 
-    private async void OnExternalChangeDetected(object? sender, ExternalChangeDetectedEventArgs e)
+    private void OnExternalChangeDetected(object? sender, ExternalChangeDetectedEventArgs e)
     {
         try
         {
             _logger.LogInformation(
-                "External change detected for session {SessionId}. Sending MCP notification.",
+                "External change detected for session {SessionId}. Auto-syncing.",
                 e.SessionId);
 
-            // Send MCP resource update notification
-            // This tells the client that the resource has changed and needs to be re-read
-            await SendResourceUpdateNotificationAsync(e.SessionId, e.Patch);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to send MCP notification for external change.");
-        }
-    }
+            var result = _tracker.SyncExternalChanges(e.SessionId, e.Patch.Id);
 
-    private async Task SendResourceUpdateNotificationAsync(string sessionId, ExternalChangePatch patch)
-    {
-        try
-        {
-            // Create a notification message that the LLM will see
-            // The notification includes a summary that encourages reading the full change
-            var notification = new
+            if (result.HasChanges)
             {
-                type = "external_document_change",
-                session_id = sessionId,
-                change_id = patch.Id,
-                detected_at = patch.DetectedAt,
-                summary = new
-                {
-                    total_changes = patch.Summary.TotalChanges,
-                    added = patch.Summary.Added,
-                    removed = patch.Summary.Removed,
-                    modified = patch.Summary.Modified,
-                    moved = patch.Summary.Moved
-                },
-                message = $"ATTENTION: The document '{Path.GetFileName(patch.SourcePath)}' has been modified externally. " +
-                          $"{patch.Summary.TotalChanges} change(s) detected. " +
-                          "Call `get_external_changes` with acknowledge=true to proceed.",
-                required_action = "Call get_external_changes with acknowledge=true before any further edits."
-            };
-
-            // Log the notification (MCP server will handle actual notification delivery)
-            _logger.LogWarning(
-                "EXTERNAL CHANGE NOTIFICATION - Session: {SessionId}, Changes: {Count}, " +
-                "Action Required: Review and acknowledge before editing.",
-                sessionId, patch.Summary.TotalChanges);
-
-            // Note: The actual MCP notification mechanism depends on the MCP SDK implementation.
-            // The current ModelContextProtocol.Server SDK may not expose direct notification APIs.
-            // In that case, tools that modify the document should check for pending changes first.
-
-            // For now, we ensure the patch is stored and tools can query it
-            await Task.CompletedTask;
+                _logger.LogInformation(
+                    "Auto-synced session {SessionId}: +{Added} -{Removed} ~{Modified}.",
+                    e.SessionId,
+                    result.Summary?.Added ?? 0,
+                    result.Summary?.Removed ?? 0,
+                    result.Summary?.Modified ?? 0);
+            }
+            else
+            {
+                _logger.LogDebug("No logical changes after sync for session {SessionId}.", e.SessionId);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to send resource update notification for session {SessionId}.", sessionId);
+            _logger.LogError(ex, "Failed to auto-sync external changes for session {SessionId}.", e.SessionId);
         }
     }
 }

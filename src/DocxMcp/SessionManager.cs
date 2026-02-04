@@ -382,6 +382,7 @@ public sealed class SessionManager
         var newCursor = cursor - actualSteps;
 
         RebuildDocumentAtPosition(id, newCursor);
+        MaybeAutoSave(id);
 
         return new UndoRedoResult
         {
@@ -445,6 +446,8 @@ public sealed class SessionManager
             });
         }
 
+        MaybeAutoSave(id);
+
         return new UndoRedoResult
         {
             Position = newCursor,
@@ -476,6 +479,7 @@ public sealed class SessionManager
             return new UndoRedoResult { Position = position, Steps = 0, Message = $"Already at position {position}." };
 
         RebuildDocumentAtPosition(id, position);
+        MaybeAutoSave(id);
 
         var stepsFromOld = Math.Abs(position - oldCursor);
         return new UndoRedoResult
