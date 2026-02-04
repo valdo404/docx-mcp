@@ -93,7 +93,7 @@ public sealed class SomeTools
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DOCX_SESSIONS_DIR` | `~/.docx-mcp/sessions` | Session storage location |
+| `DOCX_SESSIONS_DIR` | `<LocalApplicationData>/docx-mcp/sessions` | Session storage location (macOS: `~/Library/Application Support/`, Linux: `~/.local/share/`, Windows: `AppData\Local\`) |
 | `DOCX_CHECKPOINT_INTERVAL` | `10` | Edits between checkpoints |
 | `DOCX_WAL_COMPACT_THRESHOLD` | `50` | WAL entries before compaction |
 | `DOCX_AUTO_SAVE` | `true` | Auto-save to source file after each edit |

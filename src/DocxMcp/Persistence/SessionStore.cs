@@ -22,9 +22,10 @@ public sealed class SessionStore : IDisposable
     {
         _logger = logger;
         _sessionsDir = sessionsDir
+            ?? Environment.GetEnvironmentVariable("DOCX_SESSIONS_DIR")
             ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".docx-mcp", "sessions");
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "docx-mcp", "sessions");
         _indexPath = Path.Combine(_sessionsDir, "index.json");
         _lockPath = Path.Combine(_sessionsDir, ".lock");
     }

@@ -8,10 +8,7 @@ using DocxMcp.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
 
 // --- Bootstrap ---
-var sessionsDir = Environment.GetEnvironmentVariable("DOCX_SESSIONS_DIR")
-    ?? Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "docx-mcp", "sessions");
+var sessionsDir = Environment.GetEnvironmentVariable("DOCX_SESSIONS_DIR");
 
 var store = new SessionStore(NullLogger<SessionStore>.Instance, sessionsDir);
 var sessions = new SessionManager(store, NullLogger<SessionManager>.Instance);
