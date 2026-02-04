@@ -12,7 +12,10 @@ public enum WalEntryType
     Patch = 0,
 
     /// <summary>External sync - document was reloaded from disk.</summary>
-    ExternalSync = 1
+    ExternalSync = 1,
+
+    /// <summary>Import - initial sync when watch starts (diff + import from disk).</summary>
+    Import = 2
 }
 
 /// <summary>

@@ -40,7 +40,7 @@ try
         "open" => CmdOpen(args),
         "list" => DocumentTools.DocumentList(sessions),
         "close" => DocumentTools.DocumentClose(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
-        "save" => DocumentTools.DocumentSave(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path")), Opt(args, 2)),
+        "save" => DocumentTools.DocumentSave(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
         "snapshot" => DocumentTools.DocumentSnapshot(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
         "query" => QueryTool.Query(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path"),
@@ -68,9 +68,9 @@ try
 
         // History commands
         "undo" => HistoryTools.DocumentUndo(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
-            ParseInt(Opt(args, 2), 1)),
+            ParseInt(GetNonFlagArg(args, 2), 1)),
         "redo" => HistoryTools.DocumentRedo(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
-            ParseInt(Opt(args, 2), 1)),
+            ParseInt(GetNonFlagArg(args, 2), 1)),
         "history" => HistoryTools.DocumentHistory(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(OptNamed(args, "--offset"), 0),
             ParseInt(OptNamed(args, "--limit"), 20)),
@@ -132,9 +132,7 @@ catch (Exception ex)
 
 string CmdOpen(string[] a)
 {
-    var path = Opt(a, 1);
-    // Skip if it looks like a flag
-    if (path is not null && path.StartsWith('-')) path = null;
+    var path = GetNonFlagArg(a, 1);
     return DocumentTools.DocumentOpen(sessions, null, path);
 }
 
@@ -303,7 +301,7 @@ string CmdDiff(string[] a)
 {
     // diff <doc_id_or_path> [file_path] - compare session with file (default: source file)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
-    var filePath = Opt(a, 2);
+    var filePath = GetNonFlagArg(a, 2);
     var threshold = ParseDouble(OptNamed(a, "--threshold"), DiffEngine.DefaultSimilarityThreshold);
     var format = OptNamed(a, "--format") ?? "text";
 
@@ -340,58 +338,80 @@ string FormatDiffResult(DiffResult diff, string format, string original, string 
     if (format == "json")
         return diff.ToJson();
 
+    if (format == "patch")
+    {
+        var patches = diff.ToPatches();
+        var arr = new System.Text.Json.Nodes.JsonArray(patches.Select(p => (System.Text.Json.Nodes.JsonNode?)p).ToArray());
+        return arr.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
     // Text format
     var sb = new System.Text.StringBuilder();
     sb.AppendLine($"Diff: {original} → {modified}");
     sb.AppendLine(new string('=', 60));
 
-    if (!diff.HasChanges)
+    if (!diff.HasAnyChanges)
     {
         sb.AppendLine("No changes detected.");
         return sb.ToString();
     }
 
-    sb.AppendLine($"Total changes: {diff.Changes.Count}");
-    sb.AppendLine($"  Removed: {diff.Changes.Count(c => c.ChangeType == ChangeType.Removed)}");
-    sb.AppendLine($"  Added: {diff.Changes.Count(c => c.ChangeType == ChangeType.Added)}");
-    sb.AppendLine($"  Modified: {diff.Changes.Count(c => c.ChangeType == ChangeType.Modified)}");
-    sb.AppendLine($"  Moved: {diff.Changes.Count(c => c.ChangeType == ChangeType.Moved)}");
-    sb.AppendLine();
-
-    foreach (var change in diff.Changes)
+    if (diff.Changes.Count > 0)
     {
-        var symbol = change.ChangeType switch
+        sb.AppendLine($"Body changes: {diff.Changes.Count}");
+        sb.AppendLine($"  Removed: {diff.Changes.Count(c => c.ChangeType == ChangeType.Removed)}");
+        sb.AppendLine($"  Added: {diff.Changes.Count(c => c.ChangeType == ChangeType.Added)}");
+        sb.AppendLine($"  Modified: {diff.Changes.Count(c => c.ChangeType == ChangeType.Modified)}");
+        sb.AppendLine($"  Moved: {diff.Changes.Count(c => c.ChangeType == ChangeType.Moved)}");
+        sb.AppendLine();
+
+        foreach (var change in diff.Changes)
         {
-            ChangeType.Removed => "[-]",
-            ChangeType.Added => "[+]",
-            ChangeType.Modified => "[~]",
-            ChangeType.Moved => "[>]",
-            _ => "[?]"
-        };
+            var symbol = change.ChangeType switch
+            {
+                ChangeType.Removed => "[-]",
+                ChangeType.Added => "[+]",
+                ChangeType.Modified => "[~]",
+                ChangeType.Moved => "[>]",
+                _ => "[?]"
+            };
 
-        sb.AppendLine($"{symbol} {change.ChangeType}: {change.ElementType}");
+            sb.AppendLine($"{symbol} {change.ChangeType}: {change.ElementType}");
 
-        if (change.OldIndex.HasValue)
-            sb.AppendLine($"    Old index: {change.OldIndex}");
-        if (change.NewIndex.HasValue)
-            sb.AppendLine($"    New index: {change.NewIndex}");
+            if (change.OldIndex.HasValue)
+                sb.AppendLine($"    Old index: {change.OldIndex}");
+            if (change.NewIndex.HasValue)
+                sb.AppendLine($"    New index: {change.NewIndex}");
 
-        if (!string.IsNullOrEmpty(change.OldText))
-        {
-            var oldText = change.OldText.Length > 80
-                ? change.OldText[..77] + "..."
-                : change.OldText;
-            sb.AppendLine($"    Old: \"{oldText.Replace("\n", "\\n")}\"");
+            if (!string.IsNullOrEmpty(change.OldText))
+            {
+                var oldText = change.OldText.Length > 80
+                    ? change.OldText[..77] + "..."
+                    : change.OldText;
+                sb.AppendLine($"    Old: \"{oldText.Replace("\n", "\\n")}\"");
+            }
+
+            if (!string.IsNullOrEmpty(change.NewText))
+            {
+                var newText = change.NewText.Length > 80
+                    ? change.NewText[..77] + "..."
+                    : change.NewText;
+                sb.AppendLine($"    New: \"{newText.Replace("\n", "\\n")}\"");
+            }
+
+            sb.AppendLine();
         }
+    }
 
-        if (!string.IsNullOrEmpty(change.NewText))
+    if (diff.UncoveredChanges.Count > 0)
+    {
+        sb.AppendLine($"Uncovered changes: {diff.UncoveredChanges.Count}");
+        foreach (var uc in diff.UncoveredChanges)
         {
-            var newText = change.NewText.Length > 80
-                ? change.NewText[..77] + "..."
-                : change.NewText;
-            sb.AppendLine($"    New: \"{newText.Replace("\n", "\\n")}\"");
+            sb.AppendLine($"  [{uc.ChangeKind}] {uc.Type}: {uc.Description}");
+            if (uc.PartUri is not null)
+                sb.AppendLine($"         Part: {uc.PartUri}");
         }
-
         sb.AppendLine();
     }
 
@@ -605,9 +625,10 @@ string FindOrCreateSession(string filePath)
         }
     }
 
-    // Create new session
+    // Create new session (use EnsureTracked instead of StartWatching
+    // to avoid creating an FSW that competes with the WatchDaemon)
     var session = sessions.Open(filePath);
-    externalTracker.StartWatching(session.Id);
+    externalTracker.EnsureTracked(session.Id);
     Console.WriteLine($"[SESSION] Created session {session.Id} for {Path.GetFileName(filePath)}");
     return session.Id;
 }
@@ -624,8 +645,6 @@ static string Require(string[] a, int idx, string name)
     return val;
 }
 
-static string? Opt(string[] a, int idx) =>
-    idx < a.Length ? a[idx] : null;
 
 static string? GetNonFlagArg(string[] a, int idx)
 {
@@ -740,9 +759,9 @@ static void PrintUsage()
       export-pdf <doc_id> <output_path>
 
     Diff commands:
-      diff <doc_id> [file_path] [--threshold 0.6] [--format text|json]
+      diff <doc_id> [file_path] [--threshold 0.6] [--format text|json|patch]
                                  Compare session with file (default: source file)
-      diff-files <file1> <file2> [--threshold 0.6] [--format text|json]
+      diff-files <file1> <file2> [--threshold 0.6] [--format text|json|patch]
                                  Compare two DOCX files on disk
 
     External change commands:

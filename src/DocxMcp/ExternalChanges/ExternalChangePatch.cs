@@ -208,6 +208,9 @@ public sealed class SyncResult
     /// <summary>Position in WAL after sync.</summary>
     public int? WalPosition { get; init; }
 
+    /// <summary>JSON patches representing the body changes.</summary>
+    public List<JsonObject>? Patches { get; init; }
+
     public static SyncResult NoChanges() => new()
     {
         Success = true,
@@ -225,6 +228,7 @@ public sealed class SyncResult
     public static SyncResult Synced(
         DiffSummary summary,
         List<UncoveredChange> uncoveredChanges,
+        List<JsonObject> patches,
         string? acknowledgedChangeId,
         int walPosition)
     {
@@ -239,6 +243,7 @@ public sealed class SyncResult
             HasChanges = true,
             Summary = summary,
             UncoveredChanges = uncoveredChanges,
+            Patches = patches,
             AcknowledgedChangeId = acknowledgedChangeId,
             WalPosition = walPosition,
             Message = $"Synced: +{summary.Added} -{summary.Removed} ~{summary.Modified}{uncoveredMsg}. WAL position: {walPosition}"

@@ -14,6 +14,11 @@ public sealed class DiffResult
     public List<ElementChange> Changes { get; init; } = [];
 
     /// <summary>
+    /// List of uncovered changes (headers, footers, images, etc.) that can't be represented as body patches.
+    /// </summary>
+    public List<UncoveredChange> UncoveredChanges { get; init; } = [];
+
+    /// <summary>
     /// Summary statistics of the diff.
     /// </summary>
     public DiffSummary Summary => new()
@@ -26,9 +31,14 @@ public sealed class DiffResult
     };
 
     /// <summary>
-    /// Whether any changes were detected.
+    /// Whether any body changes were detected.
     /// </summary>
     public bool HasChanges => Changes.Count > 0;
+
+    /// <summary>
+    /// Whether any changes (body or uncovered) were detected.
+    /// </summary>
+    public bool HasAnyChanges => Changes.Count > 0 || UncoveredChanges.Count > 0;
 
     /// <summary>
     /// Convert the diff result to a list of patches in the project's format.
@@ -113,7 +123,14 @@ public sealed class DiffResult
         {
             ["summary"] = summaryJson,
             ["changes"] = new JsonArray(Changes.Select(c => (JsonNode?)c.ToJson()).ToArray()),
-            ["patches"] = new JsonArray(ToPatches().Select(p => (JsonNode?)p).ToArray())
+            ["patches"] = new JsonArray(ToPatches().Select(p => (JsonNode?)p).ToArray()),
+            ["uncovered_changes"] = new JsonArray(UncoveredChanges.Select(u => (JsonNode?)new JsonObject
+            {
+                ["type"] = u.Type.ToString().ToLowerInvariant(),
+                ["description"] = u.Description,
+                ["part_uri"] = u.PartUri,
+                ["change_kind"] = u.ChangeKind
+            }).ToArray())
         };
 
         return result.ToJsonString(new JsonSerializerOptions { WriteIndented = indented });

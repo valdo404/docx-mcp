@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using DocxMcp.Helpers;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -45,7 +46,10 @@ public static class DiffEngine
         // Generate changes from matches
         var changes = GenerateChanges(originalSnapshots, modifiedSnapshots, matches);
 
-        return new DiffResult { Changes = changes };
+        // Detect uncovered changes (headers, footers, images, etc.)
+        var uncoveredChanges = DetectUncoveredChanges(original, modified);
+
+        return new DiffResult { Changes = changes, UncoveredChanges = uncoveredChanges };
     }
 
     /// <summary>
@@ -132,22 +136,48 @@ public static class DiffEngine
     {
         var result = new MatchResult();
 
-        // Step 1: Find exact matches by fingerprint (identical content)
+        // Step 1: Find exact matches by fingerprint using position-aware grouping.
+        // Group elements by fingerprint, then pair in positional order (first↔first, second↔second)
+        // to avoid incorrect pairings when multiple elements share the same fingerprint.
         var modifiedUsed = new HashSet<int>();
         var exactMatches = new Dictionary<int, int>(); // origIdx -> modIdx
 
+        // Group original and modified indices by fingerprint
+        var origByFingerprint = new Dictionary<string, List<int>>();
         for (int i = 0; i < original.Count; i++)
         {
-            for (int j = 0; j < modified.Count; j++)
+            var fp = original[i].Fingerprint;
+            if (!origByFingerprint.TryGetValue(fp, out var list))
             {
-                if (modifiedUsed.Contains(j)) continue;
+                list = [];
+                origByFingerprint[fp] = list;
+            }
+            list.Add(i);
+        }
 
-                if (original[i].Fingerprint == modified[j].Fingerprint)
-                {
-                    exactMatches[i] = j;
-                    modifiedUsed.Add(j);
-                    break;
-                }
+        var modByFingerprint = new Dictionary<string, List<int>>();
+        for (int j = 0; j < modified.Count; j++)
+        {
+            var fp = modified[j].Fingerprint;
+            if (!modByFingerprint.TryGetValue(fp, out var list))
+            {
+                list = [];
+                modByFingerprint[fp] = list;
+            }
+            list.Add(j);
+        }
+
+        // Pair in positional order within each fingerprint group
+        foreach (var (fp, origIndices) in origByFingerprint)
+        {
+            if (!modByFingerprint.TryGetValue(fp, out var modIndices))
+                continue;
+
+            var pairCount = Math.Min(origIndices.Count, modIndices.Count);
+            for (int k = 0; k < pairCount; k++)
+            {
+                exactMatches[origIndices[k]] = modIndices[k];
+                modifiedUsed.Add(modIndices[k]);
             }
         }
 
@@ -286,25 +316,19 @@ public static class DiffEngine
             .Select(kvp => (origIdx: kvp.Key, modIdx: kvp.Value.ModifiedIndex, match: kvp.Value))
             .ToList();
 
-        // Detect moved elements: relative order changed among matched elements
-        // An element is "moved" if its position in the modified sequence (relative to other matched elements)
-        // differs from its position in the original sequence
+        // Detect moved elements using Longest Increasing Subsequence (LIS).
+        // Elements NOT in the LIS of modified indices are the ones that truly "moved".
         var movedElements = new HashSet<int>();
         if (sortedMatches.Count > 1)
         {
-            // Extract the sequence of modified indices in order of original indices
             var modifiedSequence = sortedMatches.Select(m => m.modIdx).ToList();
+            var lisIndices = ComputeLisIndices(modifiedSequence);
+            var lisSet = new HashSet<int>(lisIndices);
 
-            // Check for inversions: if any pair is out of order, mark as moves
-            // Use a simpler approach: check if modified indices are monotonically increasing
-            for (int i = 1; i < modifiedSequence.Count; i++)
+            for (int i = 0; i < sortedMatches.Count; i++)
             {
-                if (modifiedSequence[i] < modifiedSequence[i - 1])
-                {
-                    // There's an inversion - mark both elements as potentially moved
+                if (!lisSet.Contains(i))
                     movedElements.Add(sortedMatches[i].origIdx);
-                    movedElements.Add(sortedMatches[i - 1].origIdx);
-                }
             }
         }
 
@@ -427,6 +451,64 @@ public static class DiffEngine
     }
 
     /// <summary>
+    /// Compute indices of the Longest Increasing Subsequence in O(n log n).
+    /// Returns the set of indices in the input that form the LIS.
+    /// </summary>
+    private static List<int> ComputeLisIndices(List<int> sequence)
+    {
+        if (sequence.Count == 0) return [];
+
+        var n = sequence.Count;
+        // tails[i] = smallest tail element for increasing subsequence of length i+1
+        var tails = new List<int>();
+        // tailIndices[i] = index in 'sequence' of tails[i]
+        var tailIndices = new List<int>();
+        // predecessor[i] = index in 'sequence' of the element before sequence[i] in the LIS
+        var predecessor = new int[n];
+        Array.Fill(predecessor, -1);
+
+        for (int i = 0; i < n; i++)
+        {
+            var val = sequence[i];
+            // Binary search for the position
+            int lo = 0, hi = tails.Count;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) / 2;
+                if (tails[mid] < val)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+
+            if (lo == tails.Count)
+            {
+                tails.Add(val);
+                tailIndices.Add(i);
+            }
+            else
+            {
+                tails[lo] = val;
+                tailIndices[lo] = i;
+            }
+
+            if (lo > 0)
+                predecessor[i] = tailIndices[lo - 1];
+        }
+
+        // Reconstruct the LIS indices
+        var result = new List<int>();
+        int idx = tailIndices[^1];
+        while (idx >= 0)
+        {
+            result.Add(idx);
+            idx = predecessor[idx];
+        }
+        result.Reverse();
+        return result;
+    }
+
+    /// <summary>
     /// Internal result of the matching algorithm.
     /// </summary>
     private sealed class MatchResult
@@ -473,20 +555,20 @@ public static class DiffEngine
 
         // Compare headers
         CompareHeaderFooterParts(
-            origMain.HeaderParts.Select(h => (h.Uri, h.Header?.OuterXml)),
-            modMain.HeaderParts.Select(h => (h.Uri, h.Header?.OuterXml)),
+            origMain.HeaderParts.Select(h => (h.Uri, (OpenXmlElement?)h.Header)),
+            modMain.HeaderParts.Select(h => (h.Uri, (OpenXmlElement?)h.Header)),
             UncoveredChangeType.Header, "header", changes);
 
         // Compare footers
         CompareHeaderFooterParts(
-            origMain.FooterParts.Select(f => (f.Uri, f.Footer?.OuterXml)),
-            modMain.FooterParts.Select(f => (f.Uri, f.Footer?.OuterXml)),
+            origMain.FooterParts.Select(f => (f.Uri, (OpenXmlElement?)f.Footer)),
+            modMain.FooterParts.Select(f => (f.Uri, (OpenXmlElement?)f.Footer)),
             UncoveredChangeType.Footer, "footer", changes);
 
         // Compare styles
         CompareSinglePart(
-            origMain.StyleDefinitionsPart?.Styles?.OuterXml,
-            modMain.StyleDefinitionsPart?.Styles?.OuterXml,
+            origMain.StyleDefinitionsPart?.Styles,
+            modMain.StyleDefinitionsPart?.Styles,
             UncoveredChangeType.StyleDefinition,
             "Style definitions",
             "/word/styles.xml",
@@ -494,8 +576,8 @@ public static class DiffEngine
 
         // Compare numbering
         CompareSinglePart(
-            origMain.NumberingDefinitionsPart?.Numbering?.OuterXml,
-            modMain.NumberingDefinitionsPart?.Numbering?.OuterXml,
+            origMain.NumberingDefinitionsPart?.Numbering,
+            modMain.NumberingDefinitionsPart?.Numbering,
             UncoveredChangeType.Numbering,
             "Numbering definitions",
             "/word/numbering.xml",
@@ -503,8 +585,8 @@ public static class DiffEngine
 
         // Compare settings
         CompareSinglePart(
-            origMain.DocumentSettingsPart?.Settings?.OuterXml,
-            modMain.DocumentSettingsPart?.Settings?.OuterXml,
+            origMain.DocumentSettingsPart?.Settings,
+            modMain.DocumentSettingsPart?.Settings,
             UncoveredChangeType.Settings,
             "Document settings",
             "/word/settings.xml",
@@ -512,8 +594,8 @@ public static class DiffEngine
 
         // Compare footnotes
         CompareSinglePart(
-            origMain.FootnotesPart?.Footnotes?.OuterXml,
-            modMain.FootnotesPart?.Footnotes?.OuterXml,
+            origMain.FootnotesPart?.Footnotes,
+            modMain.FootnotesPart?.Footnotes,
             UncoveredChangeType.Footnote,
             "Footnotes",
             "/word/footnotes.xml",
@@ -521,8 +603,8 @@ public static class DiffEngine
 
         // Compare endnotes
         CompareSinglePart(
-            origMain.EndnotesPart?.Endnotes?.OuterXml,
-            modMain.EndnotesPart?.Endnotes?.OuterXml,
+            origMain.EndnotesPart?.Endnotes,
+            modMain.EndnotesPart?.Endnotes,
             UncoveredChangeType.Endnote,
             "Endnotes",
             "/word/endnotes.xml",
@@ -530,8 +612,8 @@ public static class DiffEngine
 
         // Compare comments
         CompareSinglePart(
-            origMain.WordprocessingCommentsPart?.Comments?.OuterXml,
-            modMain.WordprocessingCommentsPart?.Comments?.OuterXml,
+            origMain.WordprocessingCommentsPart?.Comments,
+            modMain.WordprocessingCommentsPart?.Comments,
             UncoveredChangeType.Comment,
             "Comments",
             "/word/comments.xml",
@@ -539,8 +621,8 @@ public static class DiffEngine
 
         // Compare theme
         CompareSinglePart(
-            origMain.ThemePart?.Theme?.OuterXml,
-            modMain.ThemePart?.Theme?.OuterXml,
+            origMain.ThemePart?.Theme,
+            modMain.ThemePart?.Theme,
             UncoveredChangeType.Theme,
             "Document theme",
             "/word/theme/theme1.xml",
@@ -556,18 +638,18 @@ public static class DiffEngine
     }
 
     private static void CompareHeaderFooterParts(
-        IEnumerable<(Uri Uri, string? Xml)> originalParts,
-        IEnumerable<(Uri Uri, string? Xml)> modifiedParts,
+        IEnumerable<(Uri Uri, OpenXmlElement? Element)> originalParts,
+        IEnumerable<(Uri Uri, OpenXmlElement? Element)> modifiedParts,
         UncoveredChangeType changeType,
         string partName,
         List<UncoveredChange> changes)
     {
         var origDict = originalParts
-            .Where(p => p.Xml is not null)
-            .ToDictionary(p => p.Uri.ToString(), p => ComputeHash(p.Xml!));
+            .Where(p => p.Element is not null)
+            .ToDictionary(p => p.Uri.ToString(), p => ComputeStrippedHash(p.Element!));
         var modDict = modifiedParts
-            .Where(p => p.Xml is not null)
-            .ToDictionary(p => p.Uri.ToString(), p => ComputeHash(p.Xml!));
+            .Where(p => p.Element is not null)
+            .ToDictionary(p => p.Uri.ToString(), p => ComputeStrippedHash(p.Element!));
 
         // Check for removed or modified
         foreach (var (uri, hash) in origDict)
@@ -611,15 +693,15 @@ public static class DiffEngine
     }
 
     private static void CompareSinglePart(
-        string? originalXml,
-        string? modifiedXml,
+        OpenXmlElement? originalElement,
+        OpenXmlElement? modifiedElement,
         UncoveredChangeType changeType,
         string description,
         string partUri,
         List<UncoveredChange> changes)
     {
-        var origHash = originalXml is not null ? ComputeHash(originalXml) : null;
-        var modHash = modifiedXml is not null ? ComputeHash(modifiedXml) : null;
+        var origHash = originalElement is not null ? ComputeStrippedHash(originalElement) : null;
+        var modHash = modifiedElement is not null ? ComputeStrippedHash(modifiedElement) : null;
 
         if (origHash is null && modHash is not null)
         {
@@ -769,6 +851,16 @@ public static class DiffEngine
                 ChangeKind = kind
             });
         }
+    }
+
+    /// <summary>
+    /// Compute hash of an element's XML after stripping ID/revision attributes.
+    /// </summary>
+    private static string ComputeStrippedHash(OpenXmlElement element)
+    {
+        var clone = (OpenXmlElement)element.CloneNode(true);
+        ContentHasher.StripIdAttributes(clone);
+        return ComputeHash(clone.OuterXml);
     }
 
     private static string ComputeHash(string content)

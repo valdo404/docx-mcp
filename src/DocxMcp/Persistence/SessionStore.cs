@@ -290,14 +290,30 @@ public sealed class SessionStore : IDisposable
     public string CheckpointPath(string sessionId, int position) =>
         Path.Combine(_sessionsDir, $"{sessionId}.ckpt.{position}.docx");
 
+    public string ImportCheckpointPath(string sessionId, int position) =>
+        Path.Combine(_sessionsDir, $"{sessionId}.import.{position}.docx");
+
     /// <summary>
     /// Persist a checkpoint snapshot at the given WAL position.
     /// Same memory-mapped format as baseline.
     /// </summary>
     public void PersistCheckpoint(string sessionId, int position, byte[] bytes)
     {
+        PersistCheckpointToPath(CheckpointPath(sessionId, position), bytes);
+    }
+
+    /// <summary>
+    /// Persist an import checkpoint snapshot at the given WAL position.
+    /// Uses the import checkpoint naming convention ({sessionId}.import.{position}.docx).
+    /// </summary>
+    public void PersistImportCheckpoint(string sessionId, int position, byte[] bytes)
+    {
+        PersistCheckpointToPath(ImportCheckpointPath(sessionId, position), bytes);
+    }
+
+    private void PersistCheckpointToPath(string path, byte[] bytes)
+    {
         EnsureDirectory();
-        var path = CheckpointPath(sessionId, position);
         var capacity = bytes.Length + 8;
 
         using var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
@@ -327,7 +343,11 @@ public sealed class SessionStore : IDisposable
 
         if (bestPos > 0)
         {
-            var path = CheckpointPath(sessionId, bestPos);
+            // Check import checkpoint first (takes precedence), then regular checkpoint
+            var importPath = ImportCheckpointPath(sessionId, bestPos);
+            var ckptPath = CheckpointPath(sessionId, bestPos);
+            var path = File.Exists(importPath) ? importPath : ckptPath;
+
             if (File.Exists(path))
             {
                 try
@@ -361,11 +381,12 @@ public sealed class SessionStore : IDisposable
     {
         try
         {
-            var pattern = $"{sessionId}.ckpt.*.docx";
             var dir = new DirectoryInfo(_sessionsDir);
             if (!dir.Exists) return;
 
-            foreach (var file in dir.GetFiles(pattern))
+            foreach (var file in dir.GetFiles($"{sessionId}.ckpt.*.docx"))
+                TryDelete(file.FullName);
+            foreach (var file in dir.GetFiles($"{sessionId}.import.*.docx"))
                 TryDelete(file.FullName);
         }
         catch { /* best effort */ }
@@ -379,7 +400,10 @@ public sealed class SessionStore : IDisposable
         foreach (var pos in knownPositions)
         {
             if (pos > afterPosition)
+            {
                 TryDelete(CheckpointPath(sessionId, pos));
+                TryDelete(ImportCheckpointPath(sessionId, pos));
+            }
         }
     }
 

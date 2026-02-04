@@ -307,9 +307,13 @@ public sealed class SessionManager
             _cursors[id] = newCursor;
 
             // Create checkpoint using the stored DocumentSnapshot (sync always forces a checkpoint)
+            // Use import checkpoint path for Import entries, regular checkpoint path for ExternalSync
             if (syncEntry.SyncMeta?.DocumentSnapshot is not null)
             {
-                _store.PersistCheckpoint(id, newCursor, syncEntry.SyncMeta.DocumentSnapshot);
+                if (syncEntry.EntryType == WalEntryType.Import)
+                    _store.PersistImportCheckpoint(id, newCursor, syncEntry.SyncMeta.DocumentSnapshot);
+                else
+                    _store.PersistCheckpoint(id, newCursor, syncEntry.SyncMeta.DocumentSnapshot);
             }
 
             // Replace in-memory session
@@ -387,12 +391,12 @@ public sealed class SessionManager
         var actualSteps = Math.Min(steps, walCount - cursor);
         var newCursor = cursor + actualSteps;
 
-        // Check if any entries in the redo range are ExternalSync
+        // Check if any entries in the redo range are ExternalSync or Import
         var walEntries = _store.ReadWalEntries(id);
         var hasExternalSync = false;
         for (int i = cursor; i < newCursor && i < walEntries.Count; i++)
         {
-            if (walEntries[i].EntryType == WalEntryType.ExternalSync)
+            if (walEntries[i].EntryType is WalEntryType.ExternalSync or WalEntryType.Import)
             {
                 hasExternalSync = true;
                 break;
@@ -476,7 +480,7 @@ public sealed class SessionManager
         {
             var walEntries = _store.ReadWalEntries(id);
             var lastSync = walEntries
-                .Where(e => e.EntryType == WalEntryType.ExternalSync && e.SyncMeta?.NewHash is not null)
+                .Where(e => e.EntryType is WalEntryType.ExternalSync or WalEntryType.Import && e.SyncMeta?.NewHash is not null)
                 .LastOrDefault();
             return lastSync?.SyncMeta?.NewHash;
         }
@@ -534,11 +538,11 @@ public sealed class SessionManager
                         Description = we.Description ?? "",
                         IsCurrent = cursor == i,
                         IsCheckpoint = checkpointPositions.Contains(i),
-                        IsExternalSync = we.EntryType == WalEntryType.ExternalSync
+                        IsExternalSync = we.EntryType is WalEntryType.ExternalSync or WalEntryType.Import
                     };
 
-                    // Populate sync summary for external sync entries
-                    if (we.EntryType == WalEntryType.ExternalSync && we.SyncMeta is not null)
+                    // Populate sync summary for external sync / import entries
+                    if (we.EntryType is WalEntryType.ExternalSync or WalEntryType.Import && we.SyncMeta is not null)
                     {
                         historyEntry.SyncSummary = new ExternalSyncSummary
                         {

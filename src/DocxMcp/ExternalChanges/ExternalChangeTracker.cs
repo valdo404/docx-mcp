@@ -138,14 +138,56 @@ public sealed class ExternalChangeTracker : IDisposable
     }
 
     /// <summary>
+    /// Register a session for tracking without creating a FileSystemWatcher.
+    /// Use this when an external component (e.g., WatchDaemon) manages the FSW.
+    /// </summary>
+    public void EnsureTracked(string sessionId)
+    {
+        if (_watchedSessions.ContainsKey(sessionId))
+            return;
+
+        try
+        {
+            var session = _sessions.Get(sessionId);
+            if (session.SourcePath is null || !File.Exists(session.SourcePath))
+                return;
+
+            var watched = new WatchedSession
+            {
+                SessionId = sessionId,
+                SourcePath = session.SourcePath,
+                LastKnownHash = ComputeFileHash(session.SourcePath),
+                LastKnownSize = new FileInfo(session.SourcePath).Length,
+                LastChecked = DateTime.UtcNow,
+                SessionSnapshot = session.ToBytes()
+            };
+
+            _watchedSessions[sessionId] = watched;
+            _pendingChanges[sessionId] = [];
+
+            if (DebugEnabled)
+                Console.Error.WriteLine($"[DEBUG:tracker] Registered session {sessionId} for tracking (no FSW)");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to register session {SessionId} for tracking.", sessionId);
+        }
+    }
+
+    /// <summary>
     /// Manually check for external changes (polling fallback).
     /// </summary>
     public ExternalChangePatch? CheckForChanges(string sessionId)
     {
+        if (DebugEnabled)
+            Console.Error.WriteLine($"[DEBUG:tracker] CheckForChanges called for session {sessionId}");
+
         if (!_watchedSessions.TryGetValue(sessionId, out var watched))
         {
-            // Not being watched, start watching and check
-            StartWatching(sessionId);
+            if (DebugEnabled)
+                Console.Error.WriteLine($"[DEBUG:tracker] Session not tracked, registering without FSW");
+            // Not being tracked, register without FSW and check
+            EnsureTracked(sessionId);
             if (!_watchedSessions.TryGetValue(sessionId, out watched))
                 return null;
         }
@@ -241,7 +283,7 @@ public sealed class ExternalChangeTracker : IDisposable
     /// <param name="sessionId">Session ID to sync.</param>
     /// <param name="changeId">Optional change ID to acknowledge.</param>
     /// <returns>Result of the sync operation.</returns>
-    public SyncResult SyncExternalChanges(string sessionId, string? changeId = null)
+    public SyncResult SyncExternalChanges(string sessionId, string? changeId = null, bool isImport = false)
     {
         lock (_lock)
         {
@@ -319,7 +361,7 @@ public sealed class ExternalChangeTracker : IDisposable
                 // 5. Build WAL entry with FULL document snapshot
                 var walEntry = new WalEntry
                 {
-                    EntryType = WalEntryType.ExternalSync,
+                    EntryType = isImport ? WalEntryType.Import : WalEntryType.ExternalSync,
                     Timestamp = DateTime.UtcNow,
                     Patches = JsonSerializer.Serialize(diff.ToPatches(), DocxMcp.Models.DocxJsonContext.Default.ListJsonObject),
                     Description = BuildSyncDescription(diff.Summary, uncoveredChanges),
@@ -353,7 +395,7 @@ public sealed class ExternalChangeTracker : IDisposable
                     "External sync completed for session {SessionId}. Body: +{Added} -{Removed} ~{Modified}. Uncovered: {Uncovered}",
                     sessionId, diff.Summary.Added, diff.Summary.Removed, diff.Summary.Modified, uncoveredChanges.Count);
 
-                return SyncResult.Synced(diff.Summary, uncoveredChanges, changeId, walPosition);
+                return SyncResult.Synced(diff.Summary, uncoveredChanges, diff.ToPatches(), changeId, walPosition);
             }
             catch (Exception ex)
             {
@@ -392,23 +434,41 @@ public sealed class ExternalChangeTracker : IDisposable
 
     private void OnFileChanged(string sessionId, string filePath)
     {
+        if (DebugEnabled)
+            Console.Error.WriteLine($"[DEBUG:tracker] FSW fired for {Path.GetFileName(filePath)} (session {sessionId})");
+
         // Debounce: wait a bit for file to be fully written
         Task.Delay(500).ContinueWith(_ =>
         {
             try
             {
+                if (DebugEnabled)
+                    Console.Error.WriteLine($"[DEBUG:tracker] Processing FSW event after 500ms debounce");
+
                 if (_watchedSessions.TryGetValue(sessionId, out var watched))
                 {
                     var patch = DetectAndGeneratePatch(watched);
                     if (patch is not null)
                     {
+                        if (DebugEnabled)
+                            Console.Error.WriteLine($"[DEBUG:tracker] Change detected, raising event (patch={patch.Id})");
                         RaiseExternalChangeDetected(sessionId, patch);
                     }
+                    else if (DebugEnabled)
+                    {
+                        Console.Error.WriteLine($"[DEBUG:tracker] No changes detected after FSW event");
+                    }
+                }
+                else if (DebugEnabled)
+                {
+                    Console.Error.WriteLine($"[DEBUG:tracker] Session {sessionId} not in watched sessions");
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Error processing file change for session {SessionId}.", sessionId);
+                if (DebugEnabled)
+                    Console.Error.WriteLine($"[DEBUG:tracker] Exception in OnFileChanged: {ex}");
             }
         });
     }
@@ -431,16 +491,25 @@ public sealed class ExternalChangeTracker : IDisposable
         {
             try
             {
+                if (DebugEnabled)
+                    Console.Error.WriteLine($"[DEBUG:tracker] DetectAndGeneratePatch for {Path.GetFileName(watched.SourcePath)}");
+
                 if (!File.Exists(watched.SourcePath))
                 {
+                    if (DebugEnabled)
+                        Console.Error.WriteLine($"[DEBUG:tracker] Source file does not exist: {watched.SourcePath}");
                     _logger.LogWarning("Source file no longer exists: {Path}", watched.SourcePath);
                     return null;
                 }
 
                 // Check if file has actually changed
                 var currentHash = ComputeFileHash(watched.SourcePath);
+                if (DebugEnabled)
+                    Console.Error.WriteLine($"[DEBUG:tracker] File hash: {currentHash}, Last known: {watched.LastKnownHash}");
                 if (currentHash == watched.LastKnownHash)
                 {
+                    if (DebugEnabled)
+                        Console.Error.WriteLine($"[DEBUG:tracker] Hash unchanged, no changes");
                     return null; // No change
                 }
 
@@ -453,9 +522,14 @@ public sealed class ExternalChangeTracker : IDisposable
                 // Compare with session snapshot
                 var diff = DiffEngine.Compare(watched.SessionSnapshot, externalBytes);
 
+                if (DebugEnabled)
+                    Console.Error.WriteLine($"[DEBUG:tracker] Diff result: HasChanges={diff.HasChanges}, HasAnyChanges={diff.HasAnyChanges}, Changes={diff.Changes.Count}, Uncovered={diff.UncoveredChanges.Count}");
+
                 if (!diff.HasChanges)
                 {
                     // File changed but no logical diff (maybe just metadata)
+                    if (DebugEnabled)
+                        Console.Error.WriteLine($"[DEBUG:tracker] No body changes, updating hash only");
                     watched.LastKnownHash = currentHash;
                     watched.LastChecked = DateTime.UtcNow;
                     return null;

@@ -78,7 +78,7 @@ public static class ContentHasher
     /// Strip all ID and revision attributes from an element and its descendants.
     /// Also removes namespace declarations for dmcp namespace to ensure consistent hashing.
     /// </summary>
-    private static void StripIdAttributes(OpenXmlElement element)
+    internal static void StripIdAttributes(OpenXmlElement element)
     {
         // Get all attributes and find ones to remove
         var attributes = element.GetAttributes().ToList();
