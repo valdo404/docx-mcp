@@ -38,7 +38,7 @@ jobs:
             artifact-name: linux-arm64
           # macOS
           - target: x86_64-apple-darwin
-            runner: macos-13  # Intel runner
+            runner: macos-15-intel  # Intel runner
             artifact-name: macos-x64
           - target: aarch64-apple-darwin
             runner: macos-latest  # Apple Silicon runner
