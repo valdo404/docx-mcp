@@ -33,7 +33,6 @@ RUN apt-get update && \
 WORKDIR /src
 
 # Copy .NET source
-COPY Directory.Build.props ./
 COPY DocxMcp.sln ./
 COPY proto/ ./proto/
 COPY src/ ./src/
