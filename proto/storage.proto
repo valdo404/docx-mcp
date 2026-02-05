@@ -1,0 +1,294 @@
+syntax = "proto3";
+
+option csharp_namespace = "DocxMcp.Grpc";
+
+package docx.storage;
+
+// StorageService provides tenant-aware storage operations for docx-mcp.
+// All operations are scoped by tenant_id for multi-tenant isolation.
+// Large file operations use streaming to handle documents > 4MB.
+service StorageService {
+  // Session lifecycle (streaming for large files)
+  rpc LoadSession(LoadSessionRequest) returns (stream DataChunk);
+  rpc SaveSession(stream SaveSessionChunk) returns (SaveSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  rpc SessionExists(SessionExistsRequest) returns (SessionExistsResponse);
+
+  // Index operations
+  rpc LoadIndex(LoadIndexRequest) returns (LoadIndexResponse);
+  rpc SaveIndex(SaveIndexRequest) returns (SaveIndexResponse);
+
+  // WAL operations
+  rpc AppendWal(AppendWalRequest) returns (AppendWalResponse);
+  rpc ReadWal(ReadWalRequest) returns (ReadWalResponse);
+  rpc TruncateWal(TruncateWalRequest) returns (TruncateWalResponse);
+
+  // Checkpoint operations (streaming for large files)
+  rpc SaveCheckpoint(stream SaveCheckpointChunk) returns (SaveCheckpointResponse);
+  rpc LoadCheckpoint(LoadCheckpointRequest) returns (stream LoadCheckpointChunk);
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+
+  // Lock operations - locks are on (tenant_id, resource_id) pairs
+  rpc AcquireLock(AcquireLockRequest) returns (AcquireLockResponse);
+  rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockResponse);
+  rpc RenewLock(RenewLockRequest) returns (RenewLockResponse);
+
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Common context for all tenant-scoped operations
+message TenantContext {
+  string tenant_id = 1;
+}
+
+// =============================================================================
+// Streaming Chunk Messages
+// =============================================================================
+
+// Generic data chunk for streaming large binary payloads.
+// Recommended chunk size: 64KB - 1MB
+message DataChunk {
+  bytes data = 1;
+  bool is_last = 2;           // True for the final chunk
+  // Metadata only in first chunk
+  bool found = 3;             // For load operations: whether the resource exists
+  uint64 total_size = 4;      // Total size in bytes (optional, for progress)
+}
+
+// Chunk for SaveSession streaming upload
+message SaveSessionChunk {
+  // First chunk must include metadata
+  TenantContext context = 1;
+  string session_id = 2;
+  // All chunks include data
+  bytes data = 3;
+  bool is_last = 4;
+}
+
+// Chunk for SaveCheckpoint streaming upload
+message SaveCheckpointChunk {
+  // First chunk must include metadata
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 position = 3;        // WAL position this checkpoint represents
+  // All chunks include data
+  bytes data = 4;
+  bool is_last = 5;
+}
+
+// Chunk for LoadCheckpoint streaming download (includes position metadata)
+message LoadCheckpointChunk {
+  bytes data = 1;
+  bool is_last = 2;
+  bool found = 3;             // Only meaningful in first chunk
+  uint64 position = 4;        // Actual checkpoint position (only in first chunk)
+  uint64 total_size = 5;      // Total size in bytes (only in first chunk)
+}
+
+// =============================================================================
+// Session Messages
+// =============================================================================
+
+message LoadSessionRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+// Response is stream of DataChunk
+
+message SaveSessionResponse {
+  bool success = 1;
+}
+
+message ListSessionsRequest {
+  TenantContext context = 1;
+}
+
+message SessionInfo {
+  string session_id = 1;
+  string source_path = 2;
+  int64 created_at_unix = 3;
+  int64 modified_at_unix = 4;
+  int64 size_bytes = 5;
+}
+
+message ListSessionsResponse {
+  repeated SessionInfo sessions = 1;
+}
+
+message DeleteSessionRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message DeleteSessionResponse {
+  bool success = 1;
+  bool existed = 2;
+}
+
+message SessionExistsRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message SessionExistsResponse {
+  bool exists = 1;
+}
+
+// =============================================================================
+// Index Messages
+// =============================================================================
+
+message LoadIndexRequest {
+  TenantContext context = 1;
+}
+
+message LoadIndexResponse {
+  bytes index_json = 1;
+  bool found = 2;
+}
+
+message SaveIndexRequest {
+  TenantContext context = 1;
+  bytes index_json = 2;
+}
+
+message SaveIndexResponse {
+  bool success = 1;
+}
+
+// =============================================================================
+// WAL Messages
+// =============================================================================
+
+message WalEntry {
+  uint64 position = 1;
+  string operation = 2;       // "add", "replace", "remove", etc.
+  string path = 3;            // Document path affected
+  bytes patch_json = 4;       // The patch data as JSON
+  int64 timestamp_unix = 5;
+}
+
+message AppendWalRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  repeated WalEntry entries = 3;
+}
+
+message AppendWalResponse {
+  bool success = 1;
+  uint64 new_position = 2;    // Position after append
+}
+
+message ReadWalRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 from_position = 3;   // 0 = from beginning
+  uint64 limit = 4;           // 0 = no limit
+}
+
+message ReadWalResponse {
+  repeated WalEntry entries = 1;
+  bool has_more = 2;
+}
+
+message TruncateWalRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 keep_from_position = 3;  // Keep entries >= this position
+}
+
+message TruncateWalResponse {
+  bool success = 1;
+  uint64 entries_removed = 2;
+}
+
+// =============================================================================
+// Checkpoint Messages
+// =============================================================================
+
+message SaveCheckpointResponse {
+  bool success = 1;
+}
+
+message LoadCheckpointRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 position = 3;        // 0 = latest checkpoint
+}
+
+// Response is stream of LoadCheckpointChunk
+
+message ListCheckpointsRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message CheckpointInfo {
+  uint64 position = 1;
+  int64 created_at_unix = 2;
+  int64 size_bytes = 3;
+}
+
+message ListCheckpointsResponse {
+  repeated CheckpointInfo checkpoints = 1;
+}
+
+// =============================================================================
+// Lock Messages
+// =============================================================================
+
+// Locks are on the pair (tenant_id, resource_id).
+// This provides isolation between tenants while allowing concurrent access
+// to different resources within a tenant.
+
+message AcquireLockRequest {
+  TenantContext context = 1;
+  string resource_id = 2;     // e.g., session_id
+  string holder_id = 3;       // Instance identifier (UUID recommended)
+  int32 ttl_seconds = 4;      // TTL to prevent orphan locks (default 60s)
+}
+
+message AcquireLockResponse {
+  bool acquired = 1;
+  string current_holder = 2;  // If not acquired, who holds it
+  int64 expires_at_unix = 3;  // Lock expiration timestamp
+}
+
+message ReleaseLockRequest {
+  TenantContext context = 1;
+  string resource_id = 2;
+  string holder_id = 3;       // Must match the original holder
+}
+
+message ReleaseLockResponse {
+  bool released = 1;
+  string reason = 2;          // "ok", "not_owner", "not_found", "expired"
+}
+
+message RenewLockRequest {
+  TenantContext context = 1;
+  string resource_id = 2;
+  string holder_id = 3;
+  int32 ttl_seconds = 4;      // New TTL from now
+}
+
+message RenewLockResponse {
+  bool renewed = 1;
+  int64 expires_at_unix = 2;
+  string reason = 3;          // "ok", "not_owner", "not_found"
+}
+
+// =============================================================================
+// Health Check
+// =============================================================================
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  string backend = 2;         // "local" or "r2"
+  string version = 3;
+}
