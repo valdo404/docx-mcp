@@ -28,11 +28,6 @@ const tenant = Astro.locals.tenant!;
           <h3>{t('dashboard.documents')}</h3>
           <p class="coming-soon">{t('dashboard.comingSoon')}</p>
         </div>
-
-        <div class="card">
-          <h3>{t('dashboard.sessions')}</h3>
-          <p class="coming-soon">{t('dashboard.comingSoon')}</p>
-        </div>
       </div>
 
       <PatManager lang="fr" />
@@ -66,7 +61,7 @@ const tenant = Astro.locals.tenant!;
 
   .cards {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: var(--spacing-xxl);
     margin-bottom: var(--spacing-xxxl);
   }
