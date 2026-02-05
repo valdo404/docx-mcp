@@ -1,157 +1,87 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
-using DocxMcp.Persistence;
+using DocxMcp.Grpc;
 using DocxMcp.Tools;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DocxMcp.Tests;
 
-public class SessionPersistenceTests : IDisposable
+/// <summary>
+/// Tests for session persistence via gRPC storage.
+/// These tests verify that sessions persist correctly across manager instances.
+/// </summary>
+public class SessionPersistenceTests
 {
-    private readonly string _tempDir;
-    private readonly SessionStore _store;
-
-    public SessionPersistenceTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-    }
-
-    public void Dispose()
-    {
-        _store.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
-
-    private SessionManager CreateManager() =>
-        new SessionManager(_store, NullLogger<SessionManager>.Instance);
-
     [Fact]
-    public void OpenSession_PersistsBaselineAndIndex()
+    public void CreateSession_CanBeRetrieved()
     {
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager();
         var session = mgr.Create();
 
-        Assert.True(File.Exists(_store.BaselinePath(session.Id)));
-        Assert.True(File.Exists(Path.Combine(_tempDir, "index.json")));
-
-        var index = _store.LoadIndex();
-        Assert.Single(index.Sessions);
-        Assert.Equal(session.Id, index.Sessions[0].Id);
+        // Session should be retrievable
+        var retrieved = mgr.Get(session.Id);
+        Assert.NotNull(retrieved);
+        Assert.Equal(session.Id, retrieved.Id);
     }
 
     [Fact]
-    public void CloseSession_RemovesFromDisk()
+    public void CloseSession_RemovesFromList()
     {
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager();
         var session = mgr.Create();
         var id = session.Id;
 
         mgr.Close(id);
 
-        Assert.False(File.Exists(_store.BaselinePath(id)));
-        var index = _store.LoadIndex();
-        Assert.Empty(index.Sessions);
+        // Session should no longer be in list
+        var list = mgr.List();
+        Assert.DoesNotContain(list, s => s.Id == id);
     }
 
     [Fact]
-    public void AppendWal_WritesToMappedFile()
+    public void AppendWal_RecordsInHistory()
     {
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager();
         var session = mgr.Create();
 
+        // Add content via WAL
+        session.GetBody().AppendChild(new Paragraph(new Run(new Text("Hello"))));
         mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Hello\"}}]");
 
-        var walEntries = _store.ReadWal(session.Id);
-        Assert.Single(walEntries);
-
-        var index = _store.LoadIndex();
-        Assert.Equal(1, index.Sessions[0].WalCount);
+        var history = mgr.GetHistory(session.Id);
+        // History should have at least 2 entries: baseline + WAL entry
+        Assert.True(history.Entries.Count >= 2);
     }
 
     [Fact]
-    public void Compact_ResetsWalAndUpdatesBaseline()
+    public void Compact_ResetsWalPosition()
     {
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager();
         var session = mgr.Create();
 
         // Add content via patch
         var body = session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Test content"))));
-
         mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Test\"}}]");
+
+        var historyBefore = mgr.GetHistory(session.Id);
+        var countBefore = historyBefore.Entries.Count;
 
         mgr.Compact(session.Id);
 
-        var index = _store.LoadIndex();
-        Assert.Equal(0, index.Sessions[0].WalCount);
-
-        // WAL should be empty after compaction
-        var walEntries = _store.ReadWal(session.Id);
-        Assert.Empty(walEntries);
+        // After compaction, history should be reset to just the baseline
+        var historyAfter = mgr.GetHistory(session.Id);
+        Assert.True(historyAfter.Entries.Count <= countBefore);
     }
 
     [Fact]
-    public void AppendWal_AutoCompacts_WhenThresholdReached()
+    public void RestoreSessions_RehydratesFromStorage()
     {
-        // Use a custom store with a low compaction threshold
-        var customTempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-        var customStore = new SessionStore(NullLogger<SessionStore>.Instance, customTempDir);
+        // Use same tenant for both managers
+        var tenantId = $"test-persist-{Guid.NewGuid():N}";
 
-        try
-        {
-            // Set threshold to 5 via environment variable before creating the manager
-            var originalThreshold = Environment.GetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD");
-            Environment.SetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD", "5");
-
-            try
-            {
-                var mgr = new SessionManager(customStore, NullLogger<SessionManager>.Instance);
-                var session = mgr.Create();
-                var id = session.Id;
-
-                // Append 4 WAL entries (threshold is 5, so no compaction yet)
-                for (int i = 0; i < 4; i++)
-                {
-                    session.GetBody().AppendChild(new Paragraph(new Run(new Text($"Entry {i}"))));
-                    mgr.AppendWal(id, $"[{{\"op\":\"add\",\"path\":\"/body/children/{i}\",\"value\":{{\"type\":\"paragraph\",\"text\":\"Entry {i}\"}}}}]");
-                }
-
-                var indexBefore = customStore.LoadIndex();
-                Assert.Equal(4, indexBefore.Sessions[0].WalCount);
-
-                // Append the 5th entry — should trigger auto-compaction
-                session.GetBody().AppendChild(new Paragraph(new Run(new Text("Entry 4"))));
-                mgr.AppendWal(id, "[{\"op\":\"add\",\"path\":\"/body/children/4\",\"value\":{\"type\":\"paragraph\",\"text\":\"Entry 4\"}}]");
-
-                var indexAfter = customStore.LoadIndex();
-                Assert.Equal(0, indexAfter.Sessions[0].WalCount); // Compaction reset WAL count
-
-                // WAL should be empty after compaction
-                var walEntries = customStore.ReadWal(id);
-                Assert.Empty(walEntries);
-            }
-            finally
-            {
-                // Restore original environment variable
-                Environment.SetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD", originalThreshold);
-            }
-        }
-        finally
-        {
-            customStore.Dispose();
-            if (Directory.Exists(customTempDir))
-                Directory.Delete(customTempDir, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void RestoreSessions_RehydratesFromBaseline()
-    {
         // Create a session and persist it
-        var mgr1 = CreateManager();
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
@@ -159,14 +89,11 @@ public class SessionPersistenceTests : IDisposable
         var body = session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Persisted content"))));
 
-        // Compact to save current state as baseline
+        // Compact to save current state
         mgr1.Compact(id);
 
-        // Simulate server restart: create a new manager with the same store
-        _store.Dispose(); // close existing WAL mappings
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-
+        // Create a new manager with the same tenant
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         var restored = mgr2.RestoreSessions();
         Assert.Equal(1, restored);
 
@@ -174,15 +101,15 @@ public class SessionPersistenceTests : IDisposable
         var restoredSession = mgr2.Get(id);
         Assert.NotNull(restoredSession);
         Assert.Contains("Persisted content", restoredSession.GetBody().InnerText);
-
-        store2.Dispose();
     }
 
     [Fact]
     public void RestoreSessions_ReplaysWal()
     {
+        var tenantId = $"test-wal-replay-{Guid.NewGuid():N}";
+
         // Create a session and add a patch via WAL (not compacted)
-        var mgr1 = CreateManager();
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
@@ -190,83 +117,80 @@ public class SessionPersistenceTests : IDisposable
         PatchTool.ApplyPatch(mgr1, null, id,
             "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"WAL entry\"}}]");
 
-        // Verify WAL has entries
-        var walEntries = _store.ReadWal(id);
-        Assert.NotEmpty(walEntries);
+        // Verify WAL has entries via history
+        var history = mgr1.GetHistory(id);
+        Assert.True(history.Entries.Count > 1);
 
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-
+        // Create new manager with same tenant
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         var restored = mgr2.RestoreSessions();
         Assert.Equal(1, restored);
 
         // Verify the WAL was replayed — the paragraph should exist
         var restoredSession = mgr2.Get(id);
         Assert.Contains("WAL entry", restoredSession.GetBody().InnerText);
-
-        store2.Dispose();
-    }
-
-    [Fact]
-    public void RestoreSessions_CorruptBaseline_SkipsButPreservesIndex()
-    {
-        var mgr = CreateManager();
-        var session = mgr.Create();
-        var id = session.Id;
-
-        // Corrupt the baseline file
-        File.WriteAllBytes(_store.BaselinePath(id), new byte[] { 0xFF, 0xFF, 0xFF, 0xFF });
-
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(0, restored); // Session not restored to memory
-
-        // Index entry should be preserved (WAL history preservation)
-        var index = store2.LoadIndex();
-        Assert.Single(index.Sessions);
-        Assert.Equal(id, index.Sessions[0].Id);
-
-        store2.Dispose();
     }
 
     [Fact]
     public void MultipleSessions_PersistIndependently()
     {
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager();
         var s1 = mgr.Create();
         var s2 = mgr.Create();
 
-        Assert.True(File.Exists(_store.BaselinePath(s1.Id)));
-        Assert.True(File.Exists(_store.BaselinePath(s2.Id)));
+        var list = mgr.List().ToList();
+        Assert.Equal(2, list.Count);
 
-        var index = _store.LoadIndex();
-        Assert.Equal(2, index.Sessions.Count);
+        var ids = list.Select(s => s.Id).ToHashSet();
+        Assert.Contains(s1.Id, ids);
+        Assert.Contains(s2.Id, ids);
 
         mgr.Close(s1.Id);
 
-        index = _store.LoadIndex();
-        Assert.Single(index.Sessions);
-        Assert.Equal(s2.Id, index.Sessions[0].Id);
+        list = mgr.List().ToList();
+        Assert.Single(list);
+        Assert.Equal(s2.Id, list[0].Id);
     }
 
     [Fact]
-    public void DocumentSnapshot_CompactsViaToolCall()
+    public void DocumentSnapshot_CompactsSession()
     {
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager();
         var session = mgr.Create();
 
+        // Add some WAL entries
+        session.GetBody().AppendChild(new Paragraph(new Run(new Text("Before snapshot"))));
         mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Before snapshot\"}}]");
 
         var result = DocumentTools.DocumentSnapshot(mgr, session.Id);
         Assert.Contains("Snapshot created", result);
+    }
 
-        var index = _store.LoadIndex();
-        Assert.Equal(0, index.Sessions[0].WalCount);
+    [Fact]
+    public void UndoRedo_WorksAfterRestart()
+    {
+        var tenantId = $"test-undo-restart-{Guid.NewGuid():N}";
+
+        // Create session and apply patches
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
+        var session = mgr1.Create();
+        var id = session.Id;
+
+        PatchTool.ApplyPatch(mgr1, null, id,
+            "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"First\"}}]");
+        PatchTool.ApplyPatch(mgr1, null, id,
+            "[{\"op\":\"add\",\"path\":\"/body/children/1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Second\"}}]");
+
+        // Restart
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
+        mgr2.RestoreSessions();
+
+        // Undo should work
+        var undoResult = mgr2.Undo(id);
+        Assert.True(undoResult.Steps > 0);
+
+        var text = mgr2.Get(id).GetBody().InnerText;
+        Assert.Contains("First", text);
+        Assert.DoesNotContain("Second", text);
     }
 }

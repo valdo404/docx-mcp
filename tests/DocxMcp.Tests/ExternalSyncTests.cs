@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.Diff;
 using DocxMcp.ExternalChanges;
+using DocxMcp.Grpc;
 using DocxMcp.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -16,7 +17,6 @@ public class ExternalSyncTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly List<DocxSession> _sessions = [];
-    private readonly SessionStore _store;
     private readonly SessionManager _sessionManager;
     private readonly ExternalChangeTracker _tracker;
 
@@ -25,9 +25,9 @@ public class ExternalSyncTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-sync-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
 
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        _sessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        _sessionManager = TestHelpers.CreateSessionManager();
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
     #region SyncExternalChanges Tests
@@ -86,10 +86,14 @@ public class ExternalSyncTests : IDisposable
         // Act
         var result = _tracker.SyncExternalChanges(session.Id);
 
-        // Assert
-        var walPosition = result.WalPosition!.Value;
-        var checkpointPath = _store.CheckpointPath(session.Id, walPosition);
-        Assert.True(File.Exists(checkpointPath), "Checkpoint should be created for sync");
+        // Assert - checkpoint is created at the WAL position
+        Assert.NotNull(result.WalPosition);
+        Assert.True(result.WalPosition > 0, "Checkpoint should be created for sync");
+
+        // Verify checkpoint exists by checking that we can jump to that position
+        var history = _sessionManager.GetHistory(session.Id);
+        var syncEntry = history.Entries.FirstOrDefault(e => e.IsExternalSync);
+        Assert.NotNull(syncEntry);
     }
 
     [Fact]
@@ -363,7 +367,7 @@ public class ExternalSyncTests : IDisposable
     public void WalEntry_ExternalSync_SerializesAndDeserializesCorrectly()
     {
         // Arrange
-        var entry = new WalEntry
+        var entry = new DocxMcp.Persistence.WalEntry
         {
             EntryType = WalEntryType.ExternalSync,
             Timestamp = DateTime.UtcNow,
@@ -553,7 +557,10 @@ public class ExternalSyncTests : IDisposable
             catch { /* ignore */ }
         }
 
-        try { Directory.Delete(_tempDir, true); }
-        catch { /* ignore */ }
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); }
+            catch { /* ignore */ }
+        }
     }
 }

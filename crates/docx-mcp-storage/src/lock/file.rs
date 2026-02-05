@@ -4,6 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, instrument, warn};
 
 use super::traits::{LockAcquireResult, LockManager, LockReleaseResult, LockRenewResult};
@@ -122,20 +123,38 @@ impl LockManager for FileLock {
         holder_id: &str,
         ttl: Duration,
     ) -> Result<LockAcquireResult, StorageError> {
-        // Check for existing lock
-        if let Some(existing) = self.read_lock(tenant_id, resource_id).await {
-            if existing.holder_id == holder_id {
-                // We already hold the lock, renew it
-                let expires_at = chrono::Utc::now().timestamp() + ttl.as_secs() as i64;
-                let lock = LockFile {
-                    holder_id: holder_id.to_string(),
-                    expires_at,
-                };
-                self.write_lock(tenant_id, resource_id, &lock).await?;
+        self.ensure_locks_dir(tenant_id).await?;
+        let path = self.lock_path(tenant_id, resource_id);
+        let expires_at = chrono::Utc::now().timestamp() + ttl.as_secs() as i64;
+
+        // Try to atomically create the lock file (O_CREAT | O_EXCL)
+        let lock_content = LockFile {
+            holder_id: holder_id.to_string(),
+            expires_at,
+        };
+        let content = serde_json::to_string(&lock_content).map_err(|e| {
+            StorageError::Serialization(format!("Failed to serialize lock: {}", e))
+        })?;
+
+        // Try atomic creation first
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_CREAT | O_EXCL - fails if exists
+            .open(&path)
+            .await
+        {
+            Ok(mut file) => {
+                // Successfully created - we have the lock
+                file.write_all(content.as_bytes()).await.map_err(|e| {
+                    StorageError::Io(format!("Failed to write lock file: {}", e))
+                })?;
+                file.flush().await.map_err(|e| {
+                    StorageError::Io(format!("Failed to flush lock file: {}", e))
+                })?;
 
                 debug!(
-                    "Renewed existing lock on {}/{} for {}",
-                    tenant_id, resource_id, holder_id
+                    "Acquired lock on {}/{} for {} (expires at {})",
+                    tenant_id, resource_id, holder_id, expires_at
                 );
                 return Ok(LockAcquireResult {
                     acquired: true,
@@ -143,37 +162,84 @@ impl LockManager for FileLock {
                     expires_at,
                 });
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Lock file exists - check if it's ours or expired
+                if let Some(existing) = self.read_lock(tenant_id, resource_id).await {
+                    if existing.holder_id == holder_id {
+                        // We already hold the lock, renew it
+                        self.write_lock(tenant_id, resource_id, &lock_content).await?;
 
-            // Someone else holds the lock
-            debug!(
-                "Lock on {}/{} held by {} (requested by {})",
-                tenant_id, resource_id, existing.holder_id, holder_id
-            );
-            return Ok(LockAcquireResult {
-                acquired: false,
-                current_holder: Some(existing.holder_id),
-                expires_at: existing.expires_at,
-            });
+                        debug!(
+                            "Renewed existing lock on {}/{} for {}",
+                            tenant_id, resource_id, holder_id
+                        );
+                        return Ok(LockAcquireResult {
+                            acquired: true,
+                            current_holder: None,
+                            expires_at,
+                        });
+                    }
+
+                    // Someone else holds the lock
+                    debug!(
+                        "Lock on {}/{} held by {} (requested by {})",
+                        tenant_id, resource_id, existing.holder_id, holder_id
+                    );
+                    return Ok(LockAcquireResult {
+                        acquired: false,
+                        current_holder: Some(existing.holder_id),
+                        expires_at: existing.expires_at,
+                    });
+                }
+
+                // Lock file exists but is expired/invalid - was cleaned up by read_lock
+                // Try again with atomic create
+                match tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .await
+                {
+                    Ok(mut file) => {
+                        file.write_all(content.as_bytes()).await.map_err(|e| {
+                            StorageError::Io(format!("Failed to write lock file: {}", e))
+                        })?;
+                        file.flush().await.map_err(|e| {
+                            StorageError::Io(format!("Failed to flush lock file: {}", e))
+                        })?;
+
+                        debug!(
+                            "Acquired lock on {}/{} for {} after cleanup (expires at {})",
+                            tenant_id, resource_id, holder_id, expires_at
+                        );
+                        return Ok(LockAcquireResult {
+                            acquired: true,
+                            current_holder: None,
+                            expires_at,
+                        });
+                    }
+                    Err(_) => {
+                        // Another process grabbed it
+                        if let Some(existing) = self.read_lock(tenant_id, resource_id).await {
+                            return Ok(LockAcquireResult {
+                                acquired: false,
+                                current_holder: Some(existing.holder_id),
+                                expires_at: existing.expires_at,
+                            });
+                        }
+                        // Shouldn't happen, but fail gracefully
+                        return Ok(LockAcquireResult {
+                            acquired: false,
+                            current_holder: None,
+                            expires_at: 0,
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(StorageError::Io(format!("Failed to create lock file: {}", e)));
+            }
         }
-
-        // No lock exists, create one
-        let expires_at = chrono::Utc::now().timestamp() + ttl.as_secs() as i64;
-        let lock = LockFile {
-            holder_id: holder_id.to_string(),
-            expires_at,
-        };
-
-        self.write_lock(tenant_id, resource_id, &lock).await?;
-
-        debug!(
-            "Acquired lock on {}/{} for {} (expires at {})",
-            tenant_id, resource_id, holder_id, expires_at
-        );
-        Ok(LockAcquireResult {
-            acquired: true,
-            current_holder: None,
-            expires_at,
-        })
     }
 
     #[instrument(skip(self), level = "debug")]

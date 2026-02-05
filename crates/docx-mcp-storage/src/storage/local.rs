@@ -400,13 +400,19 @@ impl StorageBackend for LocalStorage {
     ) -> Result<u64, StorageError> {
         let (entries, _) = self.read_wal(tenant_id, session_id, 0, None).await?;
 
-        let to_remove = entries.iter().filter(|e| e.position < keep_from).count() as u64;
-        let to_keep: Vec<_> = entries
-            .into_iter()
-            .filter(|e| e.position >= keep_from)
-            .collect();
+        // Special case: keep_from = 0 means "delete all entries" (clear WAL)
+        // This is because WAL positions start at 1, so keep_from >= 1 would keep
+        // entries from position 1 onwards. To delete everything, use keep_from = 0.
+        let (to_remove, to_keep): (Vec<_>, Vec<_>) = if keep_from == 0 {
+            // Delete all - to_keep is empty
+            (entries, Vec::new())
+        } else {
+            entries.into_iter().partition(|e| e.position < keep_from)
+        };
 
-        if to_remove == 0 {
+        let removed_count = to_remove.len() as u64;
+
+        if removed_count == 0 {
             return Ok(0);
         }
 
@@ -438,8 +444,8 @@ impl StorageBackend for LocalStorage {
             StorageError::Io(format!("Failed to rename temp WAL: {}", e))
         })?;
 
-        debug!("Truncated WAL, removed {} entries", to_remove);
-        Ok(to_remove)
+        debug!("Truncated WAL, removed {} entries", removed_count);
+        Ok(removed_count)
     }
 
     // =========================================================================
@@ -701,5 +707,156 @@ mod tests {
         // Tenant B shouldn't see it
         assert!(!storage.session_exists("tenant-b", "session-1").await.unwrap());
         assert!(storage.list_sessions("tenant-b").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_index_save_load() {
+        let (storage, _temp) = setup().await;
+        let tenant = "test-tenant";
+
+        // Initially no index
+        let loaded = storage.load_index(tenant).await.unwrap();
+        assert!(loaded.is_none());
+
+        // Create and save index with sessions
+        let mut index = SessionIndex::default();
+        index.sessions.insert(
+            "session-1".to_string(),
+            SessionIndexEntry {
+                source_path: Some("/path/to/doc.docx".to_string()),
+                created_at: chrono::Utc::now(),
+                modified_at: chrono::Utc::now(),
+                wal_position: 5,
+                checkpoint_positions: vec![],
+            },
+        );
+
+        storage.save_index(tenant, &index).await.unwrap();
+
+        // Load and verify
+        let loaded = storage.load_index(tenant).await.unwrap().unwrap();
+        assert_eq!(loaded.sessions.len(), 1);
+        assert!(loaded.sessions.contains_key("session-1"));
+        assert_eq!(loaded.sessions["session-1"].wal_position, 5);
+    }
+
+    #[tokio::test]
+    async fn test_index_concurrent_updates_sequential() {
+        // Test that sequential index updates work correctly
+        let (storage, _temp) = setup().await;
+        let tenant = "test-tenant";
+
+        // Simulate 10 sequential session creations
+        for i in 0..10 {
+            // Load current index
+            let mut index = storage.load_index(tenant).await.unwrap().unwrap_or_default();
+
+            // Add a session
+            let session_id = format!("session-{}", i);
+            index.sessions.insert(
+                session_id,
+                SessionIndexEntry {
+                    source_path: None,
+                    created_at: chrono::Utc::now(),
+                    modified_at: chrono::Utc::now(),
+                    wal_position: 0,
+                    checkpoint_positions: vec![],
+                },
+            );
+
+            // Save
+            storage.save_index(tenant, &index).await.unwrap();
+        }
+
+        // Verify all 10 sessions are in the index
+        let final_index = storage.load_index(tenant).await.unwrap().unwrap();
+        assert_eq!(final_index.sessions.len(), 10);
+        for i in 0..10 {
+            assert!(
+                final_index.sessions.contains_key(&format!("session-{}", i)),
+                "Missing session-{}", i
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_index_concurrent_updates_parallel() {
+        use std::sync::Arc;
+        use tokio::sync::Barrier;
+
+        // Test concurrent index updates (simulates the failing .NET test)
+        let (storage, _temp) = setup().await;
+        let storage = Arc::new(storage);
+        let tenant = "test-tenant";
+
+        let barrier = Arc::new(Barrier::new(10));
+        let mut handles = vec![];
+
+        // Spawn 10 concurrent tasks, each adding a session
+        for i in 0..10 {
+            let storage = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            let session_id = format!("session-{}", i);
+
+            let handle = tokio::spawn(async move {
+                // Wait for all tasks to be ready
+                barrier.wait().await;
+
+                // Load current index
+                let mut index = storage.load_index(tenant).await.unwrap().unwrap_or_default();
+
+                // Add a session
+                index.sessions.insert(
+                    session_id.clone(),
+                    SessionIndexEntry {
+                        source_path: None,
+                        created_at: chrono::Utc::now(),
+                        modified_at: chrono::Utc::now(),
+                        wal_position: 0,
+                        checkpoint_positions: vec![],
+                    },
+                );
+
+                // Save
+                storage.save_index(tenant, &index).await.unwrap();
+
+                session_id
+            });
+
+            handles.push(handle);
+        }
+
+        // Collect all session IDs
+        let mut created_ids = vec![];
+        for handle in handles {
+            created_ids.push(handle.await.unwrap());
+        }
+
+        // Verify: WITHOUT locking, we expect some sessions to be lost
+        // This test documents the race condition behavior
+        let final_index = storage.load_index(tenant).await.unwrap().unwrap();
+        let found_count = final_index.sessions.len();
+
+        println!(
+            "Created {} sessions, found {} in index (race condition expected)",
+            created_ids.len(),
+            found_count
+        );
+
+        // This will likely fail due to race conditions - that's expected!
+        // The test shows why distributed locking is needed
+        // In production, the .NET code uses WithLockedIndex to prevent this
+        if found_count < 10 {
+            println!("Race condition confirmed: only {} of 10 sessions in index", found_count);
+            let missing: Vec<_> = created_ids
+                .iter()
+                .filter(|id| !final_index.sessions.contains_key(*id))
+                .collect();
+            println!("Missing sessions: {:?}", missing);
+        }
+
+        // For this test, we just verify that at least some sessions were saved
+        // (not all, due to race condition)
+        assert!(found_count > 0, "At least some sessions should be saved");
     }
 }

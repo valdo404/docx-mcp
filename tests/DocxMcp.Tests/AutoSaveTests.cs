@@ -2,7 +2,6 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.ExternalChanges;
-using DocxMcp.Persistence;
 using DocxMcp.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -13,7 +12,6 @@ public class AutoSaveTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _tempFile;
-    private readonly SessionStore _store;
 
     public AutoSaveTests()
     {
@@ -22,21 +20,17 @@ public class AutoSaveTests : IDisposable
 
         _tempFile = Path.Combine(_tempDir, "test.docx");
         CreateTestDocx(_tempFile, "Original content");
-
-        var sessionsDir = Path.Combine(_tempDir, "sessions");
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, sessionsDir);
     }
 
     public void Dispose()
     {
-        _store.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
 
     private SessionManager CreateManager()
     {
-        var mgr = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        var mgr = TestHelpers.CreateSessionManager();
         var tracker = new ExternalChangeTracker(mgr, NullLogger<ExternalChangeTracker>.Instance);
         mgr.SetExternalChangeTracker(tracker);
         return mgr;
@@ -115,12 +109,7 @@ public class AutoSaveTests : IDisposable
         {
             Environment.SetEnvironmentVariable("DOCX_AUTO_SAVE", "false");
 
-            var store2 = new SessionStore(NullLogger<SessionStore>.Instance,
-                Path.Combine(_tempDir, "sessions-disabled"));
-            var mgr = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-            var tracker = new ExternalChangeTracker(mgr, NullLogger<ExternalChangeTracker>.Instance);
-            mgr.SetExternalChangeTracker(tracker);
-
+            var mgr = CreateManager();
             var session = mgr.Open(_tempFile);
             var originalBytes = File.ReadAllBytes(_tempFile);
 
@@ -132,8 +121,6 @@ public class AutoSaveTests : IDisposable
 
             var afterBytes = File.ReadAllBytes(_tempFile);
             Assert.Equal(originalBytes, afterBytes);
-
-            store2.Dispose();
         }
         finally
         {

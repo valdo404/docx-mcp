@@ -180,16 +180,33 @@ public sealed class GrpcLauncher : IDisposable
         var assemblyDir = AppContext.BaseDirectory;
         if (!string.IsNullOrEmpty(assemblyDir))
         {
+            var binaryName = OperatingSystem.IsWindows() ? "docx-mcp-storage.exe" : "docx-mcp-storage";
+
+            // For tests and apps running from bin/Debug/net10.0/ or similar
+            // Path structure: project/tests/DocxMcp.Tests/bin/Debug/net10.0/
+            // Rust binary: project/crates/docx-mcp-storage/target/debug/docx-mcp-storage
+            // Also try from project/src/*/bin/Debug/net10.0/
             var relativePaths = new[]
             {
-                Path.Combine(assemblyDir, "docx-mcp-storage"),
-                Path.Combine(assemblyDir, "..", "..", "..", "..", "docx-mcp-storage", "target", "debug", "docx-mcp-storage"),
-                Path.Combine(assemblyDir, "..", "..", "..", "..", "docx-mcp-storage", "target", "release", "docx-mcp-storage"),
+                // Same directory (for deployed apps)
+                Path.Combine(assemblyDir, binaryName),
+                // From tests/DocxMcp.Tests/bin/Debug/net10.0/ -> crates/docx-mcp-storage/target/
+                Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "crates", "docx-mcp-storage", "target", "debug", binaryName),
+                Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "crates", "docx-mcp-storage", "target", "release", binaryName),
+                // From src/*/bin/Debug/net10.0/ -> crates/docx-mcp-storage/target/
+                Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "crates", "docx-mcp-storage", "target", "debug", binaryName),
+                // From project root (if running from there)
+                Path.Combine(assemblyDir, "crates", "docx-mcp-storage", "target", "debug", binaryName),
+                Path.Combine(assemblyDir, "crates", "docx-mcp-storage", "target", "release", binaryName),
+                // Workspace target directory (cargo builds to workspace root by default)
+                Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "target", "debug", binaryName),
+                Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "target", "release", binaryName),
             };
 
             foreach (var path in relativePaths)
             {
                 var fullPath = Path.GetFullPath(path);
+                _logger?.LogDebug("Checking for server binary at: {Path}", fullPath);
                 if (File.Exists(fullPath))
                     return fullPath;
             }

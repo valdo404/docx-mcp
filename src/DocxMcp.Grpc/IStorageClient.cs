@@ -19,22 +19,33 @@ public interface IStorageClient : IAsyncDisposable
     Task<bool> SessionExistsAsync(
         string tenantId, string sessionId, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(
+    Task<IReadOnlyList<SessionInfoDto>> ListSessionsAsync(
         string tenantId, CancellationToken cancellationToken = default);
 
-    // Index operations
+    // Index operations (atomic - server handles locking internally)
     Task<(byte[]? Data, bool Found)> LoadIndexAsync(
         string tenantId, CancellationToken cancellationToken = default);
 
-    Task SaveIndexAsync(
-        string tenantId, byte[] indexJson, CancellationToken cancellationToken = default);
+    Task<(bool Success, bool AlreadyExists)> AddSessionToIndexAsync(
+        string tenantId, string sessionId, SessionIndexEntryDto entry,
+        CancellationToken cancellationToken = default);
+
+    Task<(bool Success, bool NotFound)> UpdateSessionInIndexAsync(
+        string tenantId, string sessionId,
+        long? modifiedAtUnix = null, ulong? walPosition = null,
+        IEnumerable<ulong>? addCheckpointPositions = null,
+        IEnumerable<ulong>? removeCheckpointPositions = null,
+        CancellationToken cancellationToken = default);
+
+    Task<(bool Success, bool Existed)> RemoveSessionFromIndexAsync(
+        string tenantId, string sessionId, CancellationToken cancellationToken = default);
 
     // WAL operations
     Task<ulong> AppendWalAsync(
-        string tenantId, string sessionId, IEnumerable<WalEntry> entries,
+        string tenantId, string sessionId, IEnumerable<WalEntryDto> entries,
         CancellationToken cancellationToken = default);
 
-    Task<(IReadOnlyList<WalEntry> Entries, bool HasMore)> ReadWalAsync(
+    Task<(IReadOnlyList<WalEntryDto> Entries, bool HasMore)> ReadWalAsync(
         string tenantId, string sessionId, ulong fromPosition = 0, ulong limit = 0,
         CancellationToken cancellationToken = default);
 
@@ -51,21 +62,8 @@ public interface IStorageClient : IAsyncDisposable
         string tenantId, string sessionId, ulong position = 0,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<CheckpointInfo>> ListCheckpointsAsync(
+    Task<IReadOnlyList<CheckpointInfoDto>> ListCheckpointsAsync(
         string tenantId, string sessionId, CancellationToken cancellationToken = default);
-
-    // Lock operations
-    Task<(bool Acquired, string? CurrentHolder, long ExpiresAt)> AcquireLockAsync(
-        string tenantId, string resourceId, string holderId, int ttlSeconds = 60,
-        CancellationToken cancellationToken = default);
-
-    Task<(bool Released, string Reason)> ReleaseLockAsync(
-        string tenantId, string resourceId, string holderId,
-        CancellationToken cancellationToken = default);
-
-    Task<(bool Renewed, long ExpiresAt, string Reason)> RenewLockAsync(
-        string tenantId, string resourceId, string holderId, int ttlSeconds = 60,
-        CancellationToken cancellationToken = default);
 
     // Health check
     Task<(bool Healthy, string Backend, string Version)> HealthCheckAsync(

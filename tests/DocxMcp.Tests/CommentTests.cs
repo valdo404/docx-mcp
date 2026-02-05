@@ -2,9 +2,7 @@ using System.Text.Json;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.Helpers;
-using DocxMcp.Persistence;
 using DocxMcp.Tools;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DocxMcp.Tests;
@@ -12,23 +10,20 @@ namespace DocxMcp.Tests;
 public class CommentTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly SessionStore _store;
 
     public CommentTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
+        Directory.CreateDirectory(_tempDir);
     }
 
     public void Dispose()
     {
-        _store.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
 
-    private SessionManager CreateManager() =>
-        new SessionManager(_store, NullLogger<SessionManager>.Instance);
+    private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
 
     private static string AddParagraphPatch(string text) =>
         $"[{{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{{\"type\":\"paragraph\",\"text\":\"{text}\"}}}}]";
@@ -507,24 +502,23 @@ public class CommentTests : IDisposable
     }
 
     // --- WAL replay across restart ---
+    // Note: These tests verify persistence via gRPC storage server
 
     [Fact]
     public void AddComment_SurvivesRestart_ThenUndo()
     {
-        var mgr = CreateManager();
+        // Use explicit tenant so second manager can find the session
+        var tenantId = $"test-comment-restart-{Guid.NewGuid():N}";
+        var mgr = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr.Create();
         var id = session.Id;
 
         PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Persisted comment");
 
-        // Simulate server restart
-        _store.Dispose();
-        var store2 = new SessionStore(
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionManager>.Instance);
-
+        // Don't close - sessions auto-persist to gRPC storage
+        // Simulating a restart: create new manager with same tenant
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         var restored = mgr2.RestoreSessions();
         Assert.Equal(1, restored);
 
@@ -540,18 +534,18 @@ public class CommentTests : IDisposable
         // Comment should be gone
         var listResult2 = CommentTools.CommentList(mgr2, id);
         Assert.Contains("\"total\": 0", listResult2);
-
-        store2.Dispose();
     }
 
     [Fact]
     public void AddComment_OnOpenedFile_SurvivesRestart_ThenUndo()
     {
+        // Use explicit tenant so second manager can find the session
+        var tenantId = $"test-comment-file-restart-{Guid.NewGuid():N}";
+
         // Create a temp docx file with content, then open it (simulates real file usage)
         var tempFile = Path.Combine(_tempDir, "test.docx");
-        Directory.CreateDirectory(_tempDir);
 
-        // Create file via a session, save, close
+        // Create file via a session, save, close (this session is intentionally discarded)
         var mgr0 = CreateManager();
         var s0 = mgr0.Create();
         PatchTool.ApplyPatch(mgr0, null, s0.Id, AddParagraphPatch("Paragraph one"));
@@ -560,20 +554,15 @@ public class CommentTests : IDisposable
         mgr0.Close(s0.Id);
 
         // Open the file (like mcptools document_open)
-        var mgr = CreateManager();
+        var mgr = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr.Open(tempFile);
         var id = session.Id;
 
         var addResult = CommentTools.CommentAdd(mgr, id, "/body/paragraph[0]", "Review this paragraph");
         Assert.Contains("Comment 0 added", addResult);
 
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionManager>.Instance);
-
+        // Don't close - simulating a restart: create new manager with same tenant
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         var restored = mgr2.RestoreSessions();
         Assert.Equal(1, restored);
 
@@ -589,8 +578,6 @@ public class CommentTests : IDisposable
         // Comment should be gone
         var list2 = CommentTools.CommentList(mgr2, id);
         Assert.Contains("\"total\": 0", list2);
-
-        store2.Dispose();
     }
 
     // --- Query enrichment with anchored text ---

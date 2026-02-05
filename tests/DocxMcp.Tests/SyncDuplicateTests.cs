@@ -2,7 +2,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.ExternalChanges;
-using DocxMcp.Persistence;
+using DocxMcp.Grpc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -18,7 +18,7 @@ public class SyncDuplicateTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _tempFile;
-    private readonly SessionStore _store;
+    private readonly string _tenantId;
     private readonly SessionManager _sessionManager;
     private readonly ExternalChangeTracker _tracker;
 
@@ -32,9 +32,10 @@ public class SyncDuplicateTests : IDisposable
         // Create test document
         CreateTestDocx(_tempFile, "Test content");
 
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        _sessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        _tenantId = $"test-sync-dup-{Guid.NewGuid():N}";
+        _sessionManager = TestHelpers.CreateSessionManager(_tenantId);
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
     [Fact]
@@ -226,10 +227,10 @@ public class SyncDuplicateTests : IDisposable
         var syncedText = GetParagraphText(_sessionManager.Get(sessionId));
         Assert.Contains("New content from external", syncedText);
 
-        // Simulate server restart by creating a new SessionManager
-        // (keep the same store to share the persisted data)
-        var newSessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        // Simulate server restart by creating a new SessionManager with same tenant
+        var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
         var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        newSessionManager.SetExternalChangeTracker(newTracker);
 
         // Act - restore sessions
         var restoredCount = newSessionManager.RestoreSessions();
@@ -267,9 +268,10 @@ public class SyncDuplicateTests : IDisposable
         var historyBefore = _sessionManager.GetHistory(sessionId);
         var syncEntriesBefore = historyBefore.Entries.Count(e => e.IsExternalSync);
 
-        // Simulate server restart
-        var newSessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
+        // Simulate server restart with same tenant
+        var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
         var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        newSessionManager.SetExternalChangeTracker(newTracker);
         newSessionManager.RestoreSessions();
 
         // Act - sync multiple times after restart
@@ -339,7 +341,10 @@ public class SyncDuplicateTests : IDisposable
             catch { /* ignore */ }
         }
 
-        try { Directory.Delete(_tempDir, true); }
-        catch { /* ignore */ }
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); }
+            catch { /* ignore */ }
+        }
     }
 }

@@ -3,33 +3,14 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.Helpers;
-using DocxMcp.Persistence;
 using DocxMcp.Tools;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DocxMcp.Tests;
 
-public class StyleTests : IDisposable
+public class StyleTests
 {
-    private readonly string _tempDir;
-    private readonly SessionStore _store;
-
-    public StyleTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-    }
-
-    public void Dispose()
-    {
-        _store.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
-
-    private SessionManager CreateManager() =>
-        new SessionManager(_store, NullLogger<SessionManager>.Instance);
+    private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
 
     private static string AddParagraphPatch(string text) =>
         $"[{{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{{\"type\":\"paragraph\",\"text\":\"{text}\"}}}}]";
@@ -523,66 +504,58 @@ public class StyleTests : IDisposable
     [Fact]
     public void StyleElement_PersistsThroughRestart()
     {
-        var mgr1 = CreateManager();
+        // Use same tenant for both managers
+        var tenantId = $"test-style-persist-{Guid.NewGuid():N}";
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
         PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("persist"));
         StyleTools.StyleElement(mgr1, id, "{\"bold\":true,\"color\":\"00FF00\"}");
 
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
+        // Simulate restart: create new manager with same tenant, restore
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         mgr2.RestoreSessions();
 
         var run = mgr2.Get(id).GetBody().Descendants<Run>().First();
         Assert.NotNull(run.RunProperties?.Bold);
         Assert.Equal("00FF00", run.RunProperties?.Color?.Val?.Value);
-
-        store2.Dispose();
     }
 
     [Fact]
     public void StyleParagraph_PersistsThroughRestart()
     {
-        var mgr1 = CreateManager();
+        var tenantId = $"test-para-persist-{Guid.NewGuid():N}";
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
         PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("persist"));
         StyleTools.StyleParagraph(mgr1, id, "{\"alignment\":\"center\"}");
 
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         mgr2.RestoreSessions();
 
         var para = mgr2.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal(JustificationValues.Center, para.ParagraphProperties?.Justification?.Val?.Value);
-
-        store2.Dispose();
     }
 
     [Fact]
     public void StyleTable_PersistsThroughRestart()
     {
-        var mgr1 = CreateManager();
+        var tenantId = $"test-table-persist-{Guid.NewGuid():N}";
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
         PatchTool.ApplyPatch(mgr1, null, id, AddTablePatch());
         StyleTools.StyleTable(mgr1, id, cell_style: "{\"shading\":\"AABBCC\"}");
 
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         mgr2.RestoreSessions();
 
         var cell = mgr2.Get(id).GetBody().Descendants<TableCell>().First();
         Assert.Equal("AABBCC", cell.GetFirstChild<TableCellProperties>()?.Shading?.Fill?.Value);
-
-        store2.Dispose();
     }
 
     // =========================

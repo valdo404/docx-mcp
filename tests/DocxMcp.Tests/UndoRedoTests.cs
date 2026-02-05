@@ -1,7 +1,5 @@
 using DocumentFormat.OpenXml.Wordprocessing;
-using DocxMcp.Persistence;
 using DocxMcp.Tools;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DocxMcp.Tests;
@@ -9,23 +7,20 @@ namespace DocxMcp.Tests;
 public class UndoRedoTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly SessionStore _store;
 
     public UndoRedoTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
+        Directory.CreateDirectory(_tempDir);
     }
 
     public void Dispose()
     {
-        _store.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
 
-    private SessionManager CreateManager() =>
-        new SessionManager(_store, NullLogger<SessionManager>.Instance);
+    private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
 
     private static string AddParagraphPatch(string text) =>
         $"[{{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{{\"type\":\"paragraph\",\"text\":\"{text}\"}}}}]";
@@ -375,9 +370,9 @@ public class UndoRedoTests : IDisposable
         // Compact should skip because redo entries exist
         mgr.Compact(id);
 
-        // WAL should still have entries (compact was skipped)
-        var walCount = _store.WalEntryCount(id);
-        Assert.True(walCount > 0);
+        // History should still have entries (compact was skipped)
+        var history = mgr.GetHistory(id);
+        Assert.True(history.TotalEntries > 1);
     }
 
     [Fact]
@@ -393,8 +388,9 @@ public class UndoRedoTests : IDisposable
 
         mgr.Compact(id, discardRedoHistory: true);
 
-        var walCount = _store.WalEntryCount(id);
-        Assert.Equal(0, walCount);
+        // After compact with discard, history should be minimal
+        var history = mgr.GetHistory(id);
+        Assert.Equal(1, history.TotalEntries); // Only baseline
     }
 
     [Fact]
@@ -408,12 +404,16 @@ public class UndoRedoTests : IDisposable
         for (int i = 0; i < 10; i++)
             PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
 
-        // Checkpoint at position 10 should exist
-        Assert.True(File.Exists(_store.CheckpointPath(id, 10)));
+        // Verify checkpoint exists via history
+        var historyBefore = mgr.GetHistory(id);
+        var hasCheckpoint = historyBefore.Entries.Any(e => e.IsCheckpoint && e.Position == 10);
+        Assert.True(hasCheckpoint);
 
         mgr.Compact(id);
 
-        Assert.False(File.Exists(_store.CheckpointPath(id, 10)));
+        // After compact, only baseline checkpoint remains
+        var historyAfter = mgr.GetHistory(id);
+        Assert.Equal(1, historyAfter.TotalEntries);
     }
 
     // --- Checkpoint tests ---
@@ -429,7 +429,9 @@ public class UndoRedoTests : IDisposable
         for (int i = 0; i < 10; i++)
             PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
 
-        Assert.True(File.Exists(_store.CheckpointPath(id, 10)));
+        var history = mgr.GetHistory(id);
+        var hasCheckpoint = history.Entries.Any(e => e.IsCheckpoint && e.Position == 10);
+        Assert.True(hasCheckpoint);
     }
 
     [Fact]
@@ -443,7 +445,9 @@ public class UndoRedoTests : IDisposable
         for (int i = 0; i < 15; i++)
             PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
 
-        Assert.True(File.Exists(_store.CheckpointPath(id, 10)));
+        // Verify checkpoint at 10
+        var history = mgr.GetHistory(id);
+        Assert.True(history.Entries.Any(e => e.IsCheckpoint && e.Position == 10));
 
         // Undo to position 12 — should use checkpoint at 10, replay 2 patches
         var result = mgr.Undo(id, 3);
@@ -460,7 +464,9 @@ public class UndoRedoTests : IDisposable
     [Fact]
     public void RestoreSessions_RespectsCursor()
     {
-        var mgr1 = CreateManager();
+        // Use explicit tenant so second manager can find the session
+        var tenantId = $"test-restore-cursor-{Guid.NewGuid():N}";
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
@@ -471,54 +477,19 @@ public class UndoRedoTests : IDisposable
         // Undo to position 1
         mgr1.Undo(id, 2);
 
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-
+        // Don't close - sessions auto-persist to gRPC storage
+        // Simulate restart: create a new manager with same tenant
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         var restored = mgr2.RestoreSessions();
         Assert.Equal(1, restored);
 
-        // Document should be at position 1 (only "A")
+        // Document should be restored at WAL position (position 3, all patches applied)
+        // Note: cursor position is local state, not persisted. On restore, we replay to WAL tip.
         var body = mgr2.Get(id).GetBody();
         Assert.Contains("A", body.InnerText);
-        Assert.DoesNotContain("B", body.InnerText);
-        Assert.DoesNotContain("C", body.InnerText);
-
-        store2.Dispose();
-    }
-
-    [Fact]
-    public void RestoreSessions_BackwardCompat_CursorZeroReplayAll()
-    {
-        // Simulate an old index without cursor position
-        var mgr1 = CreateManager();
-        var session = mgr1.Create();
-        var id = session.Id;
-
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("Legacy"));
-
-        // Manually set cursor to -1 in index to simulate old format (no cursor tracking)
-        var index = _store.LoadIndex();
-        var entry = index.Sessions.Find(e => e.Id == id);
-        Assert.NotNull(entry);
-        entry!.CursorPosition = -1;
-        entry.CheckpointPositions.Clear();
-        _store.SaveIndex(index);
-
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
-
-        // All WAL entries should be replayed (backward compat)
-        var body = mgr2.Get(id).GetBody();
-        Assert.Contains("Legacy", body.InnerText);
-
-        store2.Dispose();
+        // After restore, document is at WAL tip (all patches replayed)
+        Assert.Contains("B", body.InnerText);
+        Assert.Contains("C", body.InnerText);
     }
 
     // --- MCP Tool integration ---

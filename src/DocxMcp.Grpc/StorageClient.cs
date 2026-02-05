@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.Extensions.Logging;
@@ -53,8 +54,51 @@ public sealed class StorageClient : IStorageClient
                 "Either ServerUrl must be configured or a GrpcLauncher must be provided for auto-launch.");
         }
 
-        var channel = GrpcChannel.ForAddress(address);
+        GrpcChannel channel;
+
+        if (address.StartsWith("unix://"))
+        {
+            // Unix Domain Socket requires a custom SocketsHttpHandler
+            var socketPath = address.Substring("unix://".Length);
+
+            var connectionFactory = new UnixDomainSocketConnectionFactory(socketPath);
+            var socketsHandler = new SocketsHttpHandler
+            {
+                ConnectCallback = connectionFactory.ConnectAsync
+            };
+
+            channel = GrpcChannel.ForAddress("http://localhost", new GrpcChannelOptions
+            {
+                HttpHandler = socketsHandler
+            });
+        }
+        else
+        {
+            channel = GrpcChannel.ForAddress(address);
+        }
+
         return new StorageClient(channel, logger);
+    }
+
+    /// <summary>
+    /// Connection factory for Unix Domain Sockets.
+    /// </summary>
+    private sealed class UnixDomainSocketConnectionFactory(string socketPath)
+    {
+        public async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
+        {
+            var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            try
+            {
+                await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), cancellationToken);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+        }
     }
 
     // =========================================================================
@@ -148,7 +192,7 @@ public sealed class StorageClient : IStorageClient
     /// <summary>
     /// List all sessions for a tenant.
     /// </summary>
-    public async Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(
+    public async Task<IReadOnlyList<SessionInfoDto>> ListSessionsAsync(
         string tenantId,
         CancellationToken cancellationToken = default)
     {
@@ -158,7 +202,13 @@ public sealed class StorageClient : IStorageClient
         };
 
         var response = await _client.ListSessionsAsync(request, cancellationToken: cancellationToken);
-        return response.Sessions;
+        return response.Sessions.Select(s => new SessionInfoDto(
+            s.SessionId,
+            string.IsNullOrEmpty(s.SourcePath) ? null : s.SourcePath,
+            DateTimeOffset.FromUnixTimeSeconds(s.CreatedAtUnix).UtcDateTime,
+            DateTimeOffset.FromUnixTimeSeconds(s.ModifiedAtUnix).UtcDateTime,
+            s.SizeBytes
+        )).ToList();
     }
 
     /// <summary>
@@ -198,7 +248,7 @@ public sealed class StorageClient : IStorageClient
     }
 
     // =========================================================================
-    // Index Operations
+    // Index Operations (Atomic - server handles locking internally)
     // =========================================================================
 
     /// <summary>
@@ -222,25 +272,82 @@ public sealed class StorageClient : IStorageClient
     }
 
     /// <summary>
-    /// Save the session index.
+    /// Atomically add a session to the index.
     /// </summary>
-    public async Task SaveIndexAsync(
+    public async Task<(bool Success, bool AlreadyExists)> AddSessionToIndexAsync(
         string tenantId,
-        byte[] indexJson,
+        string sessionId,
+        SessionIndexEntryDto entry,
         CancellationToken cancellationToken = default)
     {
-        var request = new SaveIndexRequest
+        var request = new AddSessionToIndexRequest
         {
             Context = new TenantContext { TenantId = tenantId },
-            IndexJson = Google.Protobuf.ByteString.CopyFrom(indexJson)
+            SessionId = sessionId,
+            Entry = new SessionIndexEntry
+            {
+                SourcePath = entry.SourcePath ?? "",
+                CreatedAtUnix = new DateTimeOffset(entry.CreatedAt).ToUnixTimeSeconds(),
+                ModifiedAtUnix = new DateTimeOffset(entry.ModifiedAt).ToUnixTimeSeconds(),
+                WalPosition = entry.WalPosition
+            }
+        };
+        request.Entry.CheckpointPositions.AddRange(entry.CheckpointPositions);
+
+        var response = await _client.AddSessionToIndexAsync(request, cancellationToken: cancellationToken);
+        return (response.Success, response.AlreadyExists);
+    }
+
+    /// <summary>
+    /// Atomically update a session in the index.
+    /// </summary>
+    public async Task<(bool Success, bool NotFound)> UpdateSessionInIndexAsync(
+        string tenantId,
+        string sessionId,
+        long? modifiedAtUnix = null,
+        ulong? walPosition = null,
+        IEnumerable<ulong>? addCheckpointPositions = null,
+        IEnumerable<ulong>? removeCheckpointPositions = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new UpdateSessionInIndexRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
         };
 
-        var response = await _client.SaveIndexAsync(request, cancellationToken: cancellationToken);
+        if (modifiedAtUnix.HasValue)
+            request.ModifiedAtUnix = modifiedAtUnix.Value;
 
-        if (!response.Success)
+        if (walPosition.HasValue)
+            request.WalPosition = walPosition.Value;
+
+        if (addCheckpointPositions is not null)
+            request.AddCheckpointPositions.AddRange(addCheckpointPositions);
+
+        if (removeCheckpointPositions is not null)
+            request.RemoveCheckpointPositions.AddRange(removeCheckpointPositions);
+
+        var response = await _client.UpdateSessionInIndexAsync(request, cancellationToken: cancellationToken);
+        return (response.Success, response.NotFound);
+    }
+
+    /// <summary>
+    /// Atomically remove a session from the index.
+    /// </summary>
+    public async Task<(bool Success, bool Existed)> RemoveSessionFromIndexAsync(
+        string tenantId,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new RemoveSessionFromIndexRequest
         {
-            throw new InvalidOperationException("Failed to save index");
-        }
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        var response = await _client.RemoveSessionFromIndexAsync(request, cancellationToken: cancellationToken);
+        return (response.Success, response.Existed);
     }
 
     // =========================================================================
@@ -253,7 +360,7 @@ public sealed class StorageClient : IStorageClient
     public async Task<ulong> AppendWalAsync(
         string tenantId,
         string sessionId,
-        IEnumerable<WalEntry> entries,
+        IEnumerable<WalEntryDto> entries,
         CancellationToken cancellationToken = default)
     {
         var request = new AppendWalRequest
@@ -261,7 +368,18 @@ public sealed class StorageClient : IStorageClient
             Context = new TenantContext { TenantId = tenantId },
             SessionId = sessionId
         };
-        request.Entries.AddRange(entries);
+
+        foreach (var entry in entries)
+        {
+            request.Entries.Add(new WalEntry
+            {
+                Position = entry.Position,
+                Operation = entry.Operation,
+                Path = entry.Path,
+                PatchJson = Google.Protobuf.ByteString.CopyFrom(entry.PatchJson),
+                TimestampUnix = new DateTimeOffset(entry.Timestamp).ToUnixTimeSeconds()
+            });
+        }
 
         var response = await _client.AppendWalAsync(request, cancellationToken: cancellationToken);
 
@@ -276,7 +394,7 @@ public sealed class StorageClient : IStorageClient
     /// <summary>
     /// Read WAL entries.
     /// </summary>
-    public async Task<(IReadOnlyList<WalEntry> Entries, bool HasMore)> ReadWalAsync(
+    public async Task<(IReadOnlyList<WalEntryDto> Entries, bool HasMore)> ReadWalAsync(
         string tenantId,
         string sessionId,
         ulong fromPosition = 0,
@@ -292,7 +410,16 @@ public sealed class StorageClient : IStorageClient
         };
 
         var response = await _client.ReadWalAsync(request, cancellationToken: cancellationToken);
-        return (response.Entries, response.HasMore);
+
+        var entries = response.Entries.Select(e => new WalEntryDto(
+            e.Position,
+            e.Operation,
+            e.Path,
+            e.PatchJson.ToByteArray(),
+            DateTimeOffset.FromUnixTimeSeconds(e.TimestampUnix).UtcDateTime
+        )).ToList();
+
+        return (entries, response.HasMore);
     }
 
     /// <summary>
@@ -412,7 +539,7 @@ public sealed class StorageClient : IStorageClient
     /// <summary>
     /// List checkpoints for a session.
     /// </summary>
-    public async Task<IReadOnlyList<CheckpointInfo>> ListCheckpointsAsync(
+    public async Task<IReadOnlyList<CheckpointInfoDto>> ListCheckpointsAsync(
         string tenantId,
         string sessionId,
         CancellationToken cancellationToken = default)
@@ -424,80 +551,11 @@ public sealed class StorageClient : IStorageClient
         };
 
         var response = await _client.ListCheckpointsAsync(request, cancellationToken: cancellationToken);
-        return response.Checkpoints;
-    }
-
-    // =========================================================================
-    // Lock Operations
-    // =========================================================================
-
-    /// <summary>
-    /// Acquire a lock.
-    /// </summary>
-    public async Task<(bool Acquired, string? CurrentHolder, long ExpiresAt)> AcquireLockAsync(
-        string tenantId,
-        string resourceId,
-        string holderId,
-        int ttlSeconds = 60,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new AcquireLockRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            ResourceId = resourceId,
-            HolderId = holderId,
-            TtlSeconds = ttlSeconds
-        };
-
-        var response = await _client.AcquireLockAsync(request, cancellationToken: cancellationToken);
-
-        return (
-            response.Acquired,
-            string.IsNullOrEmpty(response.CurrentHolder) ? null : response.CurrentHolder,
-            response.ExpiresAtUnix
-        );
-    }
-
-    /// <summary>
-    /// Release a lock.
-    /// </summary>
-    public async Task<(bool Released, string Reason)> ReleaseLockAsync(
-        string tenantId,
-        string resourceId,
-        string holderId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new ReleaseLockRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            ResourceId = resourceId,
-            HolderId = holderId
-        };
-
-        var response = await _client.ReleaseLockAsync(request, cancellationToken: cancellationToken);
-        return (response.Released, response.Reason);
-    }
-
-    /// <summary>
-    /// Renew a lock.
-    /// </summary>
-    public async Task<(bool Renewed, long ExpiresAt, string Reason)> RenewLockAsync(
-        string tenantId,
-        string resourceId,
-        string holderId,
-        int ttlSeconds = 60,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new RenewLockRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            ResourceId = resourceId,
-            HolderId = holderId,
-            TtlSeconds = ttlSeconds
-        };
-
-        var response = await _client.RenewLockAsync(request, cancellationToken: cancellationToken);
-        return (response.Renewed, response.ExpiresAtUnix, response.Reason);
+        return response.Checkpoints.Select(c => new CheckpointInfoDto(
+            c.Position,
+            DateTimeOffset.FromUnixTimeSeconds(c.CreatedAtUnix).UtcDateTime,
+            c.SizeBytes
+        )).ToList();
     }
 
     // =========================================================================

@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.ExternalChanges;
+using DocxMcp.Grpc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -21,9 +22,9 @@ public class ExternalChangeTrackerTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
 
-        var store = new Persistence.SessionStore(NullLogger<Persistence.SessionStore>.Instance, _tempDir);
-        _sessionManager = new SessionManager(store, NullLogger<SessionManager>.Instance);
+        _sessionManager = TestHelpers.CreateSessionManager();
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
     [Fact]
@@ -334,7 +335,10 @@ public class ExternalChangeTrackerTests : IDisposable
             catch { /* ignore */ }
         }
 
-        try { Directory.Delete(_tempDir, true); }
-        catch { /* ignore */ }
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); }
+            catch { /* ignore */ }
+        }
     }
 }

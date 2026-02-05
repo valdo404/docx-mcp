@@ -15,9 +15,11 @@ service StorageService {
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
   rpc SessionExists(SessionExistsRequest) returns (SessionExistsResponse);
 
-  // Index operations
+  // Index operations (atomic, server handles locking internally)
   rpc LoadIndex(LoadIndexRequest) returns (LoadIndexResponse);
-  rpc SaveIndex(SaveIndexRequest) returns (SaveIndexResponse);
+  rpc AddSessionToIndex(AddSessionToIndexRequest) returns (AddSessionToIndexResponse);
+  rpc UpdateSessionInIndex(UpdateSessionInIndexRequest) returns (UpdateSessionInIndexResponse);
+  rpc RemoveSessionFromIndex(RemoveSessionFromIndexRequest) returns (RemoveSessionFromIndexResponse);
 
   // WAL operations
   rpc AppendWal(AppendWalRequest) returns (AppendWalResponse);
@@ -28,11 +30,6 @@ service StorageService {
   rpc SaveCheckpoint(stream SaveCheckpointChunk) returns (SaveCheckpointResponse);
   rpc LoadCheckpoint(LoadCheckpointRequest) returns (stream LoadCheckpointChunk);
   rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
-
-  // Lock operations - locks are on (tenant_id, resource_id) pairs
-  rpc AcquireLock(AcquireLockRequest) returns (AcquireLockResponse);
-  rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockResponse);
-  rpc RenewLock(RenewLockRequest) returns (RenewLockResponse);
 
   // Health check
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
@@ -138,7 +135,7 @@ message SessionExistsResponse {
 }
 
 // =============================================================================
-// Index Messages
+// Index Messages (Atomic operations - server handles locking internally)
 // =============================================================================
 
 message LoadIndexRequest {
@@ -150,13 +147,51 @@ message LoadIndexResponse {
   bool found = 2;
 }
 
-message SaveIndexRequest {
-  TenantContext context = 1;
-  bytes index_json = 2;
+// Atomic operation to add a session to the index
+message SessionIndexEntry {
+  string source_path = 1;
+  int64 created_at_unix = 2;
+  int64 modified_at_unix = 3;
+  uint64 wal_position = 4;
+  repeated uint64 checkpoint_positions = 5;
 }
 
-message SaveIndexResponse {
+message AddSessionToIndexRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  SessionIndexEntry entry = 3;
+}
+
+message AddSessionToIndexResponse {
   bool success = 1;
+  bool already_exists = 2;
+}
+
+// Atomic operation to update a session in the index
+message UpdateSessionInIndexRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  // Optional fields - only non-null values are updated
+  optional int64 modified_at_unix = 3;
+  optional uint64 wal_position = 4;
+  repeated uint64 add_checkpoint_positions = 5;      // Positions to add
+  repeated uint64 remove_checkpoint_positions = 6;   // Positions to remove
+}
+
+message UpdateSessionInIndexResponse {
+  bool success = 1;
+  bool not_found = 2;
+}
+
+// Atomic operation to remove a session from the index
+message RemoveSessionFromIndexRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message RemoveSessionFromIndexResponse {
+  bool success = 1;
+  bool existed = 2;
 }
 
 // =============================================================================
@@ -237,51 +272,6 @@ message ListCheckpointsResponse {
 }
 
 // =============================================================================
-// Lock Messages
-// =============================================================================
-
-// Locks are on the pair (tenant_id, resource_id).
-// This provides isolation between tenants while allowing concurrent access
-// to different resources within a tenant.
-
-message AcquireLockRequest {
-  TenantContext context = 1;
-  string resource_id = 2;     // e.g., session_id
-  string holder_id = 3;       // Instance identifier (UUID recommended)
-  int32 ttl_seconds = 4;      // TTL to prevent orphan locks (default 60s)
-}
-
-message AcquireLockResponse {
-  bool acquired = 1;
-  string current_holder = 2;  // If not acquired, who holds it
-  int64 expires_at_unix = 3;  // Lock expiration timestamp
-}
-
-message ReleaseLockRequest {
-  TenantContext context = 1;
-  string resource_id = 2;
-  string holder_id = 3;       // Must match the original holder
-}
-
-message ReleaseLockResponse {
-  bool released = 1;
-  string reason = 2;          // "ok", "not_owner", "not_found", "expired"
-}
-
-message RenewLockRequest {
-  TenantContext context = 1;
-  string resource_id = 2;
-  string holder_id = 3;
-  int32 ttl_seconds = 4;      // New TTL from now
-}
-
-message RenewLockResponse {
-  bool renewed = 1;
-  int64 expires_at_unix = 2;
-  string reason = 3;          // "ok", "not_owner", "not_found"
-}
-
-// =============================================================================
 // Health Check
 // =============================================================================
 
@@ -291,4 +281,204 @@ message HealthCheckResponse {
   bool healthy = 1;
   string backend = 2;         // "local" or "r2"
   string version = 3;
+}
+
+// =============================================================================
+// SourceSyncService - Sync changes back to external sources
+// =============================================================================
+// Handles auto-save functionality for various source types:
+// - Local files (current behavior)
+// - SharePoint documents
+// - OneDrive files
+// - S3/R2 objects
+
+service SourceSyncService {
+  // Register a session's source for sync tracking
+  rpc RegisterSource(RegisterSourceRequest) returns (RegisterSourceResponse);
+
+  // Unregister a source (on session close)
+  rpc UnregisterSource(UnregisterSourceRequest) returns (UnregisterSourceResponse);
+
+  // Sync current session state to external source
+  rpc SyncToSource(SyncToSourceRequest) returns (SyncToSourceResponse);
+
+  // Get sync status for a session
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);
+
+  // List all registered sources for a tenant
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+}
+
+// Source types supported by the sync service
+enum SourceType {
+  SOURCE_TYPE_UNSPECIFIED = 0;
+  SOURCE_TYPE_LOCAL_FILE = 1;
+  SOURCE_TYPE_SHAREPOINT = 2;
+  SOURCE_TYPE_ONEDRIVE = 3;
+  SOURCE_TYPE_S3 = 4;
+  SOURCE_TYPE_R2 = 5;
+}
+
+message SourceDescriptor {
+  SourceType type = 1;
+  string uri = 2;              // File path, SharePoint URL, S3 URI, etc.
+  map<string, string> metadata = 3;  // Type-specific metadata (credentials ref, etc.)
+}
+
+message RegisterSourceRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  SourceDescriptor source = 3;
+  bool auto_sync = 4;          // Enable auto-sync on WAL append
+}
+
+message RegisterSourceResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UnregisterSourceRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message UnregisterSourceResponse {
+  bool success = 1;
+}
+
+message SyncToSourceRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  bytes docx_data = 3;         // Current document bytes to sync
+}
+
+message SyncToSourceResponse {
+  bool success = 1;
+  string error = 2;
+  int64 synced_at_unix = 3;
+}
+
+message GetSyncStatusRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message SyncStatus {
+  string session_id = 1;
+  SourceDescriptor source = 2;
+  bool auto_sync_enabled = 3;
+  int64 last_synced_at_unix = 4;
+  bool has_pending_changes = 5;
+  string last_error = 6;
+}
+
+message GetSyncStatusResponse {
+  bool registered = 1;
+  SyncStatus status = 2;
+}
+
+message ListSourcesRequest {
+  TenantContext context = 1;
+}
+
+message ListSourcesResponse {
+  repeated SyncStatus sources = 1;
+}
+
+// =============================================================================
+// ExternalWatchService - Monitor external sources for changes
+// =============================================================================
+// Detects when external sources are modified outside of docx-mcp.
+// Used to notify clients of conflicts or trigger re-sync.
+
+service ExternalWatchService {
+  // Start watching a source for external changes
+  rpc StartWatch(StartWatchRequest) returns (StartWatchResponse);
+
+  // Stop watching a source
+  rpc StopWatch(StopWatchRequest) returns (StopWatchResponse);
+
+  // Poll for changes (for backends that don't support push notifications)
+  rpc CheckForChanges(CheckForChangesRequest) returns (CheckForChangesResponse);
+
+  // Stream of external change events (long-poll / server-push)
+  rpc WatchChanges(WatchChangesRequest) returns (stream ExternalChangeEvent);
+
+  // Get current file metadata (for comparison)
+  rpc GetSourceMetadata(GetSourceMetadataRequest) returns (GetSourceMetadataResponse);
+}
+
+message StartWatchRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  SourceDescriptor source = 3;
+  int32 poll_interval_seconds = 4;  // For polling-based backends (0 = default)
+}
+
+message StartWatchResponse {
+  bool success = 1;
+  string watch_id = 2;         // Unique identifier for this watch
+  string error = 3;
+}
+
+message StopWatchRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message StopWatchResponse {
+  bool success = 1;
+}
+
+message CheckForChangesRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message CheckForChangesResponse {
+  bool has_changes = 1;
+  SourceMetadata current_metadata = 2;
+  SourceMetadata known_metadata = 3;
+}
+
+message WatchChangesRequest {
+  TenantContext context = 1;
+  repeated string session_ids = 2;  // Sessions to watch (empty = all for tenant)
+}
+
+// Event types for external changes
+enum ExternalChangeType {
+  EXTERNAL_CHANGE_TYPE_UNSPECIFIED = 0;
+  EXTERNAL_CHANGE_TYPE_MODIFIED = 1;
+  EXTERNAL_CHANGE_TYPE_DELETED = 2;
+  EXTERNAL_CHANGE_TYPE_RENAMED = 3;
+  EXTERNAL_CHANGE_TYPE_PERMISSION_CHANGED = 4;
+}
+
+message ExternalChangeEvent {
+  string session_id = 1;
+  ExternalChangeType change_type = 2;
+  SourceMetadata old_metadata = 3;
+  SourceMetadata new_metadata = 4;
+  int64 detected_at_unix = 5;
+  string new_uri = 6;          // For rename events
+}
+
+message SourceMetadata {
+  int64 size_bytes = 1;
+  int64 modified_at_unix = 2;
+  string etag = 3;             // For HTTP-based sources
+  string version_id = 4;       // For versioned sources (S3, SharePoint)
+  bytes content_hash = 5;      // SHA-256 of content (if available)
+}
+
+message GetSourceMetadataRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message GetSourceMetadataResponse {
+  bool success = 1;
+  SourceMetadata metadata = 2;
+  string error = 3;
 }

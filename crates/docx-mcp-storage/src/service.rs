@@ -235,7 +235,7 @@ impl StorageService for StorageServiceImpl {
     }
 
     // =========================================================================
-    // Index Operations
+    // Index Operations (Atomic - with internal locking)
     // =========================================================================
 
     #[instrument(skip(self, request), level = "debug")]
@@ -265,22 +265,202 @@ impl StorageService for StorageServiceImpl {
     }
 
     #[instrument(skip(self, request), level = "debug")]
-    async fn save_index(
+    async fn add_session_to_index(
         &self,
-        request: Request<SaveIndexRequest>,
-    ) -> Result<Response<SaveIndexResponse>, Status> {
+        request: Request<AddSessionToIndexRequest>,
+    ) -> Result<Response<AddSessionToIndexResponse>, Status> {
         let req = request.into_inner();
         let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+        let session_id = req.session_id;
+        let entry = req.entry.ok_or_else(|| Status::invalid_argument("entry is required"))?;
 
-        let index: crate::storage::SessionIndex = serde_json::from_slice(&req.index_json)
-            .map_err(|e| Status::invalid_argument(format!("Invalid index JSON: {}", e)))?;
+        // Generate a unique holder ID for this operation
+        let holder_id = uuid::Uuid::new_v4().to_string();
+        let ttl = Duration::from_secs(30);
 
-        self.storage
-            .save_index(tenant_id, &index)
-            .await
-            .map_err(Status::from)?;
+        // Acquire lock with retries
+        let mut acquired = false;
+        for i in 0..10 {
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
+            }
+            let result = self.lock_manager.acquire(tenant_id, "index", &holder_id, ttl).await
+                .map_err(Status::from)?;
+            if result.acquired {
+                acquired = true;
+                break;
+            }
+        }
 
-        Ok(Response::new(SaveIndexResponse { success: true }))
+        if !acquired {
+            return Err(Status::unavailable("Could not acquire index lock"));
+        }
+
+        // Perform atomic operation
+        let result = async {
+            let mut index = self.storage.load_index(tenant_id).await
+                .map_err(Status::from)?
+                .unwrap_or_default();
+
+            let already_exists = index.sessions.contains_key(&session_id);
+            if !already_exists {
+                index.sessions.insert(session_id.clone(), crate::storage::SessionIndexEntry {
+                    source_path: if entry.source_path.is_empty() { None } else { Some(entry.source_path) },
+                    created_at: chrono::DateTime::from_timestamp(entry.created_at_unix, 0)
+                        .unwrap_or_else(chrono::Utc::now),
+                    modified_at: chrono::DateTime::from_timestamp(entry.modified_at_unix, 0)
+                        .unwrap_or_else(chrono::Utc::now),
+                    wal_position: entry.wal_position,
+                    checkpoint_positions: entry.checkpoint_positions,
+                });
+                self.storage.save_index(tenant_id, &index).await.map_err(Status::from)?;
+            }
+
+            Ok::<_, Status>(already_exists)
+        }.await;
+
+        // Release lock
+        let _ = self.lock_manager.release(tenant_id, "index", &holder_id).await;
+
+        let already_exists = result?;
+        Ok(Response::new(AddSessionToIndexResponse {
+            success: true,
+            already_exists,
+        }))
+    }
+
+    #[instrument(skip(self, request), level = "debug")]
+    async fn update_session_in_index(
+        &self,
+        request: Request<UpdateSessionInIndexRequest>,
+    ) -> Result<Response<UpdateSessionInIndexResponse>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+        let session_id = req.session_id;
+
+        // Generate a unique holder ID for this operation
+        let holder_id = uuid::Uuid::new_v4().to_string();
+        let ttl = Duration::from_secs(30);
+
+        // Acquire lock with retries
+        let mut acquired = false;
+        for i in 0..10 {
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
+            }
+            let result = self.lock_manager.acquire(tenant_id, "index", &holder_id, ttl).await
+                .map_err(Status::from)?;
+            if result.acquired {
+                acquired = true;
+                break;
+            }
+        }
+
+        if !acquired {
+            return Err(Status::unavailable("Could not acquire index lock"));
+        }
+
+        // Perform atomic operation
+        let result = async {
+            let mut index = self.storage.load_index(tenant_id).await
+                .map_err(Status::from)?
+                .unwrap_or_default();
+
+            let not_found = !index.sessions.contains_key(&session_id);
+            if !not_found {
+                let entry = index.sessions.get_mut(&session_id).unwrap();
+
+                // Update optional fields
+                if let Some(modified_at) = req.modified_at_unix {
+                    entry.modified_at = chrono::DateTime::from_timestamp(modified_at, 0)
+                        .unwrap_or_else(chrono::Utc::now);
+                }
+                if let Some(wal_position) = req.wal_position {
+                    entry.wal_position = wal_position;
+                }
+
+                // Add checkpoint positions
+                for pos in &req.add_checkpoint_positions {
+                    if !entry.checkpoint_positions.contains(pos) {
+                        entry.checkpoint_positions.push(*pos);
+                    }
+                }
+
+                // Remove checkpoint positions
+                entry.checkpoint_positions.retain(|p| !req.remove_checkpoint_positions.contains(p));
+
+                // Sort checkpoint positions
+                entry.checkpoint_positions.sort();
+
+                self.storage.save_index(tenant_id, &index).await.map_err(Status::from)?;
+            }
+
+            Ok::<_, Status>(not_found)
+        }.await;
+
+        // Release lock
+        let _ = self.lock_manager.release(tenant_id, "index", &holder_id).await;
+
+        let not_found = result?;
+        Ok(Response::new(UpdateSessionInIndexResponse {
+            success: !not_found,
+            not_found,
+        }))
+    }
+
+    #[instrument(skip(self, request), level = "debug")]
+    async fn remove_session_from_index(
+        &self,
+        request: Request<RemoveSessionFromIndexRequest>,
+    ) -> Result<Response<RemoveSessionFromIndexResponse>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+        let session_id = req.session_id;
+
+        // Generate a unique holder ID for this operation
+        let holder_id = uuid::Uuid::new_v4().to_string();
+        let ttl = Duration::from_secs(30);
+
+        // Acquire lock with retries
+        let mut acquired = false;
+        for i in 0..10 {
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
+            }
+            let result = self.lock_manager.acquire(tenant_id, "index", &holder_id, ttl).await
+                .map_err(Status::from)?;
+            if result.acquired {
+                acquired = true;
+                break;
+            }
+        }
+
+        if !acquired {
+            return Err(Status::unavailable("Could not acquire index lock"));
+        }
+
+        // Perform atomic operation
+        let result = async {
+            let mut index = self.storage.load_index(tenant_id).await
+                .map_err(Status::from)?
+                .unwrap_or_default();
+
+            let existed = index.sessions.remove(&session_id).is_some();
+            if existed {
+                self.storage.save_index(tenant_id, &index).await.map_err(Status::from)?;
+            }
+
+            Ok::<_, Status>(existed)
+        }.await;
+
+        // Release lock
+        let _ = self.lock_manager.release(tenant_id, "index", &holder_id).await;
+
+        let existed = result?;
+        Ok(Response::new(RemoveSessionFromIndexResponse {
+            success: true,
+            existed,
+        }))
     }
 
     // =========================================================================
@@ -506,76 +686,6 @@ impl StorageService for StorageServiceImpl {
             .collect();
 
         Ok(Response::new(ListCheckpointsResponse { checkpoints }))
-    }
-
-    // =========================================================================
-    // Lock Operations
-    // =========================================================================
-
-    #[instrument(skip(self, request), level = "debug")]
-    async fn acquire_lock(
-        &self,
-        request: Request<AcquireLockRequest>,
-    ) -> Result<Response<AcquireLockResponse>, Status> {
-        let req = request.into_inner();
-        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
-
-        let ttl = Duration::from_secs(req.ttl_seconds.max(1) as u64);
-
-        let result = self
-            .lock_manager
-            .acquire(tenant_id, &req.resource_id, &req.holder_id, ttl)
-            .await
-            .map_err(Status::from)?;
-
-        Ok(Response::new(AcquireLockResponse {
-            acquired: result.acquired,
-            current_holder: result.current_holder.unwrap_or_default(),
-            expires_at_unix: result.expires_at,
-        }))
-    }
-
-    #[instrument(skip(self, request), level = "debug")]
-    async fn release_lock(
-        &self,
-        request: Request<ReleaseLockRequest>,
-    ) -> Result<Response<ReleaseLockResponse>, Status> {
-        let req = request.into_inner();
-        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
-
-        let result = self
-            .lock_manager
-            .release(tenant_id, &req.resource_id, &req.holder_id)
-            .await
-            .map_err(Status::from)?;
-
-        Ok(Response::new(ReleaseLockResponse {
-            released: result.released,
-            reason: result.reason,
-        }))
-    }
-
-    #[instrument(skip(self, request), level = "debug")]
-    async fn renew_lock(
-        &self,
-        request: Request<RenewLockRequest>,
-    ) -> Result<Response<RenewLockResponse>, Status> {
-        let req = request.into_inner();
-        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
-
-        let ttl = Duration::from_secs(req.ttl_seconds.max(1) as u64);
-
-        let result = self
-            .lock_manager
-            .renew(tenant_id, &req.resource_id, &req.holder_id, ttl)
-            .await
-            .map_err(Status::from)?;
-
-        Ok(Response::new(RenewLockResponse {
-            renewed: result.renewed,
-            expires_at_unix: result.expires_at,
-            reason: result.reason,
-        }))
     }
 
     // =========================================================================
