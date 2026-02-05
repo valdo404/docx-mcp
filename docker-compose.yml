@@ -1,0 +1,118 @@
+# =============================================================================
+# docx-mcp Docker Compose
+# Full stack for local development and testing
+# =============================================================================
+
+services:
+  # gRPC storage server
+  storage:
+    build:
+      context: .
+      dockerfile: crates/docx-mcp-storage/Dockerfile
+    environment:
+      RUST_LOG: info
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50051"
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_DIR: /app/data
+    volumes:
+      - storage-data:/app/data
+    ports:
+      - "50051:50051"
+    healthcheck:
+      # Simple TCP check since grpc_health_probe may not be available
+      test: ["CMD", "sh", "-c", "echo > /dev/tcp/localhost/50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MCP stdio server (for direct integration)
+  # Note: This service is more useful when run with `docker run -i`
+  # for interactive stdio communication
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      STORAGE_GRPC_URL: http://storage:50051
+      RUST_LOG: info
+    volumes:
+      - sessions-data:/home/app/.docx-mcp/sessions
+    # stdin_open and tty for interactive use
+    stdin_open: true
+    tty: true
+    restart: "no"
+
+  # CLI tool (useful for batch operations)
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["./docx-cli"]
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      STORAGE_GRPC_URL: http://storage:50051
+    volumes:
+      - sessions-data:/home/app/.docx-mcp/sessions
+      - ./examples:/workspace:ro
+    working_dir: /workspace
+    profiles:
+      - cli
+
+  # SSE/HTTP proxy (for remote MCP clients)
+  # Note: Requires Cloudflare credentials for PAT validation
+  proxy:
+    build:
+      context: .
+      dockerfile: crates/docx-mcp-proxy/Dockerfile
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      PROXY_HOST: "0.0.0.0"
+      PROXY_PORT: "8080"
+      STORAGE_GRPC_URL: http://storage:50051
+      # These must be set for PAT validation:
+      # CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
+      # CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      # D1_DATABASE_ID: ${D1_DATABASE_ID}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - proxy
+    restart: unless-stopped
+
+volumes:
+  storage-data:
+    driver: local
+  sessions-data:
+    driver: local
+
+# =============================================================================
+# Usage:
+#
+# Start storage server only:
+#   docker compose up storage
+#
+# Start storage + MCP (interactive):
+#   docker compose run --rm mcp
+#
+# Run CLI command:
+#   docker compose run --rm cli document list
+#
+# Start full stack with proxy:
+#   docker compose --profile proxy up
+#
+# =============================================================================
