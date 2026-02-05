@@ -2,12 +2,25 @@ name: Build Website
 
 on:
   pull_request:
-    paths:
-      - 'website/**'
-      - '.github/workflows/build-website.yml'
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      website: ${{ steps.filter.outputs.website }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            website:
+              - 'website/**'
+              - '.github/workflows/build-website.yml'
+
   build:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
