@@ -25,7 +25,7 @@ public sealed class SessionRestoreService : IHostedService
         _sessions.SetExternalChangeTracker(_externalChangeTracker);
         var restored = _sessions.RestoreSessions();
         if (restored > 0)
-            _logger.LogInformation("Restored {Count} session(s) from disk.", restored);
+            _logger.LogInformation("Restored {Count} session(s) from storage.", restored);
         return Task.CompletedTask;
     }
 

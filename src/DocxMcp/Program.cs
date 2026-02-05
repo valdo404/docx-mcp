@@ -3,7 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using DocxMcp;
-using DocxMcp.Persistence;
+using DocxMcp.Grpc;
 using DocxMcp.Tools;
 using DocxMcp.ExternalChanges;
 
@@ -15,8 +15,15 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-// Register persistence and session management
-builder.Services.AddSingleton<SessionStore>();
+// Register gRPC storage client and session management
+builder.Services.AddSingleton<IStorageClient>(sp =>
+{
+    var logger = sp.GetService<ILogger<StorageClient>>();
+    var options = new StorageClientOptions();
+    var launcherLogger = sp.GetService<ILogger<GrpcLauncher>>();
+    var launcher = new GrpcLauncher(options, launcherLogger);
+    return StorageClient.CreateAsync(options, launcher, logger).GetAwaiter().GetResult();
+});
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHostedService<SessionRestoreService>();
 
@@ -31,7 +38,7 @@ builder.Services
         options.ServerInfo = new()
         {
             Name = "docx-mcp",
-            Version = "2.2.0"
+            Version = "1.6.0"
         };
     })
     .WithStdioServerTransport()

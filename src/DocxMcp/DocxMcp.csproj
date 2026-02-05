@@ -22,4 +22,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\DocxMcp.Grpc\DocxMcp.Grpc.csproj" />
+  </ItemGroup>
+
 </Project>

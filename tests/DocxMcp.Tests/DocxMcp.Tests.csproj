@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DocxMcp\DocxMcp.csproj" />
+    <ProjectReference Include="..\..\src\DocxMcp.Grpc\DocxMcp.Grpc.csproj" />
   </ItemGroup>
 
 </Project>
