@@ -11,6 +11,7 @@ interface TenantRecord {
   storageUsedBytes: number;
   createdAt: string;
   updatedAt: string;
+  preferences: string | null;
 }
 
 export type { TenantRecord };
@@ -47,6 +48,7 @@ export async function getOrCreateTenant(
     storageUsedBytes: 0,
     createdAt: now,
     updatedAt: now,
+    preferences: '{}',
   };
 
   await kysely.insertInto('tenant').values(tenant).execute();

@@ -4,22 +4,27 @@ import { useTranslations } from '../i18n/utils';
 
 interface Props {
   lang: Lang;
+  inDashboard?: boolean;
 }
 
-const { lang } = Astro.props;
+const { lang, inDashboard = false } = Astro.props;
 const t = useTranslations(lang);
 const messages = t('doccy.messages') as readonly string[];
 const ctaText = t('doccy.cta') as string;
 const loginPath = lang === 'fr' ? '/connexion' : '/en/login';
 const dashboardPath = lang === 'fr' ? '/tableau-de-bord' : '/en/dashboard';
 const consoleCta = lang === 'fr' ? 'Accéder à la console' : 'Access console';
+
+// In dashboard: always show console CTA. On homepage: show login CTA (will be updated by JS if authenticated)
+const initialHref = inDashboard ? dashboardPath : loginPath;
+const initialText = inDashboard ? consoleCta : ctaText;
 ---
 
-<div class="doccy-container" id="doccy" data-login={loginPath} data-dashboard={dashboardPath} data-console-cta={consoleCta}>
+<div class="doccy-container" id="doccy" data-login={loginPath} data-dashboard={dashboardPath} data-console-cta={consoleCta} data-in-dashboard={inDashboard.toString()}>
   <div class="doccy-bubble" id="doccy-bubble">
     <button class="doccy-close" id="doccy-close" aria-label="Close">&times;</button>
     <p id="doccy-message">{messages[0]}</p>
-    <a href={loginPath} class="doccy-btn" id="doccy-cta">{ctaText}</a>
+    <a href={initialHref} class="doccy-btn" id="doccy-cta">{initialText}</a>
   </div>
   <div class="doccy-character" id="doccy-character">
     <svg viewBox="0 0 100 160" fill="none" xmlns="http://www.w3.org/2000/svg" class="doccy-svg">
@@ -45,8 +50,10 @@ const consoleCta = lang === 'fr' ? 'Accéder à la console' : 'Access console';
 <script define:vars={{ messages }}>
   import { authClient } from '../lib/auth-client';
 
+  const STORAGE_KEY = 'doccy-bubble-hidden';
   let messageIndex = 0;
   let bubbleHidden = false;
+  let isAuthenticated = false;
 
   const container = document.getElementById('doccy');
   const bubble = document.getElementById('doccy-bubble');
@@ -56,22 +63,69 @@ const consoleCta = lang === 'fr' ? 'Accéder à la console' : 'Access console';
   const eyeBgs = document.querySelectorAll('.doccy-eye-bg');
   const ctaBtn = document.getElementById('doccy-cta');
 
-  // Check auth status and update CTA
+  async function savePreference(hidden: boolean) {
+    if (isAuthenticated) {
+      // Save to user session via API
+      try {
+        await fetch('/api/preferences', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doccyHidden: hidden }),
+        });
+      } catch (e) {
+        console.debug('Failed to save preference:', e);
+      }
+    } else {
+      // Fallback to sessionStorage for non-authenticated users
+      sessionStorage.setItem(STORAGE_KEY, hidden.toString());
+    }
+  }
+
+  // Check auth status, load preferences, and update CTA
   (async () => {
+    const inDashboard = container?.dataset.inDashboard === 'true';
+
     try {
       const session = await authClient.getSession();
-      if (session?.data?.user && ctaBtn && container) {
-        ctaBtn.setAttribute('href', container.dataset.dashboard || '/');
-        ctaBtn.textContent = container.dataset.consoleCta || 'Console';
+      if (session?.data?.user) {
+        isAuthenticated = true;
+
+        // Update CTA to console (only on homepage, dashboard already has correct CTA)
+        if (!inDashboard && ctaBtn && container) {
+          ctaBtn.setAttribute('href', container.dataset.dashboard || '/');
+          ctaBtn.textContent = container.dataset.consoleCta || 'Console';
+        }
+
+        // Load preferences from API
+        const res = await fetch('/api/preferences');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.preferences?.doccyHidden) {
+            bubbleHidden = true;
+            bubble?.classList.add('hidden');
+          }
+        }
+      } else {
+        // Not authenticated - use sessionStorage fallback
+        if (sessionStorage.getItem(STORAGE_KEY) === 'true') {
+          bubbleHidden = true;
+          bubble?.classList.add('hidden');
+        }
       }
     } catch (e) {
+      // Auth check failed - use sessionStorage fallback
       console.debug('Auth check failed:', e);
+      if (sessionStorage.getItem(STORAGE_KEY) === 'true') {
+        bubbleHidden = true;
+        bubble?.classList.add('hidden');
+      }
     }
   })();
 
   closeBtn?.addEventListener('click', () => {
     bubble?.classList.add('hidden');
     bubbleHidden = true;
+    savePreference(true);
   });
 
   character?.addEventListener('click', () => {
@@ -80,6 +134,7 @@ const consoleCta = lang === 'fr' ? 'Accéder à la console' : 'Access console';
       if (messageEl) messageEl.textContent = messages[messageIndex];
       bubble?.classList.remove('hidden');
       bubbleHidden = false;
+      savePreference(false);
     }
   });
 
