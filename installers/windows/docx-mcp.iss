@@ -6,6 +6,7 @@
 #define MyAppURL "https://github.com/valdo404/docx-mcp"
 #define MyAppExeName "docx-mcp.exe"
 #define MyCliExeName "docx-cli.exe"
+#define MyStorageExeName "docx-mcp-storage.exe"
 
 ; Version will be passed via command line: /DMyAppVersion=1.0.0
 #ifndef MyAppVersion
@@ -70,6 +71,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "..\..\dist\windows-{#MyAppArch}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\windows-{#MyAppArch}\{#MyCliExeName}"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\dist\windows-{#MyAppArch}\{#MyStorageExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion; DestName: "README.txt"
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
