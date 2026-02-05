@@ -4,6 +4,7 @@ import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import PatManager from '../components/PatManager.astro';
+import Doccy from '../components/Doccy.astro';
 import { useTranslations } from '../i18n/utils';
 
 const t = useTranslations('fr');
@@ -39,6 +40,7 @@ const tenant = Astro.locals.tenant!;
   </main>
 
   <Footer lang="fr" />
+  <Doccy lang="fr" />
 </Layout>
 
 <style>
