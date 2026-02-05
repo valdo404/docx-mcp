@@ -10,13 +10,16 @@ const { lang } = Astro.props;
 const t = useTranslations(lang);
 const messages = t('doccy.messages') as readonly string[];
 const ctaText = t('doccy.cta') as string;
+const loginPath = lang === 'fr' ? '/connexion' : '/en/login';
+const dashboardPath = lang === 'fr' ? '/tableau-de-bord' : '/en/dashboard';
+const consoleCta = lang === 'fr' ? 'Accéder à la console' : 'Access console';
 ---
 
-<div class="doccy-container" id="doccy">
+<div class="doccy-container" id="doccy" data-login={loginPath} data-dashboard={dashboardPath} data-console-cta={consoleCta}>
   <div class="doccy-bubble" id="doccy-bubble">
     <button class="doccy-close" id="doccy-close" aria-label="Close">&times;</button>
     <p id="doccy-message">{messages[0]}</p>
-    <a href="https://github.com/valdo404/docx-mcp" class="doccy-btn" target="_blank">{ctaText}</a>
+    <a href={loginPath} class="doccy-btn" id="doccy-cta">{ctaText}</a>
   </div>
   <div class="doccy-character" id="doccy-character">
     <svg viewBox="0 0 100 160" fill="none" xmlns="http://www.w3.org/2000/svg" class="doccy-svg">
@@ -40,14 +43,31 @@ const ctaText = t('doccy.cta') as string;
 </div>
 
 <script define:vars={{ messages }}>
+  import { authClient } from '../lib/auth-client';
+
   let messageIndex = 0;
   let bubbleHidden = false;
 
+  const container = document.getElementById('doccy');
   const bubble = document.getElementById('doccy-bubble');
   const messageEl = document.getElementById('doccy-message');
   const closeBtn = document.getElementById('doccy-close');
   const character = document.getElementById('doccy-character');
   const eyeBgs = document.querySelectorAll('.doccy-eye-bg');
+  const ctaBtn = document.getElementById('doccy-cta');
+
+  // Check auth status and update CTA
+  (async () => {
+    try {
+      const session = await authClient.getSession();
+      if (session?.data?.user && ctaBtn && container) {
+        ctaBtn.setAttribute('href', container.dataset.dashboard || '/');
+        ctaBtn.textContent = container.dataset.consoleCta || 'Console';
+      }
+    } catch (e) {
+      console.debug('Auth check failed:', e);
+    }
+  })();
 
   closeBtn?.addEventListener('click', () => {
     bubble?.classList.add('hidden');
