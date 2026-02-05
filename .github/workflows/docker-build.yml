@@ -4,8 +4,32 @@ on:
   push:
     branches: [ main, master ]
     tags: [ 'v*' ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - 'installers/**'
+      - 'publish.sh'
+      - '.github/workflows/docker-build.yml'
+      - '.github/scripts/**'
   pull_request:
     branches: [ main, master ]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - 'installers/**'
+      - 'publish.sh'
+      - '.github/workflows/docker-build.yml'
+      - '.github/scripts/**'
   workflow_dispatch:
     inputs:
       create_release:
