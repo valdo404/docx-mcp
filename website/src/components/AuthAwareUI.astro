@@ -1,0 +1,90 @@
+---
+import type { Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const dashboardPath = lang === 'fr' ? '/tableau-de-bord' : '/en/dashboard';
+const loginPath = lang === 'fr' ? '/connexion' : '/en/login';
+---
+
+<auth-aware-ui
+  data-dashboard={dashboardPath}
+  data-login={loginPath}
+  data-lang={lang}
+>
+  <slot />
+</auth-aware-ui>
+
+<script>
+  import { authClient } from '../lib/auth-client';
+
+  class AuthAwareUI extends HTMLElement {
+    async connectedCallback() {
+      const dashboard = this.dataset.dashboard!;
+      const login = this.dataset.login!;
+      const lang = this.dataset.lang as 'fr' | 'en';
+
+      try {
+        const session = await authClient.getSession();
+        const user = session?.data?.user;
+
+        // Update avatar slot
+        const avatarSlot = this.querySelector('[data-auth-avatar]');
+        if (avatarSlot && user) {
+          const initials = this.getInitials(user.name || user.email || '?');
+          avatarSlot.innerHTML = `
+            <a href="${dashboard}" class="user-avatar" title="${user.name || user.email}">
+              ${initials}
+            </a>
+          `;
+        }
+
+        // Update CTA slots
+        this.querySelectorAll('[data-auth-cta]').forEach(cta => {
+          const link = cta.querySelector('a');
+          if (link && user) {
+            link.href = dashboard;
+            link.textContent = lang === 'fr' ? 'Accéder à la console' : 'Access console';
+            // Remove GitHub icon if present
+            const svg = link.querySelector('svg');
+            if (svg) svg.remove();
+          }
+        });
+
+      } catch (e) {
+        console.debug('Auth check failed:', e);
+      }
+    }
+
+    getInitials(name: string): string {
+      return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
+    }
+  }
+
+  customElements.define('auth-aware-ui', AuthAwareUI);
+</script>
+
+<style is:global>
+  .user-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--brand-primary);
+    color: white;
+    font-size: var(--font-size-200);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+    transition: opacity 0.2s;
+  }
+
+  .user-avatar:hover {
+    opacity: 0.9;
+    text-decoration: none;
+  }
+</style>

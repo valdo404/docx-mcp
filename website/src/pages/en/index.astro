@@ -1,6 +1,7 @@
 ---
 export const prerender = true;
 import Layout from '../../layouts/Layout.astro';
+import AuthAwareUI from '../../components/AuthAwareUI.astro';
 import Nav from '../../components/Nav.astro';
 import Hero from '../../components/Hero.astro';
 import Problem from '../../components/Problem.astro';
@@ -12,12 +13,14 @@ import Footer from '../../components/Footer.astro';
 ---
 
 <Layout title="Docx System — AI-Powered Document Editing">
-  <Nav lang="en" />
-  <Hero lang="en" />
-  <Problem lang="en" />
-  <Products lang="en" />
-  <Vision lang="en" />
-  <Cta lang="en" />
-  <Doccy lang="en" />
+  <AuthAwareUI lang="en">
+    <Nav lang="en" />
+    <Hero lang="en" />
+    <Problem lang="en" />
+    <Products lang="en" />
+    <Vision lang="en" />
+    <Cta lang="en" />
+    <Doccy lang="en" />
+  </AuthAwareUI>
   <Footer lang="en" />
 </Layout>

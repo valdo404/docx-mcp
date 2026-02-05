@@ -21,7 +21,7 @@ const t = useTranslations(lang);
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
           </div>
           <div class="feature-text">
-            <h4>{t('vision.multiplatform.title')}</h4>
+            <h4>{t('vision.multiplatform.title')} <span class="badge-coming">{t('products.coming')}</span></h4>
             <p>{t('vision.multiplatform.description')}</p>
           </div>
         </div>
@@ -39,7 +39,7 @@ const t = useTranslations(lang);
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           </div>
           <div class="feature-text">
-            <h4>{t('vision.enterprise.title')}</h4>
+            <h4>{t('vision.enterprise.title')} <span class="badge-coming">{t('products.coming')}</span></h4>
             <p>{t('vision.enterprise.description')}</p>
           </div>
         </div>
@@ -108,6 +108,19 @@ const t = useTranslations(lang);
     font-size: var(--font-size-300);
     color: var(--text-tertiary);
     line-height: 1.5;
+  }
+
+  .badge-coming {
+    display: inline-block;
+    padding: 2px 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-100);
+    font-weight: var(--font-weight-medium);
+    color: var(--text-tertiary);
+    vertical-align: middle;
+    margin-left: var(--spacing-s);
   }
 
   @media (max-width: 1024px) {
