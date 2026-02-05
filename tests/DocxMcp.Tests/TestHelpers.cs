@@ -7,6 +7,7 @@ internal static class TestHelpers
 {
     private static IStorageClient? _sharedStorage;
     private static readonly object _lock = new();
+    private static string? _testStorageDir;
 
     /// <summary>
     /// Create a SessionManager backed by the gRPC storage server.
@@ -49,7 +50,13 @@ internal static class TestHelpers
             if (_sharedStorage != null)
                 return _sharedStorage;
 
+            // Use a temporary directory for test isolation
+            _testStorageDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(_testStorageDir);
+
             var options = StorageClientOptions.FromEnvironment();
+            options.LocalStorageDir = _testStorageDir;
+
             var launcher = new GrpcLauncher(options, NullLogger<GrpcLauncher>.Instance);
             _sharedStorage = StorageClient.CreateAsync(options, launcher, NullLogger<StorageClient>.Instance)
                 .GetAwaiter().GetResult();
@@ -59,7 +66,7 @@ internal static class TestHelpers
     }
 
     /// <summary>
-    /// Cleanup: dispose the shared storage client.
+    /// Cleanup: dispose the shared storage client and remove temp directory.
     /// Call this in test cleanup if needed.
     /// </summary>
     public static async Task DisposeStorageAsync()
@@ -68,6 +75,20 @@ internal static class TestHelpers
         {
             await _sharedStorage.DisposeAsync();
             _sharedStorage = null;
+        }
+
+        // Clean up temp directory
+        if (_testStorageDir != null && Directory.Exists(_testStorageDir))
+        {
+            try
+            {
+                Directory.Delete(_testStorageDir, recursive: true);
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+            _testStorageDir = null;
         }
     }
 }
