@@ -849,6 +849,7 @@ mod tests {
         index.upsert(SessionIndexEntry {
             id: "session-1".to_string(),
             source_path: Some("/path/to/doc.docx".to_string()),
+            auto_sync: true,
             created_at: chrono::Utc::now(),
             last_modified_at: chrono::Utc::now(),
             docx_file: Some("session-1.docx".to_string()),
@@ -882,6 +883,7 @@ mod tests {
             index.upsert(SessionIndexEntry {
                 id: session_id,
                 source_path: None,
+                auto_sync: false,
                 created_at: chrono::Utc::now(),
                 last_modified_at: chrono::Utc::now(),
                 docx_file: None,
@@ -968,6 +970,7 @@ mod tests {
                 index.upsert(SessionIndexEntry {
                     id: session_id.clone(),
                     source_path: None,
+                    auto_sync: false,
                     created_at: chrono::Utc::now(),
                     last_modified_at: chrono::Utc::now(),
                     docx_file: None,

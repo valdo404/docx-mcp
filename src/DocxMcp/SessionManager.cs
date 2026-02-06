@@ -146,7 +146,32 @@ public sealed class SessionManager
     public void Save(string id, string? path = null)
     {
         var session = Get(id);
-        session.Save(path);
+
+        // If path is provided, update/register the source first
+        if (path is not null)
+        {
+            SetSource(id, path, autoSync: _autoSaveEnabled);
+        }
+
+        // Ensure source is registered
+        var status = _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
+        if (status is null)
+        {
+            throw new InvalidOperationException(
+                $"No save target registered for session '{id}'. Use document_set_source to set a path first.");
+        }
+
+        // Sync to source via gRPC
+        var data = session.ToBytes();
+        var (success, error, _) = _storage.SyncToSourceAsync(TenantId, id, data).GetAwaiter().GetResult();
+
+        if (!success)
+        {
+            throw new InvalidOperationException($"Failed to save session '{id}': {error}");
+        }
+
+        _externalChangeTracker?.UpdateSessionSnapshot(id);
+        _logger.LogDebug("Saved session {SessionId} to {Path}.", id, status.Uri);
     }
 
     public void Close(string id)
@@ -772,6 +797,75 @@ public sealed class SessionManager
         await _storage.TruncateWalAsync(TenantId, sessionId, (ulong)keepCount);
     }
 
+    // --- Source Management ---
+
+    /// <summary>
+    /// Set the source path for a session (for new documents or "Save As").
+    /// If the session already has a source registered, updates it.
+    /// </summary>
+    public void SetSource(string id, string path, bool? autoSync = null)
+    {
+        var session = Get(id);
+        var absolutePath = Path.GetFullPath(path);
+        var effectiveAutoSync = autoSync ?? _autoSaveEnabled;
+
+        try
+        {
+            // Check if source is already registered
+            var status = _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
+
+            if (status is not null)
+            {
+                // Update existing source
+                var (success, error) = _storage.UpdateSourceAsync(
+                    TenantId, id,
+                    SourceType.LocalFile, absolutePath, effectiveAutoSync
+                ).GetAwaiter().GetResult();
+
+                if (!success)
+                    throw new InvalidOperationException($"Failed to update source: {error}");
+
+                _logger.LogInformation("Updated source for session {SessionId}: {Path} (auto_sync={AutoSync})",
+                    id, absolutePath, effectiveAutoSync);
+            }
+            else
+            {
+                // Register new source
+                var (success, error) = _storage.RegisterSourceAsync(
+                    TenantId, id,
+                    SourceType.LocalFile, absolutePath, effectiveAutoSync
+                ).GetAwaiter().GetResult();
+
+                if (!success)
+                    throw new InvalidOperationException($"Failed to register source: {error}");
+
+                _logger.LogInformation("Registered source for session {SessionId}: {Path} (auto_sync={AutoSync})",
+                    id, absolutePath, effectiveAutoSync);
+            }
+
+            // Update in-memory session's source path
+            session.SetSourcePath(absolutePath);
+
+            // Update index with new source path
+            // Note: This would require adding source_path update to the index proto
+            // For now, we rely on the SourceSyncService registry
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to set source for session {SessionId}.", id);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Get the sync status for a session.
+    /// </summary>
+    public SyncStatusDto? GetSyncStatus(string id)
+    {
+        Get(id); // Validate session exists
+        return _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
+    }
+
     // --- Private helpers ---
 
     private void MaybeAutoSave(string id)
@@ -782,12 +876,28 @@ public sealed class SessionManager
         try
         {
             var session = Get(id);
-            if (session.SourcePath is null)
-                return;
 
-            session.Save();
+            // Check if source is registered with SourceSyncService
+            var status = _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
+            if (status is null || !status.AutoSyncEnabled)
+            {
+                // No source registered or auto-sync disabled - nothing to do
+                return;
+            }
+
+            // Use gRPC SourceSyncService for auto-save
+            var data = session.ToBytes();
+            var (success, error, syncedAt) = _storage.SyncToSourceAsync(TenantId, id, data).GetAwaiter().GetResult();
+
+            if (!success)
+            {
+                _logger.LogWarning("Auto-save failed for session {SessionId}: {Error}", id, error);
+                return;
+            }
+
             _externalChangeTracker?.UpdateSessionSnapshot(id);
-            _logger.LogDebug("Auto-saved session {SessionId} to {Path}.", id, session.SourcePath);
+            _logger.LogDebug("Auto-saved session {SessionId} to {Path} (synced_at={SyncedAt}).",
+                id, status.Uri, syncedAt);
         }
         catch (Exception ex)
         {
@@ -812,6 +922,25 @@ public sealed class SessionManager
                     now,
                     0,
                     Array.Empty<ulong>()));
+
+            // Register source with SourceSyncService for auto-save via gRPC
+            if (session.SourcePath is not null)
+            {
+                var (success, error) = await _storage.RegisterSourceAsync(
+                    TenantId, session.Id,
+                    SourceType.LocalFile, session.SourcePath, autoSync: _autoSaveEnabled);
+
+                if (!success)
+                {
+                    _logger.LogWarning("Failed to register source for session {SessionId}: {Error}",
+                        session.Id, error);
+                }
+                else
+                {
+                    _logger.LogDebug("Registered source for session {SessionId}: {Path}",
+                        session.Id, session.SourcePath);
+                }
+            }
         }
         catch (Exception ex)
         {

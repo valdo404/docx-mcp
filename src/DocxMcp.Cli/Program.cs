@@ -66,6 +66,8 @@ try
         "list" => DocumentTools.DocumentList(sessions),
         "close" => DocumentTools.DocumentClose(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
         "save" => DocumentTools.DocumentSave(sessions, null, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
+        "set-source" => DocumentTools.DocumentSetSource(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+            Require(args, 2, "path"), !HasFlag(args, "--no-auto-sync")),
         "snapshot" => DocumentTools.DocumentSnapshot(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
         "query" => QueryTool.Query(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path"),
@@ -731,6 +733,7 @@ static void PrintUsage()
       open [path]                          Open file or create new document
       list                                 List open sessions
       save <doc_id|path> [output_path]     Save document to disk
+      set-source <doc_id|path> <path> [--no-auto-sync]  Set/change save target
       inspect <doc_id|path>                Show detailed session information
 
     Administrative commands (CLI-only, not exposed to MCP):

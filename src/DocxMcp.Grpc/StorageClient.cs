@@ -573,6 +573,167 @@ public sealed class StorageClient : IStorageClient
     }
 
     // =========================================================================
+    // SourceSync Operations
+    // =========================================================================
+
+    private SourceSyncService.SourceSyncServiceClient GetSyncClient()
+    {
+        return new SourceSyncService.SourceSyncServiceClient(_channel);
+    }
+
+    /// <summary>
+    /// Register a source for a session.
+    /// </summary>
+    public async Task<(bool Success, string Error)> RegisterSourceAsync(
+        string tenantId,
+        string sessionId,
+        SourceType sourceType,
+        string uri,
+        bool autoSync,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new RegisterSourceRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId,
+            Source = new SourceDescriptor
+            {
+                Type = sourceType,
+                Uri = uri
+            },
+            AutoSync = autoSync
+        };
+
+        var response = await GetSyncClient().RegisterSourceAsync(request, cancellationToken: cancellationToken);
+        return (response.Success, response.Error);
+    }
+
+    /// <summary>
+    /// Unregister a source for a session.
+    /// </summary>
+    public async Task<bool> UnregisterSourceAsync(
+        string tenantId,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new UnregisterSourceRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        var response = await GetSyncClient().UnregisterSourceAsync(request, cancellationToken: cancellationToken);
+        return response.Success;
+    }
+
+    /// <summary>
+    /// Update source configuration for a session (change URI, toggle auto-sync).
+    /// </summary>
+    public async Task<(bool Success, string Error)> UpdateSourceAsync(
+        string tenantId,
+        string sessionId,
+        SourceType? sourceType = null,
+        string? uri = null,
+        bool? autoSync = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new UpdateSourceRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        if (sourceType.HasValue && uri is not null)
+        {
+            request.Source = new SourceDescriptor
+            {
+                Type = sourceType.Value,
+                Uri = uri
+            };
+        }
+
+        if (autoSync.HasValue)
+        {
+            request.AutoSync = autoSync.Value;
+            request.UpdateAutoSync = true;
+        }
+
+        var response = await GetSyncClient().UpdateSourceAsync(request, cancellationToken: cancellationToken);
+        return (response.Success, response.Error);
+    }
+
+    /// <summary>
+    /// Sync session data to its registered source (streaming upload).
+    /// </summary>
+    public async Task<(bool Success, string Error, long SyncedAtUnix)> SyncToSourceAsync(
+        string tenantId,
+        string sessionId,
+        byte[] data,
+        CancellationToken cancellationToken = default)
+    {
+        using var call = GetSyncClient().SyncToSource(cancellationToken: cancellationToken);
+
+        var chunks = ChunkData(data);
+        bool isFirst = true;
+
+        foreach (var (chunk, isLast) in chunks)
+        {
+            var msg = new SyncToSourceChunk
+            {
+                Data = Google.Protobuf.ByteString.CopyFrom(chunk),
+                IsLast = isLast
+            };
+
+            if (isFirst)
+            {
+                msg.Context = new TenantContext { TenantId = tenantId };
+                msg.SessionId = sessionId;
+                isFirst = false;
+            }
+
+            await call.RequestStream.WriteAsync(msg, cancellationToken);
+        }
+
+        await call.RequestStream.CompleteAsync();
+        var response = await call;
+
+        _logger?.LogDebug("Synced session {SessionId} for tenant {TenantId} ({Bytes} bytes, success={Success})",
+            sessionId, tenantId, data.Length, response.Success);
+
+        return (response.Success, response.Error, response.SyncedAtUnix);
+    }
+
+    /// <summary>
+    /// Get sync status for a session.
+    /// </summary>
+    public async Task<SyncStatusDto?> GetSyncStatusAsync(
+        string tenantId,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new GetSyncStatusRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        var response = await GetSyncClient().GetSyncStatusAsync(request, cancellationToken: cancellationToken);
+
+        if (!response.Registered || response.Status is null)
+            return null;
+
+        var status = response.Status;
+        return new SyncStatusDto(
+            status.SessionId,
+            (SourceType)(int)status.Source.Type,
+            status.Source.Uri,
+            status.AutoSyncEnabled,
+            status.LastSyncedAtUnix > 0 ? status.LastSyncedAtUnix : null,
+            status.HasPendingChanges,
+            string.IsNullOrEmpty(status.LastError) ? null : status.LastError);
+    }
+
+    // =========================================================================
     // Helpers
     // =========================================================================
 

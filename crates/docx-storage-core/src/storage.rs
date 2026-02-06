@@ -101,6 +101,9 @@ pub struct SessionIndexEntry {
     pub id: String,
     /// Original source file path
     pub source_path: Option<String>,
+    /// Auto-sync enabled for this session
+    #[serde(default = "default_auto_sync")]
+    pub auto_sync: bool,
     /// When the session was created
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// When the session was last modified
@@ -118,6 +121,10 @@ pub struct SessionIndexEntry {
     /// Checkpoint positions
     #[serde(default)]
     pub checkpoint_positions: Vec<u64>,
+}
+
+fn default_auto_sync() -> bool {
+    true
 }
 
 /// Storage backend abstraction for tenant-aware document storage.

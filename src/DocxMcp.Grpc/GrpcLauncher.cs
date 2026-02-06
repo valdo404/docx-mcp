@@ -154,7 +154,7 @@ public sealed class GrpcLauncher : IDisposable
         if (serverPath is null)
         {
             throw new FileNotFoundException(
-                "Could not find docx-mcp-storage binary. " +
+                "Could not find docx-storage-local binary. " +
                 "Set STORAGE_SERVER_PATH or ensure it's in PATH.");
         }
 
@@ -200,7 +200,7 @@ public sealed class GrpcLauncher : IDisposable
         if (serverPath is null)
         {
             throw new FileNotFoundException(
-                "Could not find docx-mcp-storage binary. " +
+                "Could not find docx-storage-local binary. " +
                 "Set STORAGE_SERVER_PATH or ensure it's in PATH.");
         }
 
@@ -303,7 +303,7 @@ public sealed class GrpcLauncher : IDisposable
     {
         var pid = Environment.ProcessId;
         var tempDir = Path.GetTempPath();
-        return Path.Combine(tempDir, $"docx-mcp-storage-{pid}.log");
+        return Path.Combine(tempDir, $"docx-storage-local-{pid}.log");
     }
 
     private string? FindServerBinary()
@@ -316,7 +316,7 @@ public sealed class GrpcLauncher : IDisposable
             _logger?.LogWarning("Configured server path not found: {Path}", _options.StorageServerPath);
         }
 
-        var binaryName = OperatingSystem.IsWindows() ? "docx-mcp-storage.exe" : "docx-mcp-storage";
+        var binaryName = OperatingSystem.IsWindows() ? "docx-storage-local.exe" : "docx-storage-local";
 
         // Check PATH
         var pathEnv = Environment.GetEnvironmentVariable("PATH");

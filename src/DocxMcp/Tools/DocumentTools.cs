@@ -38,6 +38,23 @@ public sealed class DocumentTools
         return $"Opened document{source}. Session ID: {session.Id}";
     }
 
+    [McpServerTool(Name = "document_set_source"), Description(
+        "Set or change the file path where a document will be saved. " +
+        "Use this for 'Save As' operations or to set a save path for new documents. " +
+        "If auto_sync is true (default), the document will be auto-saved after each edit.")]
+    public static string DocumentSetSource(
+        SessionManager sessions,
+        [Description("Session ID of the document.")]
+        string doc_id,
+        [Description("Absolute path where the document should be saved.")]
+        string path,
+        [Description("Enable auto-save after each edit. Default true.")]
+        bool auto_sync = true)
+    {
+        sessions.SetSource(doc_id, path, auto_sync);
+        return $"Source set to '{path}' for session '{doc_id}'. Auto-sync: {(auto_sync ? "enabled" : "disabled")}.";
+    }
+
     [McpServerTool(Name = "document_save"), Description(
         "Save the document to disk. " +
         "Documents opened from a file are auto-saved after each edit by default (DOCX_AUTO_SAVE=true). " +

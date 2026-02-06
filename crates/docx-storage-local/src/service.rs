@@ -300,6 +300,7 @@ impl StorageService for StorageServiceImpl {
                 index.upsert(crate::storage::SessionIndexEntry {
                     id: session_id.clone(),
                     source_path: if entry.source_path.is_empty() { None } else { Some(entry.source_path) },
+                    auto_sync: true, // Default to true for new sessions with source path
                     created_at: chrono::DateTime::from_timestamp(entry.created_at_unix, 0)
                         .unwrap_or_else(chrono::Utc::now),
                     last_modified_at: chrono::DateTime::from_timestamp(entry.modified_at_unix, 0)

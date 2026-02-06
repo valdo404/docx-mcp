@@ -62,8 +62,8 @@ async fn main() -> anyhow::Result<()> {
     // Create lock manager (using same base dir as storage)
     let lock_manager: Arc<dyn crate::lock::LockManager> = Arc::new(FileLock::new(&dir));
 
-    // Create sync backend
-    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> = Arc::new(LocalFileSyncBackend::new());
+    // Create sync backend (shares storage for index persistence)
+    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> = Arc::new(LocalFileSyncBackend::new(storage.clone()));
 
     // Create watch backend (uses SHA256 hash for content change detection, like C# ExternalChangeTracker)
     let watch_backend: Arc<dyn docx_storage_core::WatchBackend> = Arc::new(NotifyWatchBackend::new());

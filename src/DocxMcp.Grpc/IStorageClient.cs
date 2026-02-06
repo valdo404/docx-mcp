@@ -68,4 +68,36 @@ public interface IStorageClient : IAsyncDisposable
     // Health check
     Task<(bool Healthy, string Backend, string Version)> HealthCheckAsync(
         CancellationToken cancellationToken = default);
+
+    // SourceSync operations
+    Task<(bool Success, string Error)> RegisterSourceAsync(
+        string tenantId, string sessionId, SourceType sourceType, string uri, bool autoSync,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> UnregisterSourceAsync(
+        string tenantId, string sessionId, CancellationToken cancellationToken = default);
+
+    Task<(bool Success, string Error)> UpdateSourceAsync(
+        string tenantId, string sessionId,
+        SourceType? sourceType = null, string? uri = null, bool? autoSync = null,
+        CancellationToken cancellationToken = default);
+
+    Task<(bool Success, string Error, long SyncedAtUnix)> SyncToSourceAsync(
+        string tenantId, string sessionId, byte[] data,
+        CancellationToken cancellationToken = default);
+
+    Task<SyncStatusDto?> GetSyncStatusAsync(
+        string tenantId, string sessionId, CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Sync status DTO.
+/// </summary>
+public record SyncStatusDto(
+    string SessionId,
+    SourceType SourceType,
+    string Uri,
+    bool AutoSyncEnabled,
+    long? LastSyncedAtUnix,
+    bool HasPendingChanges,
+    string? LastError);
