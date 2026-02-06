@@ -176,6 +176,7 @@ message UpdateSessionInIndexRequest {
   optional uint64 wal_position = 4;
   repeated uint64 add_checkpoint_positions = 5;      // Positions to add
   repeated uint64 remove_checkpoint_positions = 6;   // Positions to remove
+  optional uint64 cursor_position = 7;               // Current undo/redo cursor
 }
 
 message UpdateSessionInIndexResponse {

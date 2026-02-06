@@ -63,9 +63,8 @@ public sealed class WatchDaemon : IDisposable
         watcher.Renamed += (_, e) => OnFileRenamed(sessionId, e.OldFullPath, e.FullPath);
         watcher.Deleted += (_, e) => OnFileDeleted(sessionId, e.FullPath);
 
-        // Stop the tracker's internal FSW to avoid dual-watcher race condition.
-        // The daemon will drive change detection via CheckForChanges.
-        _tracker.StopWatching(sessionId);
+        // Register session with tracker for change detection
+        // (gRPC handles actual file watching, WatchDaemon is a fallback for CLI)
         _tracker.EnsureTracked(sessionId);
 
         _watchers[$"{sessionId}:{fullPath}"] = watcher;
@@ -290,7 +289,7 @@ public sealed class WatchDaemon : IDisposable
         var sessionId = FindSessionForFile(filePath);
         if (sessionId is not null)
         {
-            _tracker.StartWatching(sessionId);
+            _tracker.RegisterSession(sessionId);
             _onOutput($"[TRACK] {Path.GetFileName(filePath)} -> session {sessionId}");
         }
         return sessionId;

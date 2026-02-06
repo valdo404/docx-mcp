@@ -374,7 +374,13 @@ impl StorageService for StorageServiceImpl {
                 }
                 if let Some(wal_position) = req.wal_position {
                     entry.wal_count = wal_position;
-                    entry.cursor_position = wal_position;
+                    // Only update cursor if not explicitly set
+                    if req.cursor_position.is_none() {
+                        entry.cursor_position = wal_position;
+                    }
+                }
+                if let Some(cursor_position) = req.cursor_position {
+                    entry.cursor_position = cursor_position;
                 }
 
                 // Add checkpoint positions

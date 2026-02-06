@@ -11,7 +11,8 @@ namespace DocxMcp.ExternalChanges;
 
 /// <summary>
 /// Tracks external modifications to source files and generates logical patches.
-/// Uses FileSystemWatcher for real-time detection with polling fallback.
+/// File watching is handled by gRPC ExternalWatchService (Rust).
+/// This class handles change detection, diff generation, and sync operations.
 /// </summary>
 public sealed class ExternalChangeTracker : IDisposable
 {
@@ -39,76 +40,23 @@ public sealed class ExternalChangeTracker : IDisposable
     }
 
     /// <summary>
-    /// Start watching a session's source file for external changes.
+    /// Register a session for external change tracking.
+    /// Note: Actual file watching is handled by gRPC ExternalWatchService.
+    /// This just sets up the tracking state for change detection.
     /// </summary>
-    public void StartWatching(string sessionId)
+    public void RegisterSession(string sessionId)
     {
-        try
-        {
-            var session = _sessions.Get(sessionId);
-            if (session.SourcePath is null)
-            {
-                _logger.LogDebug("Session {SessionId} has no source path, skipping watch.", sessionId);
-                return;
-            }
-
-            if (!File.Exists(session.SourcePath))
-            {
-                _logger.LogWarning("Source file not found for session {SessionId}: {Path}",
-                    sessionId, session.SourcePath);
-                return;
-            }
-
-            if (_watchedSessions.ContainsKey(sessionId))
-            {
-                _logger.LogDebug("Session {SessionId} is already being watched.", sessionId);
-                return;
-            }
-
-            var watched = new WatchedSession
-            {
-                SessionId = sessionId,
-                SourcePath = session.SourcePath,
-                LastKnownHash = ComputeFileHash(session.SourcePath),
-                LastKnownSize = new FileInfo(session.SourcePath).Length,
-                LastChecked = DateTime.UtcNow,
-                SessionSnapshot = session.ToBytes()
-            };
-
-            // Create FileSystemWatcher
-            var directory = Path.GetDirectoryName(session.SourcePath)!;
-            var fileName = Path.GetFileName(session.SourcePath);
-
-            watched.Watcher = new FileSystemWatcher(directory, fileName)
-            {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
-                EnableRaisingEvents = true
-            };
-
-            watched.Watcher.Changed += (_, e) => OnFileChanged(sessionId, e.FullPath);
-            watched.Watcher.Renamed += (_, e) => OnFileRenamed(sessionId, e.OldFullPath, e.FullPath);
-
-            _watchedSessions[sessionId] = watched;
-            _pendingChanges[sessionId] = [];
-
-            _logger.LogInformation("Started watching session {SessionId} source file: {Path}",
-                sessionId, session.SourcePath);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to start watching session {SessionId}.", sessionId);
-        }
+        EnsureTracked(sessionId);
     }
 
     /// <summary>
-    /// Stop watching a session's source file.
+    /// Unregister a session from tracking.
     /// </summary>
-    public void StopWatching(string sessionId)
+    public void UnregisterSession(string sessionId)
     {
-        if (_watchedSessions.TryRemove(sessionId, out var watched))
+        if (_watchedSessions.TryRemove(sessionId, out _))
         {
-            watched.Watcher?.Dispose();
-            _logger.LogInformation("Stopped watching session {SessionId}.", sessionId);
+            _logger.LogDebug("Unregistered session {SessionId} from change tracking.", sessionId);
         }
         _pendingChanges.TryRemove(sessionId, out _);
     }
@@ -138,8 +86,8 @@ public sealed class ExternalChangeTracker : IDisposable
     }
 
     /// <summary>
-    /// Register a session for tracking without creating a FileSystemWatcher.
-    /// Use this when an external component (e.g., WatchDaemon) manages the FSW.
+    /// Register a session for tracking if not already tracked.
+    /// File watching is handled by gRPC ExternalWatchService.
     /// </summary>
     public void EnsureTracked(string sessionId)
     {
@@ -166,7 +114,7 @@ public sealed class ExternalChangeTracker : IDisposable
             _pendingChanges[sessionId] = [];
 
             if (DebugEnabled)
-                Console.Error.WriteLine($"[DEBUG:tracker] Registered session {sessionId} for tracking (no FSW)");
+                Console.Error.WriteLine($"[DEBUG:tracker] Registered session {sessionId} for tracking");
         }
         catch (Exception ex)
         {
@@ -432,57 +380,39 @@ public sealed class ExternalChangeTracker : IDisposable
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    private void OnFileChanged(string sessionId, string filePath)
+    /// <summary>
+    /// Handle a file rename event from gRPC ExternalWatchService.
+    /// </summary>
+    public void HandleFileRenamed(string sessionId, string newPath)
     {
-        if (DebugEnabled)
-            Console.Error.WriteLine($"[DEBUG:tracker] FSW fired for {Path.GetFileName(filePath)} (session {sessionId})");
+        _logger.LogInformation("Source file for session {SessionId} was renamed to {NewPath}.",
+            sessionId, newPath);
 
-        // Debounce: wait a bit for file to be fully written
-        Task.Delay(500).ContinueWith(_ =>
-        {
-            try
-            {
-                if (DebugEnabled)
-                    Console.Error.WriteLine($"[DEBUG:tracker] Processing FSW event after 500ms debounce");
-
-                if (_watchedSessions.TryGetValue(sessionId, out var watched))
-                {
-                    var patch = DetectAndGeneratePatch(watched);
-                    if (patch is not null)
-                    {
-                        if (DebugEnabled)
-                            Console.Error.WriteLine($"[DEBUG:tracker] Change detected, raising event (patch={patch.Id})");
-                        RaiseExternalChangeDetected(sessionId, patch);
-                    }
-                    else if (DebugEnabled)
-                    {
-                        Console.Error.WriteLine($"[DEBUG:tracker] No changes detected after FSW event");
-                    }
-                }
-                else if (DebugEnabled)
-                {
-                    Console.Error.WriteLine($"[DEBUG:tracker] Session {sessionId} not in watched sessions");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error processing file change for session {SessionId}.", sessionId);
-                if (DebugEnabled)
-                    Console.Error.WriteLine($"[DEBUG:tracker] Exception in OnFileChanged: {ex}");
-            }
-        });
-    }
-
-    private void OnFileRenamed(string sessionId, string oldPath, string newPath)
-    {
-        _logger.LogWarning("Source file for session {SessionId} was renamed from {OldPath} to {NewPath}.",
-            sessionId, oldPath, newPath);
-
-        // Update the watched path
         if (_watchedSessions.TryGetValue(sessionId, out var watched))
         {
             watched.SourcePath = newPath;
         }
+    }
+
+    /// <summary>
+    /// Handle an external change event from gRPC ExternalWatchService.
+    /// This processes the change and generates a patch if needed.
+    /// </summary>
+    public ExternalChangePatch? HandleExternalChangeEvent(string sessionId)
+    {
+        if (!_watchedSessions.TryGetValue(sessionId, out var watched))
+        {
+            EnsureTracked(sessionId);
+            if (!_watchedSessions.TryGetValue(sessionId, out watched))
+                return null;
+        }
+
+        var patch = DetectAndGeneratePatch(watched);
+        if (patch is not null)
+        {
+            RaiseExternalChangeDetected(sessionId, patch);
+        }
+        return patch;
     }
 
     private ExternalChangePatch? DetectAndGeneratePatch(WatchedSession watched)
@@ -598,10 +528,6 @@ public sealed class ExternalChangeTracker : IDisposable
 
     public void Dispose()
     {
-        foreach (var watched in _watchedSessions.Values)
-        {
-            watched.Watcher?.Dispose();
-        }
         _watchedSessions.Clear();
         _pendingChanges.Clear();
     }
@@ -614,7 +540,6 @@ public sealed class ExternalChangeTracker : IDisposable
         public required long LastKnownSize { get; set; }
         public required DateTime LastChecked { get; set; }
         public required byte[] SessionSnapshot { get; set; }
-        public FileSystemWatcher? Watcher { get; set; }
     }
 }
 

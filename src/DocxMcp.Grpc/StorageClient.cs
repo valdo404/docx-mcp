@@ -308,6 +308,7 @@ public sealed class StorageClient : IStorageClient
         ulong? walPosition = null,
         IEnumerable<ulong>? addCheckpointPositions = null,
         IEnumerable<ulong>? removeCheckpointPositions = null,
+        ulong? cursorPosition = null,
         CancellationToken cancellationToken = default)
     {
         var request = new UpdateSessionInIndexRequest
@@ -327,6 +328,9 @@ public sealed class StorageClient : IStorageClient
 
         if (removeCheckpointPositions is not null)
             request.RemoveCheckpointPositions.AddRange(removeCheckpointPositions);
+
+        if (cursorPosition.HasValue)
+            request.CursorPosition = cursorPosition.Value;
 
         var response = await _client.UpdateSessionInIndexAsync(request, cancellationToken: cancellationToken);
         return (response.Success, response.NotFound);
@@ -731,6 +735,145 @@ public sealed class StorageClient : IStorageClient
             status.LastSyncedAtUnix > 0 ? status.LastSyncedAtUnix : null,
             status.HasPendingChanges,
             string.IsNullOrEmpty(status.LastError) ? null : status.LastError);
+    }
+
+    // =========================================================================
+    // ExternalWatch Operations
+    // =========================================================================
+
+    private ExternalWatchService.ExternalWatchServiceClient GetWatchClient()
+    {
+        return new ExternalWatchService.ExternalWatchServiceClient(_channel);
+    }
+
+    /// <summary>
+    /// Start watching a source for external changes.
+    /// </summary>
+    public async Task<(bool Success, string WatchId, string Error)> StartWatchAsync(
+        string tenantId,
+        string sessionId,
+        SourceType sourceType,
+        string uri,
+        int pollIntervalSeconds = 0,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new StartWatchRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId,
+            Source = new SourceDescriptor
+            {
+                Type = sourceType,
+                Uri = uri
+            },
+            PollIntervalSeconds = pollIntervalSeconds
+        };
+
+        var response = await GetWatchClient().StartWatchAsync(request, cancellationToken: cancellationToken);
+        return (response.Success, response.WatchId, response.Error);
+    }
+
+    /// <summary>
+    /// Stop watching a source.
+    /// </summary>
+    public async Task<bool> StopWatchAsync(
+        string tenantId,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new StopWatchRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        var response = await GetWatchClient().StopWatchAsync(request, cancellationToken: cancellationToken);
+        return response.Success;
+    }
+
+    /// <summary>
+    /// Poll for external changes.
+    /// </summary>
+    public async Task<(bool HasChanges, SourceMetadataDto? Current, SourceMetadataDto? Known)> CheckForChangesAsync(
+        string tenantId,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new CheckForChangesRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        var response = await GetWatchClient().CheckForChangesAsync(request, cancellationToken: cancellationToken);
+
+        return (
+            response.HasChanges,
+            response.CurrentMetadata is not null ? ConvertMetadata(response.CurrentMetadata) : null,
+            response.KnownMetadata is not null ? ConvertMetadata(response.KnownMetadata) : null
+        );
+    }
+
+    /// <summary>
+    /// Get current source file metadata.
+    /// </summary>
+    public async Task<SourceMetadataDto?> GetSourceMetadataAsync(
+        string tenantId,
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new GetSourceMetadataRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            SessionId = sessionId
+        };
+
+        var response = await GetWatchClient().GetSourceMetadataAsync(request, cancellationToken: cancellationToken);
+
+        if (!response.Success || response.Metadata is null)
+            return null;
+
+        return ConvertMetadata(response.Metadata);
+    }
+
+    /// <summary>
+    /// Subscribe to external change events for specified sessions.
+    /// </summary>
+    public async IAsyncEnumerable<ExternalChangeEventDto> WatchChangesAsync(
+        string tenantId,
+        IEnumerable<string> sessionIds,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var request = new WatchChangesRequest
+        {
+            Context = new TenantContext { TenantId = tenantId }
+        };
+        request.SessionIds.AddRange(sessionIds);
+
+        using var call = GetWatchClient().WatchChanges(request, cancellationToken: cancellationToken);
+
+        await foreach (var evt in call.ResponseStream.ReadAllAsync(cancellationToken))
+        {
+            yield return new ExternalChangeEventDto(
+                evt.SessionId,
+                (ExternalChangeType)(int)evt.ChangeType,
+                evt.OldMetadata is not null ? ConvertMetadata(evt.OldMetadata) : null,
+                evt.NewMetadata is not null ? ConvertMetadata(evt.NewMetadata) : null,
+                evt.DetectedAtUnix,
+                string.IsNullOrEmpty(evt.NewUri) ? null : evt.NewUri
+            );
+        }
+    }
+
+    private static SourceMetadataDto ConvertMetadata(SourceMetadata metadata)
+    {
+        return new SourceMetadataDto(
+            metadata.SizeBytes,
+            metadata.ModifiedAtUnix,
+            string.IsNullOrEmpty(metadata.Etag) ? null : metadata.Etag,
+            string.IsNullOrEmpty(metadata.VersionId) ? null : metadata.VersionId,
+            metadata.ContentHash.IsEmpty ? null : metadata.ContentHash.ToByteArray()
+        );
     }
 
     // =========================================================================

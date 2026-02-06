@@ -179,6 +179,21 @@ public sealed class SessionManager
         if (_sessions.TryRemove(id, out var session))
         {
             _cursors.TryRemove(id, out _);
+
+            // Unregister from external change tracking
+            _externalChangeTracker?.UnregisterSession(id);
+
+            // Stop gRPC watch
+            try
+            {
+                _storage.StopWatchAsync(TenantId, id).GetAwaiter().GetResult();
+                _logger.LogDebug("Stopped external watch for session {SessionId}", id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to stop external watch for session {SessionId} (may not have been watching)", id);
+            }
+
             session.Dispose();
 
             _storage.DeleteSessionAsync(TenantId, id).GetAwaiter().GetResult();
@@ -400,7 +415,7 @@ public sealed class SessionManager
     {
         var session = Get(id);
         var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
-        var cursor = _cursors.GetOrAdd(id, _ => walCount);
+        var cursor = _cursors.GetOrAdd(id, _ => LoadCursorPosition(id, walCount));
 
         if (cursor <= 0)
             return new UndoRedoResult { Position = 0, Steps = 0, Message = "Already at the beginning. Nothing to undo." };
@@ -409,6 +424,7 @@ public sealed class SessionManager
         var newCursor = cursor - actualSteps;
 
         RebuildDocumentAtPositionAsync(id, newCursor).GetAwaiter().GetResult();
+        PersistCursorPosition(id, newCursor);
         MaybeAutoSave(id);
 
         return new UndoRedoResult
@@ -423,7 +439,7 @@ public sealed class SessionManager
     {
         var session = Get(id);
         var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
-        var cursor = _cursors.GetOrAdd(id, _ => walCount);
+        var cursor = _cursors.GetOrAdd(id, _ => LoadCursorPosition(id, walCount));
 
         if (cursor >= walCount)
             return new UndoRedoResult { Position = cursor, Steps = 0, Message = "Already at the latest state. Nothing to redo." };
@@ -462,6 +478,7 @@ public sealed class SessionManager
             _cursors[id] = newCursor;
         }
 
+        PersistCursorPosition(id, newCursor);
         MaybeAutoSave(id);
 
         return new UndoRedoResult
@@ -482,16 +499,17 @@ public sealed class SessionManager
         if (position > walCount)
             return new UndoRedoResult
             {
-                Position = _cursors.GetOrAdd(id, _ => walCount),
+                Position = _cursors.GetOrAdd(id, _ => LoadCursorPosition(id, walCount)),
                 Steps = 0,
                 Message = $"Position {position} is beyond the WAL (max {walCount}). No change."
             };
 
-        var oldCursor = _cursors.GetOrAdd(id, _ => walCount);
+        var oldCursor = _cursors.GetOrAdd(id, _ => LoadCursorPosition(id, walCount));
         if (position == oldCursor)
             return new UndoRedoResult { Position = position, Steps = 0, Message = $"Already at position {position}." };
 
         RebuildDocumentAtPositionAsync(id, position).GetAwaiter().GetResult();
+        PersistCursorPosition(id, position);
         MaybeAutoSave(id);
 
         var stepsFromOld = Math.Abs(position - oldCursor);
@@ -524,7 +542,7 @@ public sealed class SessionManager
         Get(id);
         var walEntries = ReadWalEntriesAsync(id).GetAwaiter().GetResult();
         var walCount = walEntries.Count;
-        var cursor = _cursors.GetOrAdd(id, _ => walCount);
+        var cursor = _cursors.GetOrAdd(id, _ => LoadCursorPosition(id, walCount));
 
         var checkpointPositions = GetCheckpointPositionsAsync(id).GetAwaiter().GetResult();
 
@@ -746,6 +764,53 @@ public sealed class SessionManager
         return entries.Count;
     }
 
+    /// <summary>
+    /// Persist the cursor position to the index.
+    /// </summary>
+    private void PersistCursorPosition(string sessionId, int cursorPosition)
+    {
+        try
+        {
+            _storage.UpdateSessionInIndexAsync(
+                TenantId, sessionId,
+                cursorPosition: (ulong)cursorPosition
+            ).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist cursor position for session {SessionId}.", sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Load the cursor position from the index, or default to WAL count.
+    /// </summary>
+    private int LoadCursorPosition(string sessionId, int walCount)
+    {
+        try
+        {
+            var (indexData, found) = _storage.LoadIndexAsync(TenantId).GetAwaiter().GetResult();
+            if (found && indexData is not null)
+            {
+                var json = System.Text.Encoding.UTF8.GetString(indexData);
+                var index = JsonSerializer.Deserialize(json, SessionJsonContext.Default.SessionIndex);
+                if (index is not null && index.TryGetValue(sessionId, out var entry))
+                {
+                    // Return cursor if valid, otherwise default to walCount
+                    if (entry!.CursorPosition >= 0 && entry.CursorPosition <= walCount)
+                    {
+                        return entry.CursorPosition;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to load cursor position for session {SessionId}, using default.", sessionId);
+        }
+        return walCount;
+    }
+
     private async Task<List<WalEntry>> ReadWalEntriesAsync(string sessionId)
     {
         var (grpcEntries, _) = await _storage.ReadWalAsync(TenantId, sessionId);
@@ -846,9 +911,31 @@ public sealed class SessionManager
             // Update in-memory session's source path
             session.SetSourcePath(absolutePath);
 
-            // Update index with new source path
-            // Note: This would require adding source_path update to the index proto
-            // For now, we rely on the SourceSyncService registry
+            // Start watching for external changes via gRPC ExternalWatchService
+            try
+            {
+                var (watchSuccess, watchId, watchError) = _storage.StartWatchAsync(
+                    TenantId, id,
+                    SourceType.LocalFile, absolutePath
+                ).GetAwaiter().GetResult();
+
+                if (watchSuccess)
+                {
+                    _logger.LogDebug("Started external watch for session {SessionId}: watchId={WatchId}", id, watchId);
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to start external watch for session {SessionId}: {Error}", id, watchError);
+                }
+            }
+            catch (Exception watchEx)
+            {
+                // Don't fail the whole operation if watch fails - it's optional
+                _logger.LogWarning(watchEx, "Exception starting external watch for session {SessionId}", id);
+            }
+
+            // Register with ExternalChangeTracker for change detection (gRPC handles actual watching)
+            _externalChangeTracker?.RegisterSession(id);
         }
         catch (Exception ex)
         {
@@ -940,6 +1027,33 @@ public sealed class SessionManager
                     _logger.LogDebug("Registered source for session {SessionId}: {Path}",
                         session.Id, session.SourcePath);
                 }
+
+                // Start watching for external changes via gRPC
+                try
+                {
+                    var (watchSuccess, watchId, watchError) = await _storage.StartWatchAsync(
+                        TenantId, session.Id,
+                        SourceType.LocalFile, session.SourcePath);
+
+                    if (watchSuccess)
+                    {
+                        _logger.LogDebug("Started external watch for session {SessionId}: watchId={WatchId}",
+                            session.Id, watchId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Failed to start external watch for session {SessionId}: {Error}",
+                            session.Id, watchError);
+                    }
+                }
+                catch (Exception watchEx)
+                {
+                    _logger.LogWarning(watchEx, "Exception starting external watch for session {SessionId}",
+                        session.Id);
+                }
+
+                // Register with ExternalChangeTracker for change detection (gRPC handles actual watching)
+                _externalChangeTracker?.RegisterSession(session.Id);
             }
         }
         catch (Exception ex)

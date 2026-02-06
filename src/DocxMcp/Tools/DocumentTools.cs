@@ -25,10 +25,10 @@ public sealed class DocumentTools
             ? sessions.Open(path)
             : sessions.Create();
 
-        // Start watching for external changes if we have a source file
+        // Register for change tracking if we have a source file (gRPC handles actual watching)
         if (session.SourcePath is not null && externalChangeTracker is not null)
         {
-            externalChangeTracker.StartWatching(session.Id);
+            externalChangeTracker.RegisterSession(session.Id);
         }
 
         var source = session.SourcePath is not null
@@ -122,8 +122,8 @@ public sealed class DocumentTools
         ExternalChangeTracker? externalChangeTracker,
         string doc_id)
     {
-        // Stop watching for external changes before closing
-        externalChangeTracker?.StopWatching(doc_id);
+        // Unregister from change tracking before closing
+        externalChangeTracker?.UnregisterSession(doc_id);
 
         sessions.Close(doc_id);
         return $"Document session '{doc_id}' closed.";

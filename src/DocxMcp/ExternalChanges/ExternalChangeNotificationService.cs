@@ -36,7 +36,7 @@ public sealed class ExternalChangeNotificationService : BackgroundService
         {
             if (sourcePath is not null)
             {
-                _tracker.StartWatching(sessionId);
+                _tracker.RegisterSession(sessionId);
             }
         }
 

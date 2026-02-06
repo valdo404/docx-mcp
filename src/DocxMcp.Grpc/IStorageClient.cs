@@ -35,6 +35,7 @@ public interface IStorageClient : IAsyncDisposable
         long? modifiedAtUnix = null, ulong? walPosition = null,
         IEnumerable<ulong>? addCheckpointPositions = null,
         IEnumerable<ulong>? removeCheckpointPositions = null,
+        ulong? cursorPosition = null,
         CancellationToken cancellationToken = default);
 
     Task<(bool Success, bool Existed)> RemoveSessionFromIndexAsync(
@@ -88,6 +89,27 @@ public interface IStorageClient : IAsyncDisposable
 
     Task<SyncStatusDto?> GetSyncStatusAsync(
         string tenantId, string sessionId, CancellationToken cancellationToken = default);
+
+    // ExternalWatch operations
+    Task<(bool Success, string WatchId, string Error)> StartWatchAsync(
+        string tenantId, string sessionId, SourceType sourceType, string uri, int pollIntervalSeconds = 0,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> StopWatchAsync(
+        string tenantId, string sessionId, CancellationToken cancellationToken = default);
+
+    Task<(bool HasChanges, SourceMetadataDto? Current, SourceMetadataDto? Known)> CheckForChangesAsync(
+        string tenantId, string sessionId, CancellationToken cancellationToken = default);
+
+    Task<SourceMetadataDto?> GetSourceMetadataAsync(
+        string tenantId, string sessionId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Subscribe to external change events for specified sessions.
+    /// Returns an IAsyncEnumerable that yields events as they occur.
+    /// </summary>
+    IAsyncEnumerable<ExternalChangeEventDto> WatchChangesAsync(
+        string tenantId, IEnumerable<string> sessionIds, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -101,3 +123,26 @@ public record SyncStatusDto(
     long? LastSyncedAtUnix,
     bool HasPendingChanges,
     string? LastError);
+
+/// <summary>
+/// Source metadata DTO.
+/// </summary>
+public record SourceMetadataDto(
+    long SizeBytes,
+    long ModifiedAtUnix,
+    string? Etag,
+    string? VersionId,
+    byte[]? ContentHash);
+
+// Note: ExternalChangeType is generated from proto/storage.proto
+
+/// <summary>
+/// External change event DTO.
+/// </summary>
+public record ExternalChangeEventDto(
+    string SessionId,
+    ExternalChangeType ChangeType,
+    SourceMetadataDto? OldMetadata,
+    SourceMetadataDto? NewMetadata,
+    long DetectedAtUnix,
+    string? NewUri);

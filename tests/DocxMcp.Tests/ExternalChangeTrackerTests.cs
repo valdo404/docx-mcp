@@ -28,14 +28,14 @@ public class ExternalChangeTrackerTests : IDisposable
     }
 
     [Fact]
-    public void StartWatching_WithValidSession_StartsTracking()
+    public void RegisterSession_WithValidSession_StartsTracking()
     {
         // Arrange
         var filePath = CreateTempDocx("Test content");
         var session = OpenSession(filePath);
 
         // Act
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // Assert - no exception means success
         Assert.False(_tracker.HasPendingChanges(session.Id));
@@ -47,7 +47,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Test content");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // Act
         var patch = _tracker.CheckForChanges(session.Id);
@@ -63,7 +63,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original content");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // Modify the file externally
         ModifyDocx(filePath, "Modified content");
@@ -85,7 +85,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Changed");
         _tracker.CheckForChanges(session.Id);
@@ -100,7 +100,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Changed");
         var patch = _tracker.CheckForChanges(session.Id)!;
@@ -122,7 +122,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // First change
         ModifyDocx(filePath, "Change 1");
@@ -146,7 +146,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Change 1");
         _tracker.CheckForChanges(session.Id);
@@ -169,7 +169,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "First change");
         var first = _tracker.CheckForChanges(session.Id)!;
@@ -194,7 +194,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // Make an external change
         ModifyDocx(filePath, "External change");
@@ -216,7 +216,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original paragraph");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Modified paragraph with more content");
         var patch = _tracker.CheckForChanges(session.Id)!;
@@ -231,15 +231,15 @@ public class ExternalChangeTrackerTests : IDisposable
     }
 
     [Fact]
-    public void StopWatching_StopsTrackingSession()
+    public void UnregisterSession_StopsTrackingSession()
     {
         // Arrange
         var filePath = CreateTempDocx("Test");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // Act
-        _tracker.StopWatching(session.Id);
+        _tracker.UnregisterSession(session.Id);
 
         // Modify file after stopping
         ModifyDocx(filePath, "Changed after stop");
@@ -258,7 +258,7 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original paragraph");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Completely different content here");
         var patch = _tracker.CheckForChanges(session.Id)!;

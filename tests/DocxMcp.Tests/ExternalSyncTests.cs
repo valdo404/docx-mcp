@@ -58,7 +58,7 @@ public class ExternalSyncTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original content");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         // Modify the file externally
         ModifyDocx(filePath, "Modified content");
@@ -121,7 +121,7 @@ public class ExternalSyncTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
+        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Changed");
         var patch = _tracker.CheckForChanges(session.Id)!;
