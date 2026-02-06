@@ -1,15 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use tokio::fs;
-use tracing::{debug, instrument, warn};
-
-use super::traits::{
-    CheckpointInfo, SessionIndex, SessionInfo, StorageBackend, WalEntry,
+use docx_storage_core::{
+    CheckpointInfo, SessionIndex, SessionInfo, StorageBackend, StorageError, WalEntry,
 };
 #[cfg(test)]
-use super::traits::SessionIndexEntry;
-use crate::error::StorageError;
+use docx_storage_core::SessionIndexEntry;
+use tokio::fs;
+use tracing::{debug, instrument, warn};
 
 /// Local filesystem storage backend.
 ///

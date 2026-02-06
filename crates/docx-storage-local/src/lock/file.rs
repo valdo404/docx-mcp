@@ -6,11 +6,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use docx_storage_core::{LockAcquireResult, LockManager, StorageError};
 use fs2::FileExt;
 use tracing::{debug, instrument};
-
-use super::traits::{LockAcquireResult, LockManager};
-use crate::error::StorageError;
 
 /// File-based lock manager using OS-level exclusive file locking.
 ///

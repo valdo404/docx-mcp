@@ -1,5 +1,5 @@
 [package]
-name = "docx-mcp-proxy"
+name = "docx-mcp-sse-proxy"
 description = "SSE/HTTP proxy with D1 auth for docx-mcp multi-tenant architecture"
 version.workspace = true
 edition.workspace = true
@@ -43,7 +43,7 @@ futures.workspace = true
 clap.workspace = true
 
 [[bin]]
-name = "docx-mcp-proxy"
+name = "docx-mcp-sse-proxy"
 path = "src/main.rs"
 
 [lints]

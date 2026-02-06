@@ -7,6 +7,7 @@ use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, instrument};
 
+use crate::error::StorageResultExt;
 use crate::lock::LockManager;
 use crate::storage::StorageBackend;
 
@@ -75,7 +76,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .load_session(&tenant_id, &session_id)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         let (tx, rx) = mpsc::channel(4);
         let chunk_size = self.chunk_size;
@@ -156,7 +157,7 @@ impl StorageService for StorageServiceImpl {
         self.storage
             .save_session(&tenant_id, &session_id, &data)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         Ok(Response::new(SaveSessionResponse { success: true }))
     }
@@ -173,7 +174,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .list_sessions(tenant_id)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         let sessions = sessions
             .into_iter()
@@ -201,7 +202,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .delete_session(tenant_id, &req.session_id)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         Ok(Response::new(DeleteSessionResponse {
             success: true,
@@ -221,7 +222,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .session_exists(tenant_id, &req.session_id)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         Ok(Response::new(SessionExistsResponse { exists }))
     }
@@ -242,7 +243,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .load_index(tenant_id)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         let (index_json, found) = match result {
             Some(index) => {
@@ -277,7 +278,7 @@ impl StorageService for StorageServiceImpl {
                 tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
             }
             let result = self.lock_manager.acquire(tenant_id, "index", &holder_id, ttl).await
-                .map_err(Status::from)?;
+                .map_storage_err()?;
             if result.acquired {
                 acquired = true;
                 break;
@@ -291,7 +292,7 @@ impl StorageService for StorageServiceImpl {
         // Perform atomic operation
         let result = async {
             let mut index = self.storage.load_index(tenant_id).await
-                .map_err(Status::from)?
+                .map_storage_err()?
                 .unwrap_or_default();
 
             let already_exists = index.contains(&session_id);
@@ -308,7 +309,7 @@ impl StorageService for StorageServiceImpl {
                     cursor_position: entry.wal_position,
                     checkpoint_positions: entry.checkpoint_positions,
                 });
-                self.storage.save_index(tenant_id, &index).await.map_err(Status::from)?;
+                self.storage.save_index(tenant_id, &index).await.map_storage_err()?;
             }
 
             Ok::<_, Status>(already_exists)
@@ -344,7 +345,7 @@ impl StorageService for StorageServiceImpl {
                 tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
             }
             let result = self.lock_manager.acquire(tenant_id, "index", &holder_id, ttl).await
-                .map_err(Status::from)?;
+                .map_storage_err()?;
             if result.acquired {
                 acquired = true;
                 break;
@@ -358,7 +359,7 @@ impl StorageService for StorageServiceImpl {
         // Perform atomic operation
         let result = async {
             let mut index = self.storage.load_index(tenant_id).await
-                .map_err(Status::from)?
+                .map_storage_err()?
                 .unwrap_or_default();
 
             let not_found = !index.contains(&session_id);
@@ -388,7 +389,7 @@ impl StorageService for StorageServiceImpl {
                 // Sort checkpoint positions
                 entry.checkpoint_positions.sort();
 
-                self.storage.save_index(tenant_id, &index).await.map_err(Status::from)?;
+                self.storage.save_index(tenant_id, &index).await.map_storage_err()?;
             }
 
             Ok::<_, Status>(not_found)
@@ -424,7 +425,7 @@ impl StorageService for StorageServiceImpl {
                 tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
             }
             let result = self.lock_manager.acquire(tenant_id, "index", &holder_id, ttl).await
-                .map_err(Status::from)?;
+                .map_storage_err()?;
             if result.acquired {
                 acquired = true;
                 break;
@@ -438,12 +439,12 @@ impl StorageService for StorageServiceImpl {
         // Perform atomic operation
         let result = async {
             let mut index = self.storage.load_index(tenant_id).await
-                .map_err(Status::from)?
+                .map_storage_err()?
                 .unwrap_or_default();
 
             let existed = index.remove(&session_id).is_some();
             if existed {
-                self.storage.save_index(tenant_id, &index).await.map_err(Status::from)?;
+                self.storage.save_index(tenant_id, &index).await.map_storage_err()?;
             }
 
             Ok::<_, Status>(existed)
@@ -488,7 +489,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .append_wal(tenant_id, &req.session_id, &entries)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         Ok(Response::new(AppendWalResponse {
             success: true,
@@ -510,7 +511,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .read_wal(tenant_id, &req.session_id, req.from_position, limit)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         let entries = entries
             .into_iter()
@@ -538,7 +539,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .truncate_wal(tenant_id, &req.session_id, req.keep_from_position)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         Ok(Response::new(TruncateWalResponse {
             success: true,
@@ -593,7 +594,7 @@ impl StorageService for StorageServiceImpl {
         self.storage
             .save_checkpoint(&tenant_id, &session_id, position, &data)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         Ok(Response::new(SaveCheckpointResponse { success: true }))
     }
@@ -612,7 +613,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .load_checkpoint(&tenant_id, &session_id, position)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         let (tx, rx) = mpsc::channel(4);
         let chunk_size = self.chunk_size;
@@ -669,7 +670,7 @@ impl StorageService for StorageServiceImpl {
             .storage
             .list_checkpoints(tenant_id, &req.session_id)
             .await
-            .map_err(Status::from)?;
+            .map_storage_err()?;
 
         let checkpoints = checkpoints
             .into_iter()

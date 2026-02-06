@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-/// Configuration for the docx-mcp-storage server.
+/// Configuration for the docx-storage-local server.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "docx-mcp-storage")]
-#[command(about = "gRPC storage server for docx-mcp multi-tenant architecture")]
+#[command(name = "docx-storage-local")]
+#[command(about = "Local filesystem gRPC storage server for docx-mcp")]
 pub struct Config {
     /// Transport type: tcp or unix
     #[arg(long, default_value = "tcp", env = "GRPC_TRANSPORT")]
@@ -23,29 +23,13 @@ pub struct Config {
     #[arg(long, env = "GRPC_UNIX_SOCKET")]
     pub unix_socket: Option<PathBuf>,
 
-    /// Storage backend: local or r2
+    /// Storage backend (always local for this binary)
     #[arg(long, default_value = "local", env = "STORAGE_BACKEND")]
     pub storage_backend: StorageBackend,
 
     /// Base directory for local storage
     #[arg(long, env = "LOCAL_STORAGE_DIR")]
     pub local_storage_dir: Option<PathBuf>,
-
-    /// R2 endpoint URL (for r2 backend)
-    #[arg(long, env = "R2_ENDPOINT")]
-    pub r2_endpoint: Option<String>,
-
-    /// R2 access key ID
-    #[arg(long, env = "R2_ACCESS_KEY_ID")]
-    pub r2_access_key_id: Option<String>,
-
-    /// R2 secret access key
-    #[arg(long, env = "R2_SECRET_ACCESS_KEY")]
-    pub r2_secret_access_key: Option<String>,
-
-    /// R2 bucket name
-    #[arg(long, env = "R2_BUCKET_NAME")]
-    pub r2_bucket_name: Option<String>,
 
     /// Parent process PID to watch. If set, server will exit when parent dies.
     /// This enables fork/join semantics where the child server follows the parent lifecycle.
@@ -94,16 +78,12 @@ impl std::fmt::Display for Transport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum StorageBackend {
     Local,
-    #[cfg(feature = "cloud")]
-    R2,
 }
 
 impl std::fmt::Display for StorageBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StorageBackend::Local => write!(f, "local"),
-            #[cfg(feature = "cloud")]
-            StorageBackend::R2 => write!(f, "r2"),
         }
     }
 }

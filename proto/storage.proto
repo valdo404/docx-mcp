@@ -299,8 +299,11 @@ service SourceSyncService {
   // Unregister a source (on session close)
   rpc UnregisterSource(UnregisterSourceRequest) returns (UnregisterSourceResponse);
 
-  // Sync current session state to external source
-  rpc SyncToSource(SyncToSourceRequest) returns (SyncToSourceResponse);
+  // Update source configuration (change target file, toggle auto-sync)
+  rpc UpdateSource(UpdateSourceRequest) returns (UpdateSourceResponse);
+
+  // Sync current session state to external source (streaming for large files)
+  rpc SyncToSource(stream SyncToSourceChunk) returns (SyncToSourceResponse);
 
   // Get sync status for a session
   rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);
@@ -346,10 +349,29 @@ message UnregisterSourceResponse {
   bool success = 1;
 }
 
-message SyncToSourceRequest {
+message UpdateSourceRequest {
   TenantContext context = 1;
   string session_id = 2;
-  bytes docx_data = 3;         // Current document bytes to sync
+  // New source descriptor (optional - if not set, keeps existing source)
+  SourceDescriptor source = 3;
+  // New auto-sync setting (optional - use update_auto_sync to indicate if set)
+  bool auto_sync = 4;
+  bool update_auto_sync = 5;  // True if auto_sync field should be applied
+}
+
+message UpdateSourceResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// Chunk for SyncToSource streaming upload (supports large files > 4MB)
+message SyncToSourceChunk {
+  // First chunk must include metadata
+  TenantContext context = 1;
+  string session_id = 2;
+  // All chunks include data
+  bytes data = 3;
+  bool is_last = 4;
 }
 
 message SyncToSourceResponse {

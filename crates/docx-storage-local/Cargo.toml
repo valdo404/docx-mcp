@@ -1,12 +1,15 @@
 [package]
-name = "docx-mcp-storage"
-description = "gRPC storage server for docx-mcp multi-tenant architecture"
+name = "docx-storage-local"
+description = "Local filesystem storage backend for docx-mcp multi-tenant architecture"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# Core traits
+docx-storage-core = { path = "../docx-storage-core" }
+
 # gRPC
 tonic.workspace = true
 tonic-reflection = "0.13"
@@ -14,13 +17,6 @@ prost.workspace = true
 prost-types.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
-
-# S3/R2 (for cloud backend)
-aws-sdk-s3 = { workspace = true, optional = true }
-aws-config = { workspace = true, optional = true }
-
-# HTTP client (Cloudflare KV API)
-reqwest = { workspace = true, optional = true }
 
 # Serialization
 serde.workspace = true
@@ -55,6 +51,12 @@ dirs = "6"
 fs2 = "0.4"
 dashmap = "6"
 
+# Filesystem watching
+notify = "8"
+
+# Crypto (for SHA256 hash - matching C# ExternalChangeTracker)
+sha2.workspace = true
+
 # Platform-specific for parent process watching
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -69,12 +71,8 @@ tonic-build = "0.13"
 tempfile.workspace = true
 tokio-test = "0.4"
 
-[features]
-default = []
-cloud = ["aws-sdk-s3", "aws-config", "reqwest"]
-
 [[bin]]
-name = "docx-mcp-storage"
+name = "docx-storage-local"
 path = "src/main.rs"
 
 [lints]

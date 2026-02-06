@@ -2,13 +2,17 @@ mod config;
 mod error;
 mod lock;
 mod service;
+mod service_sync;
+mod service_watch;
 mod storage;
+mod sync;
+mod watch;
 
 use std::sync::Arc;
 
 use clap::Parser;
 use tokio::signal;
-use tokio::sync::watch;
+use tokio::sync::watch as tokio_watch;
 use tonic::transport::Server;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::info;
@@ -17,11 +21,17 @@ use tracing_subscriber::EnvFilter;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 
-use config::{Config, StorageBackend, Transport};
+use config::{Config, Transport};
 use lock::FileLock;
 use service::proto::storage_service_server::StorageServiceServer;
+use service::proto::source_sync_service_server::SourceSyncServiceServer;
+use service::proto::external_watch_service_server::ExternalWatchServiceServer;
 use service::StorageServiceImpl;
+use service_sync::SourceSyncServiceImpl;
+use service_watch::ExternalWatchServiceImpl;
 use storage::LocalStorage;
+use sync::LocalFileSyncBackend;
+use watch::NotifyWatchBackend;
 
 /// File descriptor set for gRPC reflection
 pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("storage_descriptor");
@@ -37,41 +47,36 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::parse();
 
-    info!("Starting docx-mcp-storage server");
+    info!("Starting docx-storage-local server");
     info!("  Transport: {}", config.transport);
     info!("  Backend: {}", config.storage_backend);
     if let Some(ppid) = config.parent_pid {
         info!("  Parent PID: {} (will exit when parent dies)", ppid);
     }
 
-    // Create storage backend
-    let storage: Arc<dyn crate::storage::StorageBackend> = match config.storage_backend {
-        StorageBackend::Local => {
-            let dir = config.effective_local_storage_dir();
-            info!("  Local storage dir: {}", dir.display());
-            Arc::new(LocalStorage::new(&dir))
-        }
-        #[cfg(feature = "cloud")]
-        StorageBackend::R2 => {
-            todo!("R2 storage backend not yet implemented")
-        }
-    };
+    // Create storage backend (local only)
+    let dir = config.effective_local_storage_dir();
+    info!("  Local storage dir: {}", dir.display());
+    let storage: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalStorage::new(&dir));
 
-    // Create lock manager (using same base dir as storage for local)
-    let lock_manager: Arc<dyn crate::lock::LockManager> = match config.storage_backend {
-        StorageBackend::Local => {
-            let dir = config.effective_local_storage_dir();
-            Arc::new(FileLock::new(&dir))
-        }
-        #[cfg(feature = "cloud")]
-        StorageBackend::R2 => {
-            todo!("KV lock manager not yet implemented")
-        }
-    };
+    // Create lock manager (using same base dir as storage)
+    let lock_manager: Arc<dyn crate::lock::LockManager> = Arc::new(FileLock::new(&dir));
 
-    // Create gRPC service
-    let service = StorageServiceImpl::new(storage, lock_manager);
-    let svc = StorageServiceServer::new(service);
+    // Create sync backend
+    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> = Arc::new(LocalFileSyncBackend::new());
+
+    // Create watch backend (uses SHA256 hash for content change detection, like C# ExternalChangeTracker)
+    let watch_backend: Arc<dyn docx_storage_core::WatchBackend> = Arc::new(NotifyWatchBackend::new());
+
+    // Create gRPC services
+    let storage_service = StorageServiceImpl::new(storage, lock_manager);
+    let storage_svc = StorageServiceServer::new(storage_service);
+
+    let sync_service = SourceSyncServiceImpl::new(sync_backend);
+    let sync_svc = SourceSyncServiceServer::new(sync_service);
+
+    let watch_service = ExternalWatchServiceImpl::new(watch_backend);
+    let watch_svc = ExternalWatchServiceServer::new(watch_service);
 
     // Set up parent death signal using OS-native mechanisms
     setup_parent_death_signal(config.parent_pid);
@@ -96,7 +101,9 @@ async fn main() -> anyhow::Result<()> {
 
             Server::builder()
                 .add_service(reflection_svc)
-                .add_service(svc)
+                .add_service(storage_svc)
+                .add_service(sync_svc)
+                .add_service(watch_svc)
                 .serve_with_shutdown(addr, shutdown_future)
                 .await?;
         }
@@ -121,7 +128,9 @@ async fn main() -> anyhow::Result<()> {
 
             Server::builder()
                 .add_service(reflection_svc)
-                .add_service(svc)
+                .add_service(storage_svc)
+                .add_service(sync_svc)
+                .add_service(watch_svc)
                 .serve_with_incoming_shutdown(uds_stream, shutdown_future)
                 .await?;
 
@@ -224,8 +233,8 @@ fn setup_parent_death_poll(parent_pid: u32) {
 
 /// Create a shutdown signal that triggers on Ctrl+C or SIGTERM.
 /// Parent death is handled separately via OS-native mechanisms.
-fn create_shutdown_signal() -> watch::Receiver<bool> {
-    let (tx, rx) = watch::channel(false);
+fn create_shutdown_signal() -> tokio_watch::Receiver<bool> {
+    let (tx, rx) = tokio_watch::channel(false);
 
     tokio::spawn(async move {
         let ctrl_c = async {

@@ -2,8 +2,9 @@
 resolver = "2"
 
 members = [
-    "crates/docx-mcp-storage",
-    "crates/docx-mcp-proxy",
+    "crates/docx-storage-core",
+    "crates/docx-storage-local",
+    "crates/docx-mcp-sse-proxy",
 ]
 
 [workspace.package]
