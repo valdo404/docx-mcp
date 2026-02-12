@@ -44,7 +44,7 @@ env:
 
 jobs:
   # =============================================================================
-  # Build Rust Storage Server (all architectures first)
+  # Build Rust Storage Server — Linux (always runs)
   # =============================================================================
   build-storage:
     name: Build Storage Server (${{ matrix.target }})
@@ -53,13 +53,56 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             artifact-name: linux-x64
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             artifact-name: linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64 on x64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.runner == 'ubuntu-latest'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build storage server
+        run: cargo build --release --target ${{ matrix.target }} -p docx-storage-local
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist/${{ matrix.artifact-name }}
+          cp target/${{ matrix.target }}/release/docx-storage-local dist/${{ matrix.artifact-name }}/
+          chmod +x dist/${{ matrix.artifact-name }}/docx-storage-local
+
+      - name: Upload storage server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-${{ matrix.artifact-name }}
+          path: dist/${{ matrix.artifact-name }}
+
+  # =============================================================================
+  # Build Rust Storage Server (macOS + Windows — manual only)
+  # =============================================================================
+  build-storage-desktop:
+    name: Build Storage Server (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           # macOS
           - target: x86_64-apple-darwin
             runner: macos-15-intel  # Intel runner
@@ -78,12 +121,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
@@ -100,14 +137,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64 on x64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.runner == 'ubuntu-latest'
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
-
       - name: Build storage server
         run: cargo build --release --target ${{ matrix.target }} -p docx-storage-local
 
-      - name: Prepare artifact (Unix)
+      - name: Prepare artifact (macOS)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist/${{ matrix.artifact-name }}
@@ -287,7 +320,8 @@ jobs:
   # =============================================================================
   installer-windows:
     name: Windows Installer ${{ matrix.arch }}
-    needs: [test, build-storage]
+    if: github.event_name == 'workflow_dispatch'
+    needs: [test, build-storage-desktop]
     runs-on: windows-latest
     strategy:
       matrix:
@@ -393,7 +427,8 @@ jobs:
   # =============================================================================
   installer-macos:
     name: macOS Universal Installer
-    needs: [test, build-storage]
+    if: github.event_name == 'workflow_dispatch'
+    needs: [test, build-storage-desktop]
     runs-on: macos-latest
 
     steps:
@@ -582,7 +617,7 @@ jobs:
   release:
     name: Create Release
     needs: [docker-manifest, installer-windows, installer-macos]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -593,12 +628,14 @@ jobs:
           fetch-depth: 0  # Fetch all history for tags
 
       - name: Download Windows installers
+        if: needs.installer-windows.result == 'success'
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: windows-*-installer
 
       - name: Download macOS installer
+        if: needs.installer-macos.result == 'success'
         uses: actions/download-artifact@v4
         with:
           path: artifacts
