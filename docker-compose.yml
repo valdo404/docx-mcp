@@ -30,8 +30,21 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # MCP stdio server (for direct integration)
+  # MCP stdio server (embedded storage — no separate server needed)
   mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      LOCAL_STORAGE_DIR: /app/data
+    volumes:
+      - storage-data:/app/data
+    stdin_open: true
+    tty: true
+    restart: "no"
+
+  # MCP stdio server (remote storage — connects to separate gRPC server)
+  mcp-remote:
     build:
       context: .
       dockerfile: Dockerfile
@@ -40,26 +53,22 @@ services:
         condition: service_healthy
     environment:
       STORAGE_GRPC_URL: http://storage:50051
-      RUST_LOG: info
-    volumes:
-      - sessions-data:/home/app/.docx-mcp/sessions
     stdin_open: true
     tty: true
+    profiles:
+      - remote
     restart: "no"
 
-  # CLI tool (useful for batch operations)
+  # CLI tool (embedded storage)
   cli:
     build:
       context: .
       dockerfile: Dockerfile
     entrypoint: ["./docx-cli"]
-    depends_on:
-      storage:
-        condition: service_healthy
     environment:
-      STORAGE_GRPC_URL: http://storage:50051
+      LOCAL_STORAGE_DIR: /app/data
     volumes:
-      - sessions-data:/home/app/.docx-mcp/sessions
+      - storage-data:/app/data
       - ./examples:/workspace:ro
     working_dir: /workspace
     profiles:
@@ -179,8 +188,6 @@ services:
 
 volumes:
   storage-data:
-    driver: local
-  sessions-data:
     driver: local
 
 # =============================================================================

@@ -35,7 +35,6 @@ OUTPUT_DIR="${DIST_DIR}/installers"
 BINARY_DIR="${DIST_DIR}/macos-${ARCH}"
 MCP_BINARY="${BINARY_DIR}/docx-mcp"
 CLI_BINARY="${BINARY_DIR}/docx-cli"
-STORAGE_BINARY="${BINARY_DIR}/docx-storage-local"
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -121,7 +120,6 @@ BUILD_DIR="${DIST_DIR}/pkg-build-${ARCH}"
 BINARY_DIR="${DIST_DIR}/macos-${ARCH}"
 MCP_BINARY="${BINARY_DIR}/docx-mcp"
 CLI_BINARY="${BINARY_DIR}/docx-cli"
-STORAGE_BINARY="${BINARY_DIR}/docx-storage-local"
 
 # -----------------------------------------------------------------------------
 # Validation
@@ -186,18 +184,10 @@ if [[ -f "${CLI_BINARY}" ]]; then
     chmod 755 "${PKG_ROOT}${INSTALL_LOCATION}/docx-cli"
 fi
 
-if [[ -f "${STORAGE_BINARY}" ]]; then
-    cp "${STORAGE_BINARY}" "${PKG_ROOT}${INSTALL_LOCATION}/"
-    chmod 755 "${PKG_ROOT}${INSTALL_LOCATION}/docx-storage-local"
-fi
-
 # Sign binaries before packaging
 sign_binary "${PKG_ROOT}${INSTALL_LOCATION}/docx-mcp" "${APP_IDENTIFIER}"
 if [[ -f "${PKG_ROOT}${INSTALL_LOCATION}/docx-cli" ]]; then
     sign_binary "${PKG_ROOT}${INSTALL_LOCATION}/docx-cli" "${CLI_IDENTIFIER}"
-fi
-if [[ -f "${PKG_ROOT}${INSTALL_LOCATION}/docx-storage-local" ]]; then
-    sign_binary "${PKG_ROOT}${INSTALL_LOCATION}/docx-storage-local" "${APP_IDENTIFIER}.storage"
 fi
 
 # Create postinstall script
@@ -208,7 +198,6 @@ cat > "${PKG_SCRIPTS}/postinstall" <<'SCRIPT'
 # Ensure binaries are executable
 chmod 755 /usr/local/bin/docx-mcp 2>/dev/null || true
 chmod 755 /usr/local/bin/docx-cli 2>/dev/null || true
-chmod 755 /usr/local/bin/docx-storage-local 2>/dev/null || true
 
 # Create sessions directory for current user
 if [[ -n "${USER}" ]] && [[ "${USER}" != "root" ]]; then
@@ -286,9 +275,8 @@ cat > "${RESOURCES_DIR}/welcome.html" <<EOF
     <p>Welcome to the DocX MCP Server installer.</p>
     <p>This package will install:</p>
     <ul>
-        <li><strong>docx-mcp</strong> - MCP server for AI-powered Word document manipulation</li>
-        <li><strong>docx-cli</strong> - Command-line interface for direct operations</li>
-        <li><strong>docx-storage-local</strong> - gRPC storage server (auto-launched by MCP/CLI)</li>
+        <li><strong>docx-mcp</strong> - MCP server for AI-powered Word document manipulation (storage engine built-in)</li>
+        <li><strong>docx-cli</strong> - Command-line interface for direct operations (storage engine built-in)</li>
     </ul>
     <p>The tools will be installed to <code>/usr/local/bin</code> and will be available from the terminal immediately after installation.</p>
 </body>

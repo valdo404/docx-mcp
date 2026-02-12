@@ -12,7 +12,7 @@ use tracing::{debug, instrument, warn};
 /// Local filesystem storage backend.
 ///
 /// Organizes data by tenant:
-/// ```
+/// ```text
 /// {base_dir}/
 ///   {tenant_id}/
 ///     sessions/

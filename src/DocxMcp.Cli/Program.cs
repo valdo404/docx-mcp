@@ -33,15 +33,44 @@ args = filteredArgs.ToArray();
 // Set tenant context for all operations
 TenantContextHelper.CurrentTenantId = tenantId;
 
-// Create gRPC storage client with auto-launch support
-var storageOptions = new StorageClientOptions();
-var launcher = new GrpcLauncher(storageOptions, NullLogger<GrpcLauncher>.Instance);
-var storage = StorageClient.CreateAsync(storageOptions, launcher, NullLogger<StorageClient>.Instance).GetAwaiter().GetResult();
+// Create gRPC storage client (embedded or remote)
+var isDebug = Environment.GetEnvironmentVariable("DEBUG") is not null;
+var storageOptions = StorageClientOptions.FromEnvironment();
+IStorageClient storage;
+if (!string.IsNullOrEmpty(storageOptions.ServerUrl))
+{
+    // Remote gRPC mode
+    if (isDebug) Console.Error.WriteLine("[cli] Using remote gRPC mode: " + storageOptions.ServerUrl);
+    var launcher = new GrpcLauncher(storageOptions, NullLogger<GrpcLauncher>.Instance);
+    storage = StorageClient.CreateAsync(storageOptions, launcher, NullLogger<StorageClient>.Instance).GetAwaiter().GetResult();
+}
+else
+{
+    // Embedded mode — in-memory gRPC via statically linked Rust storage
+    if (isDebug) Console.Error.WriteLine("[cli] Using embedded mode (in-memory gRPC)");
+    NativeStorage.Init(storageOptions.GetEffectiveLocalStorageDir());
+    if (isDebug) Console.Error.WriteLine("[cli] NativeStorage initialized, creating GrpcChannel...");
+    var handler = new System.Net.Http.SocketsHttpHandler
+    {
+        ConnectCallback = (context, ct) =>
+        {
+            if (isDebug) Console.Error.WriteLine($"[cli] ConnectCallback: {context.DnsEndPoint.Host}:{context.DnsEndPoint.Port}");
+            return new ValueTask<Stream>(new InMemoryPipeStream());
+        }
+    };
+    var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
+    {
+        HttpHandler = handler
+    });
+    storage = new StorageClient(channel, NullLogger<StorageClient>.Instance);
+}
 
 var sessions = new SessionManager(storage, NullLogger<SessionManager>.Instance);
 var externalTracker = new ExternalChangeTracker(sessions, NullLogger<ExternalChangeTracker>.Instance);
 sessions.SetExternalChangeTracker(externalTracker);
+if (isDebug) Console.Error.WriteLine("[cli] Calling RestoreSessions...");
 sessions.RestoreSessions();
+if (isDebug) Console.Error.WriteLine("[cli] RestoreSessions done");
 
 if (args.Length == 0)
 {

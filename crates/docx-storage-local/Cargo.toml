@@ -71,6 +71,11 @@ tonic-build = "0.13"
 tempfile.workspace = true
 tokio-test = "0.4"
 
+[lib]
+name = "docx_storage_local"
+crate-type = ["staticlib", "lib"]
+path = "src/lib.rs"
+
 [[bin]]
 name = "docx-storage-local"
 path = "src/main.rs"

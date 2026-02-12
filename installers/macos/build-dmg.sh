@@ -106,9 +106,8 @@ Installation:
   Double-click "${PKG_NAME}" to install.
 
 After installation, binaries will be available at:
-  /usr/local/bin/docx-mcp          (MCP server)
-  /usr/local/bin/docx-cli          (CLI tool)
-  /usr/local/bin/docx-storage-local  (gRPC storage server)
+  /usr/local/bin/docx-mcp          (MCP server with built-in storage)
+  /usr/local/bin/docx-cli          (CLI tool with built-in storage)
 
 Quick Start:
   docx-mcp --help

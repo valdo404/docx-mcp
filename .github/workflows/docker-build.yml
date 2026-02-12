@@ -44,10 +44,10 @@ env:
 
 jobs:
   # =============================================================================
-  # Build Rust Storage Server — Linux (always runs)
+  # Build Rust Storage — Linux (staticlib + binary, always runs)
   # =============================================================================
   build-storage:
-    name: Build Storage Server (${{ matrix.target }})
+    name: Build Storage (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -77,26 +77,40 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu' && matrix.runner == 'ubuntu-latest'
         run: sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build storage server
+      - name: Build staticlib (for embedding into .NET)
+        run: cargo build --release --target ${{ matrix.target }} -p docx-storage-local --lib
+
+      - name: Build binary (for standalone server)
         run: cargo build --release --target ${{ matrix.target }} -p docx-storage-local
 
-      - name: Prepare artifact
+      - name: Prepare staticlib artifact
+        run: |
+          mkdir -p dist/staticlib-${{ matrix.artifact-name }}
+          cp target/${{ matrix.target }}/release/libdocx_storage_local.a dist/staticlib-${{ matrix.artifact-name }}/
+
+      - name: Prepare binary artifact
         run: |
           mkdir -p dist/${{ matrix.artifact-name }}
           cp target/${{ matrix.target }}/release/docx-storage-local dist/${{ matrix.artifact-name }}/
           chmod +x dist/${{ matrix.artifact-name }}/docx-storage-local
 
-      - name: Upload storage server artifact
+      - name: Upload staticlib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-staticlib-${{ matrix.artifact-name }}
+          path: dist/staticlib-${{ matrix.artifact-name }}
+
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: storage-${{ matrix.artifact-name }}
           path: dist/${{ matrix.artifact-name }}
 
   # =============================================================================
-  # Build Rust Storage Server (macOS + Windows — manual only)
+  # Build Rust Storage Staticlib (macOS + Windows — manual only, for embedding)
   # =============================================================================
   build-storage-desktop:
-    name: Build Storage Server (${{ matrix.target }})
+    name: Build Storage Staticlib (${{ matrix.target }})
     if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -107,16 +121,20 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15-intel  # Intel runner
             artifact-name: macos-x64
+            lib-name: libdocx_storage_local.a
           - target: aarch64-apple-darwin
             runner: macos-latest  # Apple Silicon runner
             artifact-name: macos-arm64
+            lib-name: libdocx_storage_local.a
           # Windows
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             artifact-name: windows-x64
+            lib-name: docx_storage_local.lib
           - target: aarch64-pc-windows-msvc
             runner: windows-latest
             artifact-name: windows-arm64
+            lib-name: docx_storage_local.lib
 
     steps:
       - uses: actions/checkout@v4
@@ -137,28 +155,27 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build storage server
-        run: cargo build --release --target ${{ matrix.target }} -p docx-storage-local
+      - name: Build staticlib
+        run: cargo build --release --target ${{ matrix.target }} -p docx-storage-local --lib
 
-      - name: Prepare artifact (macOS)
+      - name: Prepare artifact (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
-          mkdir -p dist/${{ matrix.artifact-name }}
-          cp target/${{ matrix.target }}/release/docx-storage-local dist/${{ matrix.artifact-name }}/
-          chmod +x dist/${{ matrix.artifact-name }}/docx-storage-local
+          mkdir -p dist/staticlib-${{ matrix.artifact-name }}
+          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} dist/staticlib-${{ matrix.artifact-name }}/
 
       - name: Prepare artifact (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/${{ matrix.artifact-name }}
-          Copy-Item target/${{ matrix.target }}/release/docx-storage-local.exe dist/${{ matrix.artifact-name }}/
+          New-Item -ItemType Directory -Force -Path dist/staticlib-${{ matrix.artifact-name }}
+          Copy-Item target/${{ matrix.target }}/release/${{ matrix.lib-name }} dist/staticlib-${{ matrix.artifact-name }}/
 
-      - name: Upload storage server artifact
+      - name: Upload staticlib artifact
         uses: actions/upload-artifact@v4
         with:
-          name: storage-${{ matrix.artifact-name }}
-          path: dist/${{ matrix.artifact-name }}
+          name: storage-staticlib-${{ matrix.artifact-name }}
+          path: dist/staticlib-${{ matrix.artifact-name }}
 
   # =============================================================================
   # Tests
@@ -170,7 +187,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download storage server
+      - name: Download storage staticlib
+        uses: actions/download-artifact@v4
+        with:
+          name: storage-staticlib-linux-x64
+          path: dist/staticlib-linux-x64
+
+      - name: Download storage binary (for remote-mode tests)
         uses: actions/download-artifact@v4
         with:
           name: storage-linux-x64
@@ -330,11 +353,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download storage server
+      - name: Download storage staticlib
         uses: actions/download-artifact@v4
         with:
-          name: storage-windows-${{ matrix.arch }}
-          path: dist/windows-${{ matrix.arch }}
+          name: storage-staticlib-windows-${{ matrix.arch }}
+          path: dist/staticlib-windows-${{ matrix.arch }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -342,7 +365,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: preview
 
-      - name: Build MCP Server (NativeAOT)
+      - name: Build MCP Server (NativeAOT, embedded storage)
         run: |
           dotnet publish src/DocxMcp/DocxMcp.csproj `
             --configuration Release `
@@ -350,9 +373,10 @@ jobs:
             --self-contained true `
             -p:PublishAot=true `
             -p:OptimizationPreference=Size `
+            -p:RustStaticLibPath=${{ github.workspace }}/dist/staticlib-windows-${{ matrix.arch }}/docx_storage_local.lib `
             --output dist/windows-${{ matrix.arch }}
 
-      - name: Build CLI (NativeAOT)
+      - name: Build CLI (NativeAOT, embedded storage)
         run: |
           dotnet publish src/DocxMcp.Cli/DocxMcp.Cli.csproj `
             --configuration Release `
@@ -360,6 +384,7 @@ jobs:
             --self-contained true `
             -p:PublishAot=true `
             -p:OptimizationPreference=Size `
+            -p:RustStaticLibPath=${{ github.workspace }}/dist/staticlib-windows-${{ matrix.arch }}/docx_storage_local.lib `
             --output dist/windows-${{ matrix.arch }}
 
       - name: Extract version
@@ -434,22 +459,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download storage server (x64)
+      - name: Download storage staticlib (x64)
         uses: actions/download-artifact@v4
         with:
-          name: storage-macos-x64
-          path: dist/macos-x64
+          name: storage-staticlib-macos-x64
+          path: dist/staticlib-macos-x64
 
-      - name: Download storage server (arm64)
+      - name: Download storage staticlib (arm64)
         uses: actions/download-artifact@v4
         with:
-          name: storage-macos-arm64
-          path: dist/macos-arm64
-
-      - name: Make storage servers executable
-        run: |
-          chmod +x dist/macos-x64/docx-storage-local
-          chmod +x dist/macos-arm64/docx-storage-local
+          name: storage-staticlib-macos-arm64
+          path: dist/staticlib-macos-arm64
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -465,6 +485,7 @@ jobs:
             --self-contained true \
             -p:PublishAot=true \
             -p:OptimizationPreference=Size \
+            -p:RustStaticLibPath=${{ github.workspace }}/dist/staticlib-macos-x64/libdocx_storage_local.a \
             --output dist/macos-x64
 
       - name: Build MCP Server (arm64)
@@ -475,6 +496,7 @@ jobs:
             --self-contained true \
             -p:PublishAot=true \
             -p:OptimizationPreference=Size \
+            -p:RustStaticLibPath=${{ github.workspace }}/dist/staticlib-macos-arm64/libdocx_storage_local.a \
             --output dist/macos-arm64
 
       - name: Build CLI (x64)
@@ -485,6 +507,7 @@ jobs:
             --self-contained true \
             -p:PublishAot=true \
             -p:OptimizationPreference=Size \
+            -p:RustStaticLibPath=${{ github.workspace }}/dist/staticlib-macos-x64/libdocx_storage_local.a \
             --output dist/macos-x64
 
       - name: Build CLI (arm64)
@@ -495,6 +518,7 @@ jobs:
             --self-contained true \
             -p:PublishAot=true \
             -p:OptimizationPreference=Size \
+            -p:RustStaticLibPath=${{ github.workspace }}/dist/staticlib-macos-arm64/libdocx_storage_local.a \
             --output dist/macos-arm64
 
       - name: Create Universal Binaries
@@ -513,23 +537,14 @@ jobs:
             dist/macos-arm64/docx-cli \
             -output dist/macos-universal/docx-cli
 
-          # Create universal binary for docx-storage-local
-          lipo -create \
-            dist/macos-x64/docx-storage-local \
-            dist/macos-arm64/docx-storage-local \
-            -output dist/macos-universal/docx-storage-local
-
           chmod +x dist/macos-universal/docx-mcp
           chmod +x dist/macos-universal/docx-cli
-          chmod +x dist/macos-universal/docx-storage-local
 
           # Verify universal binaries
           echo "docx-mcp architectures:"
           lipo -info dist/macos-universal/docx-mcp
           echo "docx-cli architectures:"
           lipo -info dist/macos-universal/docx-cli
-          echo "docx-storage-local architectures:"
-          lipo -info dist/macos-universal/docx-storage-local
 
       - name: Extract version
         id: version

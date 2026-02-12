@@ -1,15 +1,3 @@
-mod config;
-mod error;
-mod lock;
-mod service;
-mod service_sync;
-mod service_watch;
-mod storage;
-mod sync;
-mod watch;
-
-use std::sync::Arc;
-
 use clap::Parser;
 use tokio::signal;
 use tokio::sync::watch as tokio_watch;
@@ -21,20 +9,14 @@ use tracing_subscriber::EnvFilter;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 
-use config::{Config, Transport};
-use lock::FileLock;
-use service::proto::storage_service_server::StorageServiceServer;
-use service::proto::source_sync_service_server::SourceSyncServiceServer;
-use service::proto::external_watch_service_server::ExternalWatchServiceServer;
-use service::StorageServiceImpl;
-use service_sync::SourceSyncServiceImpl;
-use service_watch::ExternalWatchServiceImpl;
-use storage::LocalStorage;
-use sync::LocalFileSyncBackend;
-use watch::NotifyWatchBackend;
-
-/// File descriptor set for gRPC reflection
-pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("storage_descriptor");
+use docx_storage_local::config::{Config, Transport};
+use docx_storage_local::service::proto::storage_service_server::StorageServiceServer;
+use docx_storage_local::service::proto::source_sync_service_server::SourceSyncServiceServer;
+use docx_storage_local::service::proto::external_watch_service_server::ExternalWatchServiceServer;
+use docx_storage_local::service::StorageServiceImpl;
+use docx_storage_local::service_sync::SourceSyncServiceImpl;
+use docx_storage_local::service_watch::ExternalWatchServiceImpl;
+use docx_storage_local::FILE_DESCRIPTOR_SET;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,29 +36,16 @@ async fn main() -> anyhow::Result<()> {
         info!("  Parent PID: {} (will exit when parent dies)", ppid);
     }
 
-    // Create storage backend (local only)
+    // Create storage backends via shared helper
     let dir = config.effective_local_storage_dir();
     info!("  Local storage dir: {}", dir.display());
-    let storage: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalStorage::new(&dir));
-
-    // Create lock manager (using same base dir as storage)
-    let lock_manager: Arc<dyn crate::lock::LockManager> = Arc::new(FileLock::new(&dir));
-
-    // Create sync backend (shares storage for index persistence)
-    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> = Arc::new(LocalFileSyncBackend::new(storage.clone()));
-
-    // Create watch backend (uses SHA256 hash for content change detection, like C# ExternalChangeTracker)
-    let watch_backend: Arc<dyn docx_storage_core::WatchBackend> = Arc::new(NotifyWatchBackend::new());
+    let (storage, lock_manager, sync_backend, watch_backend) =
+        docx_storage_local::server::create_backends(&dir);
 
     // Create gRPC services
-    let storage_service = StorageServiceImpl::new(storage, lock_manager);
-    let storage_svc = StorageServiceServer::new(storage_service);
-
-    let sync_service = SourceSyncServiceImpl::new(sync_backend);
-    let sync_svc = SourceSyncServiceServer::new(sync_service);
-
-    let watch_service = ExternalWatchServiceImpl::new(watch_backend);
-    let watch_svc = ExternalWatchServiceServer::new(watch_service);
+    let storage_svc = StorageServiceServer::new(StorageServiceImpl::new(storage, lock_manager));
+    let sync_svc = SourceSyncServiceServer::new(SourceSyncServiceImpl::new(sync_backend));
+    let watch_svc = ExternalWatchServiceServer::new(ExternalWatchServiceImpl::new(watch_backend));
 
     // Set up parent death signal using OS-native mechanisms
     setup_parent_death_signal(config.parent_pid);

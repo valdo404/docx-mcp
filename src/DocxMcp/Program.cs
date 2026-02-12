@@ -19,10 +19,31 @@ builder.Logging.AddConsole(options =>
 builder.Services.AddSingleton<IStorageClient>(sp =>
 {
     var logger = sp.GetService<ILogger<StorageClient>>();
-    var options = new StorageClientOptions();
-    var launcherLogger = sp.GetService<ILogger<GrpcLauncher>>();
-    var launcher = new GrpcLauncher(options, launcherLogger);
-    return StorageClient.CreateAsync(options, launcher, logger).GetAwaiter().GetResult();
+    var options = StorageClientOptions.FromEnvironment();
+
+    if (!string.IsNullOrEmpty(options.ServerUrl))
+    {
+        // Remote gRPC mode — connect to external server
+        var launcherLogger = sp.GetService<ILogger<GrpcLauncher>>();
+        var launcher = new GrpcLauncher(options, launcherLogger);
+        return StorageClient.CreateAsync(options, launcher, logger).GetAwaiter().GetResult();
+    }
+
+    // Embedded mode — in-memory gRPC via statically linked Rust storage
+    NativeStorage.Init(options.GetEffectiveLocalStorageDir());
+
+    var handler = new System.Net.Http.SocketsHttpHandler
+    {
+        ConnectCallback = (_, _) =>
+            new ValueTask<Stream>(new InMemoryPipeStream())
+    };
+
+    var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
+    {
+        HttpHandler = handler
+    });
+
+    return new StorageClient(channel, logger);
 });
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHostedService<SessionRestoreService>();
