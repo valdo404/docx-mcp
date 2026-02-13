@@ -1,7 +1,5 @@
 mod config;
 mod error;
-mod kv;
-mod lock;
 mod service;
 mod service_sync;
 mod service_watch;
@@ -22,8 +20,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
-use kv::KvClient;
-use lock::KvLock;
 use service::proto::external_watch_service_server::ExternalWatchServiceServer;
 use service::proto::source_sync_service_server::SourceSyncServiceServer;
 use service::proto::storage_service_server::StorageServiceServer;
@@ -50,7 +46,6 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting docx-storage-cloudflare server");
     info!("  R2 bucket: {}", config.r2_bucket_name);
-    info!("  KV namespace: {}", config.kv_namespace_id);
     info!("  Poll interval: {} secs", config.watch_poll_interval_secs);
 
     // Create S3 client for R2
@@ -72,36 +67,29 @@ async fn main() -> anyhow::Result<()> {
 
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
-    // Create KV client
-    let kv_client = Arc::new(KvClient::new(
-        config.cloudflare_account_id.clone(),
-        config.kv_namespace_id.clone(),
-        config.cloudflare_api_token.clone(),
-    ));
-
-    // Create storage backend (R2 + KV)
-    let storage: Arc<dyn crate::storage::StorageBackend> = Arc::new(R2Storage::new(
+    // Create storage backend (R2 only — no KV dependency)
+    let storage = Arc::new(R2Storage::new(
         s3_client.clone(),
-        kv_client.clone(),
         config.r2_bucket_name.clone(),
     ));
-
-    // Create lock manager (KV-based)
-    let lock_manager: Arc<dyn crate::lock::LockManager> = Arc::new(KvLock::new(kv_client.clone()));
 
     // Create sync backend (R2)
-    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> =
-        Arc::new(R2SyncBackend::new(s3_client.clone(), config.r2_bucket_name.clone(), storage.clone()));
-
-    // Create watch backend (polling-based)
-    let watch_backend: Arc<dyn docx_storage_core::WatchBackend> = Arc::new(PollingWatchBackend::new(
-        s3_client,
+    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> = Arc::new(R2SyncBackend::new(
+        s3_client.clone(),
         config.r2_bucket_name.clone(),
-        config.watch_poll_interval_secs,
+        storage.clone(),
     ));
 
+    // Create watch backend (polling-based)
+    let watch_backend: Arc<dyn docx_storage_core::WatchBackend> =
+        Arc::new(PollingWatchBackend::new(
+            s3_client,
+            config.r2_bucket_name.clone(),
+            config.watch_poll_interval_secs,
+        ));
+
     // Create gRPC services
-    let storage_service = StorageServiceImpl::new(storage, lock_manager);
+    let storage_service = StorageServiceImpl::new(storage);
     let storage_svc = StorageServiceServer::new(storage_service);
 
     let sync_service = SourceSyncServiceImpl::new(sync_backend);

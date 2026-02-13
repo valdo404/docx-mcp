@@ -3,7 +3,7 @@ use clap::Parser;
 /// Configuration for the docx-storage-cloudflare server.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "docx-storage-cloudflare")]
-#[command(about = "Cloudflare R2/KV gRPC storage server for docx-mcp")]
+#[command(about = "Cloudflare R2 gRPC storage server for docx-mcp")]
 pub struct Config {
     /// TCP host to bind to
     #[arg(long, default_value = "0.0.0.0", env = "GRPC_HOST")]
@@ -17,17 +17,9 @@ pub struct Config {
     #[arg(long, env = "CLOUDFLARE_ACCOUNT_ID")]
     pub cloudflare_account_id: String,
 
-    /// Cloudflare API token (needs R2 and KV permissions)
-    #[arg(long, env = "CLOUDFLARE_API_TOKEN")]
-    pub cloudflare_api_token: String,
-
-    /// R2 bucket name for session/checkpoint storage
+    /// R2 bucket name for session/checkpoint/index storage
     #[arg(long, env = "R2_BUCKET_NAME")]
     pub r2_bucket_name: String,
-
-    /// KV namespace ID for index storage
-    #[arg(long, env = "KV_NAMESPACE_ID")]
-    pub kv_namespace_id: String,
 
     /// R2 access key ID (for S3-compatible API)
     #[arg(long, env = "R2_ACCESS_KEY_ID")]

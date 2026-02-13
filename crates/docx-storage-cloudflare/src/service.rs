@@ -1,6 +1,5 @@
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
@@ -8,8 +7,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, instrument};
 
 use crate::error::StorageResultExt;
-use crate::lock::LockManager;
-use crate::storage::StorageBackend;
+use crate::storage::{R2Storage, StorageBackend};
 
 // Include the generated protobuf code
 pub mod proto {
@@ -24,20 +22,15 @@ const DEFAULT_CHUNK_SIZE: usize = 256 * 1024;
 
 /// Implementation of the StorageService gRPC service.
 pub struct StorageServiceImpl {
-    storage: Arc<dyn StorageBackend>,
-    lock_manager: Arc<dyn LockManager>,
+    storage: Arc<R2Storage>,
     version: String,
     chunk_size: usize,
 }
 
 impl StorageServiceImpl {
-    pub fn new(
-        storage: Arc<dyn StorageBackend>,
-        lock_manager: Arc<dyn LockManager>,
-    ) -> Self {
+    pub fn new(storage: Arc<R2Storage>) -> Self {
         Self {
             storage,
-            lock_manager,
             version: env!("CARGO_PKG_VERSION").to_string(),
             chunk_size: DEFAULT_CHUNK_SIZE,
         }
@@ -232,7 +225,7 @@ impl StorageService for StorageServiceImpl {
     }
 
     // =========================================================================
-    // Index Operations (Atomic - with internal locking)
+    // Index Operations (Atomic - ETag-based CAS, no external lock)
     // =========================================================================
 
     #[instrument(skip(self, request), level = "debug")]
@@ -267,79 +260,47 @@ impl StorageService for StorageServiceImpl {
         request: Request<AddSessionToIndexRequest>,
     ) -> Result<Response<AddSessionToIndexResponse>, Status> {
         let req = request.into_inner();
-        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?.to_string();
         let session_id = req.session_id;
         let entry = req
             .entry
             .ok_or_else(|| Status::invalid_argument("entry is required"))?;
 
-        let holder_id = uuid::Uuid::new_v4().to_string();
-        let ttl = Duration::from_secs(30);
+        // Capture values for the closure
+        let sid = session_id.clone();
+        let mut already_exists = false;
 
-        // Acquire lock with retries
-        let mut acquired = false;
-        for i in 0..10 {
-            if i > 0 {
-                tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
-            }
-            let result = self
-                .lock_manager
-                .acquire(tenant_id, "index", &holder_id, ttl)
-                .await
-                .map_storage_err()?;
-            if result.acquired {
-                acquired = true;
-                break;
-            }
-        }
-
-        if !acquired {
-            return Err(Status::unavailable("Could not acquire index lock"));
-        }
-
-        let result = async {
-            let mut index = self
-                .storage
-                .load_index(tenant_id)
-                .await
-                .map_storage_err()?
-                .unwrap_or_default();
-
-            let already_exists = index.contains(&session_id);
-            if !already_exists {
-                index.upsert(crate::storage::SessionIndexEntry {
-                    id: session_id.clone(),
-                    source_path: if entry.source_path.is_empty() {
-                        None
-                    } else {
-                        Some(entry.source_path)
-                    },
-                    auto_sync: true,
-                    created_at: chrono::DateTime::from_timestamp(entry.created_at_unix, 0)
+        self.storage
+            .cas_index(&tenant_id, |index| {
+                if index.contains(&sid) {
+                    already_exists = true;
+                } else {
+                    already_exists = false;
+                    index.upsert(crate::storage::SessionIndexEntry {
+                        id: sid.clone(),
+                        source_path: if entry.source_path.is_empty() {
+                            None
+                        } else {
+                            Some(entry.source_path.clone())
+                        },
+                        auto_sync: true,
+                        created_at: chrono::DateTime::from_timestamp(entry.created_at_unix, 0)
+                            .unwrap_or_else(chrono::Utc::now),
+                        last_modified_at: chrono::DateTime::from_timestamp(
+                            entry.modified_at_unix,
+                            0,
+                        )
                         .unwrap_or_else(chrono::Utc::now),
-                    last_modified_at: chrono::DateTime::from_timestamp(entry.modified_at_unix, 0)
-                        .unwrap_or_else(chrono::Utc::now),
-                    docx_file: Some(format!("{}.docx", session_id)),
-                    wal_count: entry.wal_position,
-                    cursor_position: entry.wal_position,
-                    checkpoint_positions: entry.checkpoint_positions,
-                });
-                self.storage
-                    .save_index(tenant_id, &index)
-                    .await
-                    .map_storage_err()?;
-            }
+                        docx_file: Some(format!("{}.docx", sid)),
+                        wal_count: entry.wal_position,
+                        cursor_position: entry.wal_position,
+                        checkpoint_positions: entry.checkpoint_positions.clone(),
+                    });
+                }
+            })
+            .await
+            .map_storage_err()?;
 
-            Ok::<_, Status>(already_exists)
-        }
-        .await;
-
-        let _ = self
-            .lock_manager
-            .release(tenant_id, "index", &holder_id)
-            .await;
-
-        let already_exists = result?;
         Ok(Response::new(AddSessionToIndexResponse {
             success: true,
             already_exists,
@@ -352,59 +313,43 @@ impl StorageService for StorageServiceImpl {
         request: Request<UpdateSessionInIndexRequest>,
     ) -> Result<Response<UpdateSessionInIndexResponse>, Status> {
         let req = request.into_inner();
-        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?.to_string();
         let session_id = req.session_id;
 
-        let holder_id = uuid::Uuid::new_v4().to_string();
-        let ttl = Duration::from_secs(30);
+        let sid = session_id.clone();
+        let mut not_found = false;
 
-        let mut acquired = false;
-        for i in 0..10 {
-            if i > 0 {
-                tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
-            }
-            let result = self
-                .lock_manager
-                .acquire(tenant_id, "index", &holder_id, ttl)
-                .await
-                .map_storage_err()?;
-            if result.acquired {
-                acquired = true;
-                break;
-            }
-        }
+        // Clone req fields for the closure
+        let modified_at_unix = req.modified_at_unix;
+        let wal_position = req.wal_position;
+        let cursor_position = req.cursor_position;
+        let add_checkpoint_positions = req.add_checkpoint_positions.clone();
+        let remove_checkpoint_positions = req.remove_checkpoint_positions.clone();
 
-        if !acquired {
-            return Err(Status::unavailable("Could not acquire index lock"));
-        }
-
-        let result = async {
-            let mut index = self
-                .storage
-                .load_index(tenant_id)
-                .await
-                .map_storage_err()?
-                .unwrap_or_default();
-
-            let not_found = !index.contains(&session_id);
-            if !not_found {
-                let entry = index.get_mut(&session_id).unwrap();
-
-                if let Some(modified_at) = req.modified_at_unix {
-                    entry.last_modified_at =
-                        chrono::DateTime::from_timestamp(modified_at, 0).unwrap_or_else(chrono::Utc::now);
+        self.storage
+            .cas_index(&tenant_id, |index| {
+                if !index.contains(&sid) {
+                    not_found = true;
+                    return;
                 }
-                if let Some(wal_position) = req.wal_position {
-                    entry.wal_count = wal_position;
-                    if req.cursor_position.is_none() {
-                        entry.cursor_position = wal_position;
+                not_found = false;
+                let entry = index.get_mut(&sid).unwrap();
+
+                if let Some(modified_at) = modified_at_unix {
+                    entry.last_modified_at = chrono::DateTime::from_timestamp(modified_at, 0)
+                        .unwrap_or_else(chrono::Utc::now);
+                }
+                if let Some(wal_pos) = wal_position {
+                    entry.wal_count = wal_pos;
+                    if cursor_position.is_none() {
+                        entry.cursor_position = wal_pos;
                     }
                 }
-                if let Some(cursor_position) = req.cursor_position {
-                    entry.cursor_position = cursor_position;
+                if let Some(cursor_pos) = cursor_position {
+                    entry.cursor_position = cursor_pos;
                 }
 
-                for pos in &req.add_checkpoint_positions {
+                for pos in &add_checkpoint_positions {
                     if !entry.checkpoint_positions.contains(pos) {
                         entry.checkpoint_positions.push(*pos);
                     }
@@ -412,26 +357,13 @@ impl StorageService for StorageServiceImpl {
 
                 entry
                     .checkpoint_positions
-                    .retain(|p| !req.remove_checkpoint_positions.contains(p));
+                    .retain(|p| !remove_checkpoint_positions.contains(p));
 
                 entry.checkpoint_positions.sort();
+            })
+            .await
+            .map_storage_err()?;
 
-                self.storage
-                    .save_index(tenant_id, &index)
-                    .await
-                    .map_storage_err()?;
-            }
-
-            Ok::<_, Status>(not_found)
-        }
-        .await;
-
-        let _ = self
-            .lock_manager
-            .release(tenant_id, "index", &holder_id)
-            .await;
-
-        let not_found = result?;
         Ok(Response::new(UpdateSessionInIndexResponse {
             success: !not_found,
             not_found,
@@ -444,58 +376,19 @@ impl StorageService for StorageServiceImpl {
         request: Request<RemoveSessionFromIndexRequest>,
     ) -> Result<Response<RemoveSessionFromIndexResponse>, Status> {
         let req = request.into_inner();
-        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?.to_string();
         let session_id = req.session_id;
 
-        let holder_id = uuid::Uuid::new_v4().to_string();
-        let ttl = Duration::from_secs(30);
+        let sid = session_id.clone();
+        let mut existed = false;
 
-        let mut acquired = false;
-        for i in 0..10 {
-            if i > 0 {
-                tokio::time::sleep(Duration::from_millis(50 * i as u64)).await;
-            }
-            let result = self
-                .lock_manager
-                .acquire(tenant_id, "index", &holder_id, ttl)
-                .await
-                .map_storage_err()?;
-            if result.acquired {
-                acquired = true;
-                break;
-            }
-        }
+        self.storage
+            .cas_index(&tenant_id, |index| {
+                existed = index.remove(&sid).is_some();
+            })
+            .await
+            .map_storage_err()?;
 
-        if !acquired {
-            return Err(Status::unavailable("Could not acquire index lock"));
-        }
-
-        let result = async {
-            let mut index = self
-                .storage
-                .load_index(tenant_id)
-                .await
-                .map_storage_err()?
-                .unwrap_or_default();
-
-            let existed = index.remove(&session_id).is_some();
-            if existed {
-                self.storage
-                    .save_index(tenant_id, &index)
-                    .await
-                    .map_storage_err()?;
-            }
-
-            Ok::<_, Status>(existed)
-        }
-        .await;
-
-        let _ = self
-            .lock_manager
-            .release(tenant_id, "index", &holder_id)
-            .await;
-
-        let existed = result?;
         Ok(Response::new(RemoveSessionFromIndexResponse {
             success: true,
             existed,

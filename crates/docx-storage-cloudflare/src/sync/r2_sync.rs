@@ -9,6 +9,8 @@ use docx_storage_core::{
 };
 use tracing::{debug, instrument, warn};
 
+use crate::storage::R2Storage;
+
 /// Transient sync state (not persisted - only in memory during server lifetime)
 #[derive(Debug, Clone, Default)]
 struct TransientSyncState {
@@ -29,8 +31,8 @@ pub struct R2SyncBackend {
     s3_client: S3Client,
     /// Default bucket for R2 sources
     default_bucket: String,
-    /// Storage backend for reading/writing session index
-    storage: Arc<dyn StorageBackend>,
+    /// Storage backend for reading/writing session index (concrete R2Storage for CAS)
+    storage: Arc<R2Storage>,
     /// Transient state: (tenant_id, session_id) -> TransientSyncState
     transient: DashMap<(String, String), TransientSyncState>,
 }
@@ -49,7 +51,7 @@ impl R2SyncBackend {
     pub fn new(
         s3_client: S3Client,
         default_bucket: String,
-        storage: Arc<dyn StorageBackend>,
+        storage: Arc<R2Storage>,
     ) -> Self {
         Self {
             s3_client,
@@ -106,13 +108,29 @@ impl SyncBackend for R2SyncBackend {
             )));
         }
 
-        // Load index, update entry, save index
-        let mut index = self.storage.load_index(tenant_id).await?.unwrap_or_default();
+        let sid = session_id.to_string();
+        let tid = tenant_id.to_string();
+        let source_uri = source.uri.clone();
 
-        if let Some(entry) = index.get_mut(session_id) {
-            entry.source_path = Some(source.uri.clone());
-            entry.auto_sync = auto_sync;
-            entry.last_modified_at = chrono::Utc::now();
+        self.storage
+            .cas_index(tenant_id, |index| {
+                if let Some(entry) = index.get_mut(&sid) {
+                    entry.source_path = Some(source_uri.clone());
+                    entry.auto_sync = auto_sync;
+                    entry.last_modified_at = chrono::Utc::now();
+                }
+            })
+            .await?;
+
+        // Check if session was found by loading index to verify
+        let index = self.storage.load_index(tenant_id).await?;
+        if let Some(idx) = &index {
+            if idx.get(session_id).is_none() {
+                return Err(StorageError::Sync(format!(
+                    "Session {} not found in index for tenant {}",
+                    session_id, tenant_id
+                )));
+            }
         } else {
             return Err(StorageError::Sync(format!(
                 "Session {} not found in index for tenant {}",
@@ -120,15 +138,13 @@ impl SyncBackend for R2SyncBackend {
             )));
         }
 
-        self.storage.save_index(tenant_id, &index).await?;
-
         // Initialize transient state
         let key = Self::key(tenant_id, session_id);
         self.transient.insert(key, TransientSyncState::default());
 
         debug!(
             "Registered R2 source for tenant {} session {} -> {} (auto_sync={})",
-            tenant_id, session_id, source.uri, auto_sync
+            tid, sid, source.uri, auto_sync
         );
 
         Ok(())
@@ -140,24 +156,26 @@ impl SyncBackend for R2SyncBackend {
         tenant_id: &str,
         session_id: &str,
     ) -> Result<(), StorageError> {
-        // Load index, clear source_path, save index
-        let mut index = self.storage.load_index(tenant_id).await?.unwrap_or_default();
+        let sid = session_id.to_string();
 
-        if let Some(entry) = index.get_mut(session_id) {
-            entry.source_path = None;
-            entry.auto_sync = false;
-            entry.last_modified_at = chrono::Utc::now();
-            self.storage.save_index(tenant_id, &index).await?;
-
-            debug!(
-                "Unregistered source for tenant {} session {}",
-                tenant_id, session_id
-            );
-        }
+        self.storage
+            .cas_index(tenant_id, |index| {
+                if let Some(entry) = index.get_mut(&sid) {
+                    entry.source_path = None;
+                    entry.auto_sync = false;
+                    entry.last_modified_at = chrono::Utc::now();
+                }
+            })
+            .await?;
 
         // Clear transient state
         let key = Self::key(tenant_id, session_id);
         self.transient.remove(&key);
+
+        debug!(
+            "Unregistered source for tenant {} session {}",
+            tenant_id, session_id
+        );
 
         Ok(())
     }
@@ -170,27 +188,10 @@ impl SyncBackend for R2SyncBackend {
         source: Option<SourceDescriptor>,
         auto_sync: Option<bool>,
     ) -> Result<(), StorageError> {
-        // Load index
-        let mut index = self.storage.load_index(tenant_id).await?.unwrap_or_default();
-
-        let entry = index.get_mut(session_id).ok_or_else(|| {
-            StorageError::Sync(format!(
-                "Session {} not found in index for tenant {}",
-                session_id, tenant_id
-            ))
-        })?;
-
-        // Check if source is registered
-        if entry.source_path.is_none() {
-            return Err(StorageError::Sync(format!(
-                "No source registered for tenant {} session {}",
-                tenant_id, session_id
-            )));
-        }
-
-        // Update source if provided
-        if let Some(new_source) = source {
-            if new_source.source_type != SourceType::R2 && new_source.source_type != SourceType::S3 {
+        // Validate new source if provided
+        if let Some(ref new_source) = source {
+            if new_source.source_type != SourceType::R2 && new_source.source_type != SourceType::S3
+            {
                 return Err(StorageError::Sync(format!(
                     "R2SyncBackend only supports R2/S3 sources, got {:?}",
                     new_source.source_type
@@ -202,24 +203,52 @@ impl SyncBackend for R2SyncBackend {
                     new_source.uri
                 )));
             }
-            debug!(
-                "Updating source URI for tenant {} session {}: {:?} -> {}",
-                tenant_id, session_id, entry.source_path, new_source.uri
-            );
-            entry.source_path = Some(new_source.uri);
         }
 
-        // Update auto_sync if provided
-        if let Some(new_auto_sync) = auto_sync {
-            debug!(
-                "Updating auto_sync for tenant {} session {}: {} -> {}",
-                tenant_id, session_id, entry.auto_sync, new_auto_sync
-            );
-            entry.auto_sync = new_auto_sync;
-        }
+        let sid = session_id.to_string();
+        let new_uri = source.map(|s| s.uri);
+        let mut not_found = false;
+        let mut no_source = false;
 
-        entry.last_modified_at = chrono::Utc::now();
-        self.storage.save_index(tenant_id, &index).await?;
+        self.storage
+            .cas_index(tenant_id, |index| {
+                let entry = match index.get_mut(&sid) {
+                    Some(e) => e,
+                    None => {
+                        not_found = true;
+                        return;
+                    }
+                };
+                not_found = false;
+
+                if entry.source_path.is_none() {
+                    no_source = true;
+                    return;
+                }
+                no_source = false;
+
+                if let Some(ref uri) = new_uri {
+                    entry.source_path = Some(uri.clone());
+                }
+                if let Some(new_auto_sync) = auto_sync {
+                    entry.auto_sync = new_auto_sync;
+                }
+                entry.last_modified_at = chrono::Utc::now();
+            })
+            .await?;
+
+        if not_found {
+            return Err(StorageError::Sync(format!(
+                "Session {} not found in index for tenant {}",
+                session_id, tenant_id
+            )));
+        }
+        if no_source {
+            return Err(StorageError::Sync(format!(
+                "No source registered for tenant {} session {}",
+                tenant_id, session_id
+            )));
+        }
 
         Ok(())
     }
@@ -377,7 +406,11 @@ impl SyncBackend for R2SyncBackend {
             }
         }
 
-        debug!("Listed {} R2/S3 sources for tenant {}", results.len(), tenant_id);
+        debug!(
+            "Listed {} R2/S3 sources for tenant {}",
+            results.len(),
+            tenant_id
+        );
         Ok(results)
     }
 

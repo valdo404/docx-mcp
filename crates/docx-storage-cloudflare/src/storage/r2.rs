@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream;
@@ -8,38 +8,36 @@ use docx_storage_core::{
 };
 use tracing::{debug, instrument, warn};
 
-use crate::kv::KvClient;
+/// Maximum retries for transient errors (429 / 5xx).
+const MAX_RETRIES: u32 = 5;
+/// Base delay for exponential backoff.
+const BASE_DELAY_MS: u64 = 200;
+/// Maximum retries for CAS (compare-and-swap) loops.
+const CAS_MAX_RETRIES: u32 = 10;
 
-/// R2 storage backend using Cloudflare R2 (S3-compatible) for objects and KV for index.
+/// R2 storage backend using Cloudflare R2 (S3-compatible) with ETag-based optimistic locking.
 ///
 /// Storage layout in R2:
 /// ```
 /// {bucket}/
 ///   {tenant_id}/
+///     index.json                     # Session index (was in KV, now in R2)
 ///     sessions/
-///       {session_id}.docx          # Session document
-///       {session_id}.wal           # WAL file (JSONL format)
-///       {session_id}.ckpt.{pos}.docx  # Checkpoint files
-/// ```
-///
-/// Index stored in KV:
-/// ```
-/// Key: index:{tenant_id}
-/// Value: JSON-serialized SessionIndex
+///       {session_id}.docx            # Session document
+///       {session_id}.wal             # WAL file (JSONL format)
+///       {session_id}.ckpt.{pos}.docx # Checkpoint files
 /// ```
 #[derive(Clone)]
 pub struct R2Storage {
     s3_client: S3Client,
-    kv_client: Arc<KvClient>,
     bucket_name: String,
 }
 
 impl R2Storage {
     /// Create a new R2Storage backend.
-    pub fn new(s3_client: S3Client, kv_client: Arc<KvClient>, bucket_name: String) -> Self {
+    pub fn new(s3_client: S3Client, bucket_name: String) -> Self {
         Self {
             s3_client,
-            kv_client,
             bucket_name,
         }
     }
@@ -59,68 +57,263 @@ impl R2Storage {
         format!("{}/sessions/{}.ckpt.{}.docx", tenant_id, session_id, position)
     }
 
-    /// Get the KV key for a tenant's index.
-    fn index_kv_key(&self, tenant_id: &str) -> String {
-        format!("index:{}", tenant_id)
+    /// Get the R2 key for a tenant's index.
+    fn index_key(&self, tenant_id: &str) -> String {
+        format!("{}/index.json", tenant_id)
     }
 
-    /// Get an object from R2.
-    async fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let result = self
-            .s3_client
-            .get_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .send()
-            .await;
+    // =========================================================================
+    // Retry helper
+    // =========================================================================
 
-        match result {
-            Ok(output) => {
-                let bytes = output
-                    .body
-                    .collect()
-                    .await
-                    .map_err(|e| StorageError::Io(format!("Failed to read R2 object body: {}", e)))?
-                    .into_bytes();
-                Ok(Some(bytes.to_vec()))
+    /// Sleep with exponential backoff + jitter.
+    async fn backoff_sleep(attempt: u32) {
+        let base = Duration::from_millis(BASE_DELAY_MS * 2u64.pow(attempt));
+        let jitter = Duration::from_millis(rand_jitter());
+        tokio::time::sleep(base + jitter).await;
+    }
+
+    /// Check if an S3 error is retryable (429 or 5xx).
+    fn is_retryable_s3_error(err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>) -> bool {
+        use aws_sdk_s3::error::SdkError;
+        match err {
+            SdkError::ServiceError(e) => {
+                let raw = e.raw();
+                let status = raw.status().as_u16();
+                status == 429 || (500..=504).contains(&status)
             }
-            Err(e) => {
-                let service_error = e.into_service_error();
-                if service_error.is_no_such_key() {
-                    Ok(None)
-                } else {
-                    Err(StorageError::Io(format!("R2 get_object error: {}", service_error)))
-                }
+            SdkError::ResponseError(e) => {
+                let status = e.raw().status().as_u16();
+                status == 429 || (500..=504).contains(&status)
             }
+            SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => true,
+            _ => false,
         }
     }
 
-    /// Put an object to R2.
+    /// Check if an S3 error is a 412 Precondition Failed.
+    fn is_precondition_failed(err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>) -> bool {
+        use aws_sdk_s3::error::SdkError;
+        match err {
+            SdkError::ServiceError(e) => e.raw().status().as_u16() == 412,
+            SdkError::ResponseError(e) => e.raw().status().as_u16() == 412,
+            _ => false,
+        }
+    }
+
+    // =========================================================================
+    // R2 primitives with retry
+    // =========================================================================
+
+    /// Get an object from R2, with retry on transient errors.
+    async fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        for attempt in 0..=MAX_RETRIES {
+            let result = self
+                .s3_client
+                .get_object()
+                .bucket(&self.bucket_name)
+                .key(key)
+                .send()
+                .await;
+
+            match result {
+                Ok(output) => {
+                    let bytes = output
+                        .body
+                        .collect()
+                        .await
+                        .map_err(|e| {
+                            StorageError::Io(format!("Failed to read R2 object body: {}", e))
+                        })?
+                        .into_bytes();
+                    return Ok(Some(bytes.to_vec()));
+                }
+                Err(e) => {
+                    if Self::is_retryable_s3_error(&e) && attempt < MAX_RETRIES {
+                        warn!(attempt, key, "R2 get_object retryable error, retrying");
+                        Self::backoff_sleep(attempt).await;
+                        continue;
+                    }
+                    let service_error = e.into_service_error();
+                    if service_error.is_no_such_key() {
+                        return Ok(None);
+                    }
+                    return Err(StorageError::Io(format!(
+                        "R2 get_object error: {}",
+                        service_error
+                    )));
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    /// Get an object from R2 along with its ETag, with retry on transient errors.
+    /// Returns `None` if the object does not exist.
+    async fn get_object_with_etag(
+        &self,
+        key: &str,
+    ) -> Result<Option<(Vec<u8>, String)>, StorageError> {
+        for attempt in 0..=MAX_RETRIES {
+            let result = self
+                .s3_client
+                .get_object()
+                .bucket(&self.bucket_name)
+                .key(key)
+                .send()
+                .await;
+
+            match result {
+                Ok(output) => {
+                    let etag = output
+                        .e_tag()
+                        .unwrap_or("")
+                        .to_string();
+                    let bytes = output
+                        .body
+                        .collect()
+                        .await
+                        .map_err(|e| {
+                            StorageError::Io(format!("Failed to read R2 object body: {}", e))
+                        })?
+                        .into_bytes();
+                    return Ok(Some((bytes.to_vec(), etag)));
+                }
+                Err(e) => {
+                    if Self::is_retryable_s3_error(&e) && attempt < MAX_RETRIES {
+                        warn!(attempt, key, "R2 get_object_with_etag retryable error, retrying");
+                        Self::backoff_sleep(attempt).await;
+                        continue;
+                    }
+                    let service_error = e.into_service_error();
+                    if service_error.is_no_such_key() {
+                        return Ok(None);
+                    }
+                    return Err(StorageError::Io(format!(
+                        "R2 get_object_with_etag error: {}",
+                        service_error
+                    )));
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    /// Put an object to R2, with retry on transient errors.
     async fn put_object(&self, key: &str, data: &[u8]) -> Result<(), StorageError> {
-        self.s3_client
-            .put_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .body(ByteStream::from(data.to_vec()))
-            .send()
-            .await
-            .map_err(|e| StorageError::Io(format!("R2 put_object error: {}", e)))?;
-        Ok(())
+        for attempt in 0..=MAX_RETRIES {
+            let result = self
+                .s3_client
+                .put_object()
+                .bucket(&self.bucket_name)
+                .key(key)
+                .body(ByteStream::from(data.to_vec()))
+                .send()
+                .await;
+
+            match result {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if Self::is_retryable_s3_error(&e) && attempt < MAX_RETRIES {
+                        warn!(attempt, key, "R2 put_object retryable error, retrying");
+                        Self::backoff_sleep(attempt).await;
+                        continue;
+                    }
+                    return Err(StorageError::Io(format!("R2 put_object error: {}", e)));
+                }
+            }
+        }
+        unreachable!()
     }
 
-    /// Delete an object from R2.
+    /// Conditionally put an object using ETag.
+    ///
+    /// - If `expected_etag` is `Some(etag)`: uses `If-Match` (update existing).
+    /// - If `expected_etag` is `None`: uses `If-None-Match: *` (create new, fail if exists).
+    ///
+    /// Returns the new ETag on success, or `StorageError::Lock` on 412.
+    /// Retries on transient 429/5xx errors.
+    async fn put_object_conditional(
+        &self,
+        key: &str,
+        data: &[u8],
+        expected_etag: Option<&str>,
+    ) -> Result<String, StorageError> {
+        for attempt in 0..=MAX_RETRIES {
+            let mut req = self
+                .s3_client
+                .put_object()
+                .bucket(&self.bucket_name)
+                .key(key)
+                .body(ByteStream::from(data.to_vec()));
+
+            if let Some(etag) = expected_etag {
+                req = req.if_match(etag);
+            } else {
+                req = req.if_none_match("*");
+            }
+
+            let result = req.send().await;
+
+            match result {
+                Ok(output) => {
+                    let new_etag = output
+                        .e_tag()
+                        .unwrap_or("")
+                        .to_string();
+                    return Ok(new_etag);
+                }
+                Err(e) => {
+                    if Self::is_precondition_failed(&e) {
+                        return Err(StorageError::Lock(
+                            "ETag mismatch: object was modified concurrently".to_string(),
+                        ));
+                    }
+                    if Self::is_retryable_s3_error(&e) && attempt < MAX_RETRIES {
+                        warn!(
+                            attempt,
+                            key, "R2 put_object_conditional retryable error, retrying"
+                        );
+                        Self::backoff_sleep(attempt).await;
+                        continue;
+                    }
+                    return Err(StorageError::Io(format!(
+                        "R2 put_object_conditional error: {}",
+                        e
+                    )));
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    /// Delete an object from R2, with retry on transient errors.
     async fn delete_object(&self, key: &str) -> Result<(), StorageError> {
-        self.s3_client
-            .delete_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .send()
-            .await
-            .map_err(|e| StorageError::Io(format!("R2 delete_object error: {}", e)))?;
-        Ok(())
+        for attempt in 0..=MAX_RETRIES {
+            let result = self
+                .s3_client
+                .delete_object()
+                .bucket(&self.bucket_name)
+                .key(key)
+                .send()
+                .await;
+
+            match result {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if Self::is_retryable_s3_error(&e) && attempt < MAX_RETRIES {
+                        warn!(attempt, key, "R2 delete_object retryable error, retrying");
+                        Self::backoff_sleep(attempt).await;
+                        continue;
+                    }
+                    return Err(StorageError::Io(format!("R2 delete_object error: {}", e)));
+                }
+            }
+        }
+        unreachable!()
     }
 
-    /// List objects with a prefix.
+    /// List objects with a prefix, with retry on transient errors.
     async fn list_objects(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
         let mut keys = Vec::new();
         let mut continuation_token: Option<String> = None;
@@ -136,10 +329,39 @@ impl R2Storage {
                 request = request.continuation_token(token);
             }
 
-            let output = request
-                .send()
-                .await
-                .map_err(|e| StorageError::Io(format!("R2 list_objects error: {}", e)))?;
+            let output = {
+                let mut last_err = None;
+                let mut result = None;
+                for attempt in 0..=MAX_RETRIES {
+                    match request.clone().send().await {
+                        Ok(o) => {
+                            result = Some(o);
+                            break;
+                        }
+                        Err(e) => {
+                            if Self::is_retryable_s3_error(&e) && attempt < MAX_RETRIES {
+                                warn!(
+                                    attempt,
+                                    prefix, "R2 list_objects retryable error, retrying"
+                                );
+                                Self::backoff_sleep(attempt).await;
+                                last_err = Some(e);
+                                continue;
+                            }
+                            return Err(StorageError::Io(format!(
+                                "R2 list_objects error: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                result.ok_or_else(|| {
+                    StorageError::Io(format!(
+                        "R2 list_objects exhausted retries: {:?}",
+                        last_err
+                    ))
+                })?
+            };
 
             if let Some(contents) = output.contents {
                 for obj in contents {
@@ -158,6 +380,229 @@ impl R2Storage {
 
         Ok(keys)
     }
+
+    // =========================================================================
+    // CAS (Compare-And-Swap) operations
+    // =========================================================================
+
+    /// Atomically read-modify-write the session index using ETag-based CAS.
+    ///
+    /// 1. GET index with ETag
+    /// 2. Apply `mutator` to the deserialized index
+    /// 3. PUT with If-Match (or If-None-Match: * for new)
+    /// 4. On 412, retry from step 1 (up to `CAS_MAX_RETRIES`)
+    pub async fn cas_index<F>(
+        &self,
+        tenant_id: &str,
+        mut mutator: F,
+    ) -> Result<SessionIndex, StorageError>
+    where
+        F: FnMut(&mut SessionIndex),
+    {
+        let key = self.index_key(tenant_id);
+
+        for attempt in 0..CAS_MAX_RETRIES {
+            // Step 1: Read current index + ETag
+            let (mut index, etag) = match self.get_object_with_etag(&key).await? {
+                Some((data, etag)) => {
+                    let index: SessionIndex = serde_json::from_slice(&data).map_err(|e| {
+                        StorageError::Serialization(format!("Failed to parse index: {}", e))
+                    })?;
+                    (index, Some(etag))
+                }
+                None => (SessionIndex::default(), None),
+            };
+
+            // Step 2: Apply mutation
+            mutator(&mut index);
+
+            // Step 3: Serialize and conditional write
+            let json = serde_json::to_vec(&index).map_err(|e| {
+                StorageError::Serialization(format!("Failed to serialize index: {}", e))
+            })?;
+
+            match self
+                .put_object_conditional(&key, &json, etag.as_deref())
+                .await
+            {
+                Ok(_) => {
+                    debug!(
+                        attempt,
+                        tenant_id,
+                        sessions = index.sessions.len(),
+                        "CAS index succeeded"
+                    );
+                    return Ok(index);
+                }
+                Err(StorageError::Lock(_)) => {
+                    // Step 4: ETag mismatch — retry with jitter
+                    warn!(
+                        attempt,
+                        tenant_id, "CAS index conflict (412), retrying"
+                    );
+                    Self::backoff_sleep(attempt).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(StorageError::Lock(format!(
+            "CAS index exhausted {} retries for tenant {}",
+            CAS_MAX_RETRIES, tenant_id
+        )))
+    }
+
+    /// Atomically append WAL entries using ETag-based CAS.
+    async fn cas_append_wal(
+        &self,
+        tenant_id: &str,
+        session_id: &str,
+        entries: &[WalEntry],
+    ) -> Result<u64, StorageError> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        let key = self.wal_key(tenant_id, session_id);
+
+        for attempt in 0..CAS_MAX_RETRIES {
+            // Read current WAL + ETag
+            let (mut wal_data, etag) = match self.get_object_with_etag(&key).await? {
+                Some((data, etag)) if data.len() >= 8 => {
+                    let data_len = i64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+                    let used_len = 8 + data_len;
+                    let mut truncated = data;
+                    truncated.truncate(used_len.min(truncated.len()));
+                    (truncated, Some(etag))
+                }
+                _ => {
+                    // New file - start with 8-byte header (data_len = 0)
+                    (vec![0u8; 8], None)
+                }
+            };
+
+            // Append new entries as JSONL
+            let mut last_position = 0u64;
+            for entry in entries {
+                wal_data.extend_from_slice(&entry.patch_json);
+                if !entry.patch_json.ends_with(b"\n") {
+                    wal_data.push(b'\n');
+                }
+                last_position = entry.position;
+            }
+
+            // Update header with data length
+            let data_len = (wal_data.len() - 8) as i64;
+            wal_data[..8].copy_from_slice(&data_len.to_le_bytes());
+
+            // Conditional write
+            match self
+                .put_object_conditional(&key, &wal_data, etag.as_deref())
+                .await
+            {
+                Ok(_) => {
+                    debug!(
+                        "Appended {} WAL entries, last position: {}",
+                        entries.len(),
+                        last_position
+                    );
+                    return Ok(last_position);
+                }
+                Err(StorageError::Lock(_)) => {
+                    warn!(
+                        attempt,
+                        session_id, "WAL append conflict (412), retrying"
+                    );
+                    Self::backoff_sleep(attempt).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(StorageError::Lock(format!(
+            "WAL append exhausted {} retries for session {}",
+            CAS_MAX_RETRIES, session_id
+        )))
+    }
+
+    /// Atomically truncate WAL using ETag-based CAS.
+    async fn cas_truncate_wal(
+        &self,
+        tenant_id: &str,
+        session_id: &str,
+        keep_count: u64,
+        entries: Vec<WalEntry>,
+    ) -> Result<u64, StorageError> {
+        let (to_keep, to_remove): (Vec<_>, Vec<_>) =
+            entries.into_iter().partition(|e| e.position <= keep_count);
+
+        let removed_count = to_remove.len() as u64;
+        if removed_count == 0 {
+            return Ok(0);
+        }
+
+        let key = self.wal_key(tenant_id, session_id);
+
+        for attempt in 0..CAS_MAX_RETRIES {
+            // Get current ETag
+            let etag = match self.get_object_with_etag(&key).await? {
+                Some((_, etag)) => Some(etag),
+                None => return Ok(0),
+            };
+
+            // Build new WAL with only kept entries
+            let mut wal_data = vec![0u8; 8]; // Header placeholder
+            for entry in &to_keep {
+                wal_data.extend_from_slice(&entry.patch_json);
+                if !entry.patch_json.ends_with(b"\n") {
+                    wal_data.push(b'\n');
+                }
+            }
+
+            // Update header
+            let data_len = (wal_data.len() - 8) as i64;
+            wal_data[..8].copy_from_slice(&data_len.to_le_bytes());
+
+            match self
+                .put_object_conditional(&key, &wal_data, etag.as_deref())
+                .await
+            {
+                Ok(_) => {
+                    debug!(
+                        "Truncated WAL, removed {} entries, kept {}",
+                        removed_count,
+                        to_keep.len()
+                    );
+                    return Ok(removed_count);
+                }
+                Err(StorageError::Lock(_)) => {
+                    warn!(
+                        attempt,
+                        session_id, "WAL truncate conflict (412), retrying"
+                    );
+                    Self::backoff_sleep(attempt).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(StorageError::Lock(format!(
+            "WAL truncate exhausted {} retries for session {}",
+            CAS_MAX_RETRIES, session_id
+        )))
+    }
+}
+
+/// Simple jitter: random-ish value 0..50ms using timestamp nanos.
+fn rand_jitter() -> u64 {
+    use std::time::SystemTime;
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64 % 50)
+        .unwrap_or(0)
 }
 
 #[async_trait]
@@ -282,7 +727,11 @@ impl StorageBackend for R2Storage {
             }
         }
 
-        debug!("Listed {} sessions for tenant {}", sessions.len(), tenant_id);
+        debug!(
+            "Listed {} sessions for tenant {}",
+            sessions.len(),
+            tenant_id
+        );
         Ok(sessions)
     }
 
@@ -308,25 +757,31 @@ impl StorageBackend for R2Storage {
                 if service_error.is_not_found() {
                     Ok(false)
                 } else {
-                    Err(StorageError::Io(format!("R2 head_object error: {}", service_error)))
+                    Err(StorageError::Io(format!(
+                        "R2 head_object error: {}",
+                        service_error
+                    )))
                 }
             }
         }
     }
 
     // =========================================================================
-    // Index Operations (stored in KV for fast access)
+    // Index Operations (stored in R2 with ETag-based CAS)
     // =========================================================================
 
     #[instrument(skip(self), level = "debug")]
     async fn load_index(&self, tenant_id: &str) -> Result<Option<SessionIndex>, StorageError> {
-        let key = self.index_kv_key(tenant_id);
-        match self.kv_client.get(&key).await? {
-            Some(json) => {
-                let index: SessionIndex = serde_json::from_str(&json).map_err(|e| {
+        let key = self.index_key(tenant_id);
+        match self.get_object(&key).await? {
+            Some(data) => {
+                let index: SessionIndex = serde_json::from_slice(&data).map_err(|e| {
                     StorageError::Serialization(format!("Failed to parse index: {}", e))
                 })?;
-                debug!("Loaded index with {} sessions from KV", index.sessions.len());
+                debug!(
+                    "Loaded index with {} sessions from R2",
+                    index.sessions.len()
+                );
                 Ok(Some(index))
             }
             None => Ok(None),
@@ -339,17 +794,17 @@ impl StorageBackend for R2Storage {
         tenant_id: &str,
         index: &SessionIndex,
     ) -> Result<(), StorageError> {
-        let key = self.index_kv_key(tenant_id);
-        let json = serde_json::to_string(index).map_err(|e| {
+        let key = self.index_key(tenant_id);
+        let json = serde_json::to_vec(index).map_err(|e| {
             StorageError::Serialization(format!("Failed to serialize index: {}", e))
         })?;
-        self.kv_client.put(&key, &json).await?;
-        debug!("Saved index with {} sessions to KV", index.sessions.len());
+        self.put_object(&key, &json).await?;
+        debug!("Saved index with {} sessions to R2", index.sessions.len());
         Ok(())
     }
 
     // =========================================================================
-    // WAL Operations
+    // WAL Operations (ETag-based CAS for atomic append/truncate)
     // =========================================================================
 
     #[instrument(skip(self, entries), level = "debug", fields(entries_count = entries.len()))]
@@ -359,55 +814,7 @@ impl StorageBackend for R2Storage {
         session_id: &str,
         entries: &[WalEntry],
     ) -> Result<u64, StorageError> {
-        if entries.is_empty() {
-            return Ok(0);
-        }
-
-        let key = self.wal_key(tenant_id, session_id);
-
-        // .NET MappedWal format:
-        // - 8 bytes: little-endian i64 = data length (NOT including header)
-        // - JSONL data: each entry is a JSON line ending with \n
-
-        // Read existing WAL or create new
-        let mut wal_data = match self.get_object(&key).await? {
-            Some(data) if data.len() >= 8 => {
-                // Parse header to get data length
-                let data_len = i64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
-                let used_len = 8 + data_len;
-                let mut truncated = data;
-                truncated.truncate(used_len.min(truncated.len()));
-                truncated
-            }
-            _ => {
-                // New file - start with 8-byte header (data_len = 0)
-                vec![0u8; 8]
-            }
-        };
-
-        // Append new entries as JSONL
-        let mut last_position = 0u64;
-        for entry in entries {
-            wal_data.extend_from_slice(&entry.patch_json);
-            if !entry.patch_json.ends_with(b"\n") {
-                wal_data.push(b'\n');
-            }
-            last_position = entry.position;
-        }
-
-        // Update header with data length
-        let data_len = (wal_data.len() - 8) as i64;
-        wal_data[..8].copy_from_slice(&data_len.to_le_bytes());
-
-        // Write back to R2
-        self.put_object(&key, &wal_data).await?;
-
-        debug!(
-            "Appended {} WAL entries, last position: {}",
-            entries.len(),
-            last_position
-        );
-        Ok(last_position)
+        self.cas_append_wal(tenant_id, session_id, entries).await
     }
 
     #[instrument(skip(self), level = "debug")]
@@ -501,39 +908,8 @@ impl StorageBackend for R2Storage {
         keep_count: u64,
     ) -> Result<u64, StorageError> {
         let (entries, _) = self.read_wal(tenant_id, session_id, 0, None).await?;
-
-        let (to_keep, to_remove): (Vec<_>, Vec<_>) =
-            entries.into_iter().partition(|e| e.position <= keep_count);
-
-        let removed_count = to_remove.len() as u64;
-
-        if removed_count == 0 {
-            return Ok(0);
-        }
-
-        // Rewrite WAL with only kept entries
-        let key = self.wal_key(tenant_id, session_id);
-        let mut wal_data = vec![0u8; 8]; // Header placeholder
-
-        for entry in &to_keep {
-            wal_data.extend_from_slice(&entry.patch_json);
-            if !entry.patch_json.ends_with(b"\n") {
-                wal_data.push(b'\n');
-            }
-        }
-
-        // Update header
-        let data_len = (wal_data.len() - 8) as i64;
-        wal_data[..8].copy_from_slice(&data_len.to_le_bytes());
-
-        self.put_object(&key, &wal_data).await?;
-
-        debug!(
-            "Truncated WAL, removed {} entries, kept {}",
-            removed_count,
-            to_keep.len()
-        );
-        Ok(removed_count)
+        self.cas_truncate_wal(tenant_id, session_id, keep_count, entries)
+            .await
     }
 
     // =========================================================================

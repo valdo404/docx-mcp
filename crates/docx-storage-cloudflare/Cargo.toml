@@ -1,6 +1,6 @@
 [package]
 name = "docx-storage-cloudflare"
-description = "Cloudflare R2/KV storage backend for docx-mcp multi-tenant architecture"
+description = "Cloudflare R2 storage backend for docx-mcp multi-tenant architecture"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,9 +21,6 @@ tokio-stream.workspace = true
 # S3/R2 client (R2 is S3-compatible)
 aws-sdk-s3.workspace = true
 aws-config.workspace = true
-
-# HTTP client (for KV REST API)
-reqwest.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -63,9 +60,6 @@ base64 = "0.22"
 
 # Bytes
 bytes = "1"
-
-# URL encoding (for KV keys)
-urlencoding = "2"
 
 [build-dependencies]
 tonic-build = "0.13"
