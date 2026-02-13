@@ -29,7 +29,6 @@ public class ExternalSyncTests : IDisposable
 
         _sessionManager = TestHelpers.CreateSessionManager();
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
-        _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
     #region SyncExternalChanges Tests
@@ -43,7 +42,7 @@ public class ExternalSyncTests : IDisposable
 
         // Save the session back to disk to ensure file hash matches
         // (opening a session assigns IDs which changes the bytes)
-        _sessionManager.Save(session.Id, filePath);
+        File.WriteAllBytes(filePath, _sessionManager.Get(session.Id).ToBytes());
 
         // Act
         var result = _tracker.SyncExternalChanges(session.Id);

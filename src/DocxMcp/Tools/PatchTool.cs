@@ -23,6 +23,7 @@ public sealed class PatchTool
     /// </summary>
     public static string ApplyPatch(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON array of patch operations (max 10 per call).")] string patches,
@@ -156,6 +157,8 @@ public sealed class PatchTool
             {
                 var walPatches = $"[{string.Join(",", succeededPatches)}]";
                 sessions.AppendWal(doc_id, walPatches);
+                if (sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+                    externalChangeTracker?.UpdateSessionSnapshot(doc_id);
             }
             catch { /* persistence is best-effort */ }
         }

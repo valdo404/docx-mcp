@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using ModelContextProtocol.Server;
+using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -12,10 +13,14 @@ public sealed class HistoryTools
         "The undone operations remain in history and can be redone.")]
     public static string DocumentUndo(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Number of steps to undo (default 1).")] int steps = 1)
     {
         var result = sessions.Undo(doc_id, steps);
+        if (result.Steps > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
 
@@ -25,10 +30,14 @@ public sealed class HistoryTools
         "Only available after undo — new edits after undo discard redo history.")]
     public static string DocumentRedo(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Number of steps to redo (default 1).")] int steps = 1)
     {
         var result = sessions.Redo(doc_id, steps);
+        if (result.Steps > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
 
@@ -82,10 +91,14 @@ public sealed class HistoryTools
         "Position 0 is the baseline, position N is after N patches applied.")]
     public static string DocumentJumpTo(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("WAL position to jump to (0 = baseline).")] int position)
     {
         var result = sessions.JumpTo(doc_id, position);
+        if (result.Steps > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
 }

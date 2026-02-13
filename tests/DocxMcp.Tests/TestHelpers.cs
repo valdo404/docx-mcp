@@ -5,7 +5,8 @@ namespace DocxMcp.Tests;
 
 internal static class TestHelpers
 {
-    private static IStorageClient? _sharedStorage;
+    private static IHistoryStorage? _sharedHistoryStorage;
+    private static ISyncStorage? _sharedSyncStorage;
     private static readonly object _lock = new();
     private static string? _testStorageDir;
 
@@ -23,12 +24,12 @@ internal static class TestHelpers
     /// </summary>
     public static SessionManager CreateSessionManager()
     {
-        var storage = GetOrCreateStorageClient();
+        var historyStorage = GetOrCreateHistoryStorage();
 
         // Use unique tenant per test for isolation
         var tenantId = $"test-{Guid.NewGuid():N}";
 
-        return new SessionManager(storage, NullLogger<SessionManager>.Instance, tenantId);
+        return new SessionManager(historyStorage, NullLogger<SessionManager>.Instance, tenantId);
     }
 
     /// <summary>
@@ -38,50 +39,92 @@ internal static class TestHelpers
     /// </summary>
     public static SessionManager CreateSessionManager(string tenantId)
     {
-        var storage = GetOrCreateStorageClient();
-        return new SessionManager(storage, NullLogger<SessionManager>.Instance, tenantId);
+        var historyStorage = GetOrCreateHistoryStorage();
+        return new SessionManager(historyStorage, NullLogger<SessionManager>.Instance, tenantId);
     }
 
     /// <summary>
-    /// Get or create a shared storage client.
-    /// The Rust gRPC server is auto-launched via Unix socket if not running.
-    /// Reads configuration from environment variables (STORAGE_SERVER_PATH, etc.).
+    /// Create a SyncManager backed by the gRPC sync storage.
     /// </summary>
-    public static IStorageClient GetOrCreateStorageClient()
+    public static SyncManager CreateSyncManager()
     {
-        if (_sharedStorage != null)
-            return _sharedStorage;
+        var syncStorage = GetOrCreateSyncStorage();
+        return new SyncManager(syncStorage, NullLogger<SyncManager>.Instance);
+    }
+
+    /// <summary>
+    /// Get or create a shared history storage client.
+    /// The Rust gRPC server is auto-launched via Unix socket if not running.
+    /// </summary>
+    public static IHistoryStorage GetOrCreateHistoryStorage()
+    {
+        if (_sharedHistoryStorage != null)
+            return _sharedHistoryStorage;
 
         lock (_lock)
         {
-            if (_sharedStorage != null)
-                return _sharedStorage;
+            if (_sharedHistoryStorage != null)
+                return _sharedHistoryStorage;
 
-            // Use a temporary directory for test isolation
-            _testStorageDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(_testStorageDir);
-
-            var options = StorageClientOptions.FromEnvironment();
-            options.LocalStorageDir = _testStorageDir;
-
-            var launcher = new GrpcLauncher(options, NullLogger<GrpcLauncher>.Instance);
-            _sharedStorage = StorageClient.CreateAsync(options, launcher, NullLogger<StorageClient>.Instance)
-                .GetAwaiter().GetResult();
-
-            return _sharedStorage;
+            EnsureStorageInitialized();
+            return _sharedHistoryStorage!;
         }
     }
 
     /// <summary>
-    /// Cleanup: dispose the shared storage client and remove temp directory.
+    /// Get or create a shared sync storage client.
+    /// </summary>
+    public static ISyncStorage GetOrCreateSyncStorage()
+    {
+        if (_sharedSyncStorage != null)
+            return _sharedSyncStorage;
+
+        lock (_lock)
+        {
+            if (_sharedSyncStorage != null)
+                return _sharedSyncStorage;
+
+            EnsureStorageInitialized();
+            return _sharedSyncStorage!;
+        }
+    }
+
+    private static void EnsureStorageInitialized()
+    {
+        if (_sharedHistoryStorage != null && _sharedSyncStorage != null)
+            return;
+
+        // Use a temporary directory for test isolation
+        _testStorageDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_testStorageDir);
+
+        var options = StorageClientOptions.FromEnvironment();
+        options.LocalStorageDir = _testStorageDir;
+
+        var launcher = new GrpcLauncher(options, NullLogger<GrpcLauncher>.Instance);
+        var channel = HistoryStorageClient.CreateChannelAsync(options, launcher)
+            .GetAwaiter().GetResult();
+
+        _sharedHistoryStorage = new HistoryStorageClient(channel, NullLogger<HistoryStorageClient>.Instance);
+        _sharedSyncStorage = new SyncStorageClient(channel, NullLogger<SyncStorageClient>.Instance);
+    }
+
+    /// <summary>
+    /// Cleanup: dispose the shared storage clients and remove temp directory.
     /// Call this in test cleanup if needed.
     /// </summary>
     public static async Task DisposeStorageAsync()
     {
-        if (_sharedStorage != null)
+        if (_sharedHistoryStorage != null)
         {
-            await _sharedStorage.DisposeAsync();
-            _sharedStorage = null;
+            await _sharedHistoryStorage.DisposeAsync();
+            _sharedHistoryStorage = null;
+        }
+
+        if (_sharedSyncStorage != null)
+        {
+            await _sharedSyncStorage.DisposeAsync();
+            _sharedSyncStorage = null;
         }
 
         // Clean up temp directory

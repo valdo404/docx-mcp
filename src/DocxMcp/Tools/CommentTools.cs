@@ -7,6 +7,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
+using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -24,6 +25,8 @@ public sealed class CommentTools
         "  comment_add(doc_id, \"/body/paragraph[id='1A2B3C4D']\", \"Fix this phrase\", anchor_text=\"specific words\")")]
     public static string CommentAdd(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path to the target element (must resolve to exactly 1 element).")] string path,
         [Description("Comment text. Use \\n for multi-paragraph comments.")] string text,
@@ -89,6 +92,8 @@ public sealed class CommentTools
         var walEntry = new JsonArray();
         walEntry.Add((JsonNode)walObj);
         sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Comment {commentId} added by '{effectiveAuthor}' on {path}.";
     }
@@ -154,6 +159,8 @@ public sealed class CommentTools
         "When deleting by author, each comment generates its own WAL entry for deterministic replay.")]
     public static string CommentDelete(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("ID of the specific comment to delete.")] int? comment_id = null,
         [Description("Delete all comments by this author (case-insensitive).")] string? author = null)
@@ -179,6 +186,8 @@ public sealed class CommentTools
             var walEntry = new JsonArray();
             walEntry.Add((JsonNode)walObj);
             sessions.AppendWal(doc_id, walEntry.ToJsonString());
+            if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+                externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
             return "Deleted 1 comment(s).";
         }
@@ -204,6 +213,10 @@ public sealed class CommentTools
                 deletedCount++;
             }
         }
+
+        // Auto-save after all deletions
+        if (deletedCount > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Deleted {deletedCount} comment(s).";
     }

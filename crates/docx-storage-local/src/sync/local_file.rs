@@ -85,15 +85,27 @@ impl SyncBackend for LocalFileSyncBackend {
         // Load index, update entry, save index
         let mut index = self.storage.load_index(tenant_id).await?.unwrap_or_default();
 
+        let now = chrono::Utc::now();
         if let Some(entry) = index.get_mut(session_id) {
             entry.source_path = Some(source.uri.clone());
             entry.auto_sync = auto_sync;
-            entry.last_modified_at = chrono::Utc::now();
+            entry.last_modified_at = now;
         } else {
-            return Err(StorageError::Sync(format!(
-                "Session {} not found in index for tenant {}",
-                session_id, tenant_id
-            )));
+            // Create a minimal index entry if absent (dual-server mode:
+            // AddSessionToIndex may have gone to the remote history server)
+            use docx_storage_core::SessionIndexEntry;
+            let entry = SessionIndexEntry {
+                id: session_id.to_string(),
+                source_path: Some(source.uri.clone()),
+                auto_sync,
+                created_at: now,
+                last_modified_at: now,
+                docx_file: None,
+                wal_count: 0,
+                cursor_position: 0,
+                checkpoint_positions: vec![],
+            };
+            index.sessions.push(entry);
         }
 
         self.storage.save_index(tenant_id, &index).await?;

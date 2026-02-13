@@ -26,7 +26,6 @@ public class ExternalChangeTrackerTests : IDisposable
 
         _sessionManager = TestHelpers.CreateSessionManager();
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
-        _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
     [SkippableFact]
@@ -202,7 +201,7 @@ public class ExternalChangeTrackerTests : IDisposable
         ModifyDocx(filePath, "External change");
 
         // Simulate saving the document (which updates the snapshot)
-        _sessionManager.Save(session.Id, filePath);
+        File.WriteAllBytes(filePath, _sessionManager.Get(session.Id).ToBytes());
         _tracker.UpdateSessionSnapshot(session.Id);
 
         // Act - check for changes again

@@ -16,10 +16,12 @@ public class QueryRoundTripTests : IDisposable
 {
     private readonly DocxSession _session;
     private readonly SessionManager _sessions;
+    private readonly SyncManager _sync;
 
     public QueryRoundTripTests()
     {
         _sessions = TestHelpers.CreateSessionManager();
+        _sync = TestHelpers.CreateSyncManager();
         _session = _sessions.Create();
     }
 
@@ -168,7 +170,7 @@ public class QueryRoundTripTests : IDisposable
     public void RoundTripCreateThenQueryParagraph()
     {
         // Create a paragraph with runs via patch
-        var patchResult = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var patchResult = PatchTool.ApplyPatch(_sessions, _sync, null, _session.Id, """
         [{
             "op": "add",
             "path": "/body/children/0",
@@ -220,7 +222,7 @@ public class QueryRoundTripTests : IDisposable
     [Fact]
     public void RoundTripCreateThenQueryHeading()
     {
-        var patchResult = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var patchResult = PatchTool.ApplyPatch(_sessions, _sync, null, _session.Id, """
         [{
             "op": "add",
             "path": "/body/children/0",

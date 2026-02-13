@@ -15,22 +15,41 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-// Register gRPC storage client and session management
-builder.Services.AddSingleton<IStorageClient>(sp =>
+// Register gRPC storage clients and session management
+var storageOptions = StorageClientOptions.FromEnvironment();
+
+if (!string.IsNullOrEmpty(storageOptions.ServerUrl))
 {
-    var logger = sp.GetService<ILogger<StorageClient>>();
-    var options = StorageClientOptions.FromEnvironment();
-
-    if (!string.IsNullOrEmpty(options.ServerUrl))
+    // Dual mode — remote for history, local embedded for sync/watch
+    builder.Services.AddSingleton<IHistoryStorage>(sp =>
     {
-        // Remote gRPC mode — connect to external server
+        var logger = sp.GetService<ILogger<HistoryStorageClient>>();
         var launcherLogger = sp.GetService<ILogger<GrpcLauncher>>();
-        var launcher = new GrpcLauncher(options, launcherLogger);
-        return StorageClient.CreateAsync(options, launcher, logger).GetAwaiter().GetResult();
-    }
+        var launcher = new GrpcLauncher(storageOptions, launcherLogger);
+        return HistoryStorageClient.CreateAsync(storageOptions, launcher, logger).GetAwaiter().GetResult();
+    });
 
-    // Embedded mode — in-memory gRPC via statically linked Rust storage
-    NativeStorage.Init(options.GetEffectiveLocalStorageDir());
+    // Local embedded for sync/watch
+    NativeStorage.Init(storageOptions.GetEffectiveLocalStorageDir());
+    builder.Services.AddSingleton<ISyncStorage>(sp =>
+    {
+        var logger = sp.GetService<ILogger<SyncStorageClient>>();
+        var handler = new System.Net.Http.SocketsHttpHandler
+        {
+            ConnectCallback = (_, _) =>
+                new ValueTask<Stream>(new InMemoryPipeStream())
+        };
+        var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
+        {
+            HttpHandler = handler
+        });
+        return new SyncStorageClient(channel, logger);
+    });
+}
+else
+{
+    // Embedded mode — single in-memory channel for both history and sync
+    NativeStorage.Init(storageOptions.GetEffectiveLocalStorageDir());
 
     var handler = new System.Net.Http.SocketsHttpHandler
     {
@@ -43,8 +62,13 @@ builder.Services.AddSingleton<IStorageClient>(sp =>
         HttpHandler = handler
     });
 
-    return new StorageClient(channel, logger);
-});
+    builder.Services.AddSingleton<IHistoryStorage>(sp =>
+        new HistoryStorageClient(channel, sp.GetService<ILogger<HistoryStorageClient>>()));
+    builder.Services.AddSingleton<ISyncStorage>(sp =>
+        new SyncStorageClient(channel, sp.GetService<ILogger<SyncStorageClient>>()));
+}
+
+builder.Services.AddSingleton<SyncManager>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHostedService<SessionRestoreService>();
 

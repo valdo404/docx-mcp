@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
 using DocxMcp.Persistence;
 using Microsoft.Extensions.Logging;
@@ -12,20 +11,19 @@ namespace DocxMcp;
 
 /// <summary>
 /// Thread-safe manager for document sessions with gRPC-based persistence.
-/// Sessions are stored via a gRPC storage service with multi-tenant isolation.
+/// Sessions are stored via a gRPC history storage service with multi-tenant isolation.
 /// Supports undo/redo via WAL cursor + checkpoint replay.
+/// Sync and watch operations are handled separately by SyncManager.
 /// </summary>
 public sealed class SessionManager
 {
     private readonly ConcurrentDictionary<string, DocxSession> _sessions = new();
     private readonly ConcurrentDictionary<string, int> _cursors = new();
-    private readonly IStorageClient _storage;
+    private readonly IHistoryStorage _history;
     private readonly ILogger<SessionManager> _logger;
     private readonly string _tenantId;
     private readonly int _compactThreshold;
     private readonly int _checkpointInterval;
-    private readonly bool _autoSaveEnabled;
-    private ExternalChangeTracker? _externalChangeTracker;
 
     /// <summary>
     /// The tenant ID for this SessionManager instance.
@@ -37,9 +35,9 @@ public sealed class SessionManager
     /// Create a SessionManager with the specified tenant ID.
     /// If tenantId is null, uses the current tenant from TenantContextHelper.
     /// </summary>
-    public SessionManager(IStorageClient storage, ILogger<SessionManager> logger, string? tenantId = null)
+    public SessionManager(IHistoryStorage history, ILogger<SessionManager> logger, string? tenantId = null)
     {
-        _storage = storage;
+        _history = history;
         _logger = logger;
         _tenantId = tenantId ?? TenantContextHelper.CurrentTenantId;
 
@@ -48,17 +46,6 @@ public sealed class SessionManager
 
         var intervalEnv = Environment.GetEnvironmentVariable("DOCX_CHECKPOINT_INTERVAL");
         _checkpointInterval = int.TryParse(intervalEnv, out var ci) && ci > 0 ? ci : 10;
-
-        var autoSaveEnv = Environment.GetEnvironmentVariable("DOCX_AUTO_SAVE");
-        _autoSaveEnabled = autoSaveEnv is null || !string.Equals(autoSaveEnv, "false", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Set the external change tracker (setter injection to avoid circular dependency).
-    /// </summary>
-    public void SetExternalChangeTracker(ExternalChangeTracker tracker)
-    {
-        _externalChangeTracker = tracker;
     }
 
     public DocxSession Open(string path)
@@ -143,35 +130,13 @@ public sealed class SessionManager
         throw new KeyNotFoundException($"No session found for '{idOrPath}' and file does not exist.");
     }
 
-    public void Save(string id, string? path = null)
+    /// <summary>
+    /// Update the in-memory source path for a session (no sync operations).
+    /// </summary>
+    public void SetSourcePath(string id, string path)
     {
         var session = Get(id);
-
-        // If path is provided, update/register the source first
-        if (path is not null)
-        {
-            SetSource(id, path, autoSync: _autoSaveEnabled);
-        }
-
-        // Ensure source is registered
-        var status = _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
-        if (status is null)
-        {
-            throw new InvalidOperationException(
-                $"No save target registered for session '{id}'. Use document_set_source to set a path first.");
-        }
-
-        // Sync to source via gRPC
-        var data = session.ToBytes();
-        var (success, error, _) = _storage.SyncToSourceAsync(TenantId, id, data).GetAwaiter().GetResult();
-
-        if (!success)
-        {
-            throw new InvalidOperationException($"Failed to save session '{id}': {error}");
-        }
-
-        _externalChangeTracker?.UpdateSessionSnapshot(id);
-        _logger.LogDebug("Saved session {SessionId} to {Path}.", id, status.Uri);
+        session.SetSourcePath(Path.GetFullPath(path));
     }
 
     public void Close(string id)
@@ -179,25 +144,10 @@ public sealed class SessionManager
         if (_sessions.TryRemove(id, out var session))
         {
             _cursors.TryRemove(id, out _);
-
-            // Unregister from external change tracking
-            _externalChangeTracker?.UnregisterSession(id);
-
-            // Stop gRPC watch
-            try
-            {
-                _storage.StopWatchAsync(TenantId, id).GetAwaiter().GetResult();
-                _logger.LogDebug("Stopped external watch for session {SessionId}", id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Failed to stop external watch for session {SessionId} (may not have been watching)", id);
-            }
-
             session.Dispose();
 
-            _storage.DeleteSessionAsync(TenantId, id).GetAwaiter().GetResult();
-            _storage.RemoveSessionFromIndexAsync(TenantId, id).GetAwaiter().GetResult();
+            _history.DeleteSessionAsync(TenantId, id).GetAwaiter().GetResult();
+            _history.RemoveSessionFromIndexAsync(TenantId, id).GetAwaiter().GetResult();
         }
         else
         {
@@ -219,6 +169,7 @@ public sealed class SessionManager
     /// Append a patch to the WAL after a successful mutation.
     /// If the cursor is behind the WAL tip (after undo), truncates future entries first.
     /// Creates checkpoints at interval boundaries.
+    /// Does NOT auto-save — caller is responsible for orchestrating sync.
     /// </summary>
     public void AppendWal(string id, string patchesJson, string? description = null)
     {
@@ -236,7 +187,7 @@ public sealed class SessionManager
                 var checkpointsToRemove = GetCheckpointPositionsAboveAsync(id, (ulong)cursor).GetAwaiter().GetResult();
                 if (checkpointsToRemove.Count > 0)
                 {
-                    _storage.UpdateSessionInIndexAsync(TenantId, id,
+                    _history.UpdateSessionInIndexAsync(TenantId, id,
                         removeCheckpointPositions: checkpointsToRemove).GetAwaiter().GetResult();
                 }
             }
@@ -262,15 +213,13 @@ public sealed class SessionManager
             // Update index with new WAL position
             var newWalCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _storage.UpdateSessionInIndexAsync(TenantId, id,
+            _history.UpdateSessionInIndexAsync(TenantId, id,
                 modifiedAtUnix: now,
                 walPosition: (ulong)newWalCount).GetAwaiter().GetResult();
 
             // Check if compaction is needed
             if ((ulong)newWalCount >= (ulong)_compactThreshold)
                 Compact(id);
-
-            MaybeAutoSave(id);
         }
         catch (Exception ex)
         {
@@ -280,7 +229,7 @@ public sealed class SessionManager
 
     private async Task<List<ulong>> GetCheckpointPositionsAboveAsync(string id, ulong threshold)
     {
-        var (indexData, found) = await _storage.LoadIndexAsync(TenantId);
+        var (indexData, found) = await _history.LoadIndexAsync(TenantId);
         if (!found || indexData is null)
             return new List<ulong>();
 
@@ -294,7 +243,7 @@ public sealed class SessionManager
 
     private async Task<List<int>> GetCheckpointPositionsAsync(string id)
     {
-        var (indexData, found) = await _storage.LoadIndexAsync(TenantId);
+        var (indexData, found) = await _history.LoadIndexAsync(TenantId);
         if (!found || indexData is null)
             return new List<int>();
 
@@ -328,14 +277,14 @@ public sealed class SessionManager
             var session = Get(id);
             var bytes = session.ToBytes();
 
-            _storage.SaveSessionAsync(TenantId, id, bytes).GetAwaiter().GetResult();
-            _storage.TruncateWalAsync(TenantId, id, 0).GetAwaiter().GetResult();
+            _history.SaveSessionAsync(TenantId, id, bytes).GetAwaiter().GetResult();
+            _history.TruncateWalAsync(TenantId, id, 0).GetAwaiter().GetResult();
             _cursors[id] = 0;
 
             // Get all checkpoint positions to remove
             var checkpointsToRemove = GetCheckpointPositionsAboveAsync(id, 0).GetAwaiter().GetResult();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _storage.UpdateSessionInIndexAsync(TenantId, id,
+            _history.UpdateSessionInIndexAsync(TenantId, id,
                 modifiedAtUnix: now,
                 walPosition: 0,
                 removeCheckpointPositions: checkpointsToRemove).GetAwaiter().GetResult();
@@ -367,7 +316,7 @@ public sealed class SessionManager
                 var checkpointsToRemove = GetCheckpointPositionsAboveAsync(id, (ulong)cursor).GetAwaiter().GetResult();
                 if (checkpointsToRemove.Count > 0)
                 {
-                    _storage.UpdateSessionInIndexAsync(TenantId, id,
+                    _history.UpdateSessionInIndexAsync(TenantId, id,
                         removeCheckpointPositions: checkpointsToRemove).GetAwaiter().GetResult();
                 }
             }
@@ -380,7 +329,7 @@ public sealed class SessionManager
             // Create checkpoint using the stored DocumentSnapshot
             if (syncEntry.SyncMeta?.DocumentSnapshot is not null)
             {
-                _storage.SaveCheckpointAsync(TenantId, id, (ulong)newCursor, syncEntry.SyncMeta.DocumentSnapshot)
+                _history.SaveCheckpointAsync(TenantId, id, (ulong)newCursor, syncEntry.SyncMeta.DocumentSnapshot)
                     .GetAwaiter().GetResult();
             }
 
@@ -392,7 +341,7 @@ public sealed class SessionManager
             // Update index with new WAL position and checkpoint
             var newWalCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _storage.UpdateSessionInIndexAsync(TenantId, id,
+            _history.UpdateSessionInIndexAsync(TenantId, id,
                 modifiedAtUnix: now,
                 walPosition: (ulong)newWalCount,
                 addCheckpointPositions: new[] { (ulong)newCursor }).GetAwaiter().GetResult();
@@ -425,7 +374,6 @@ public sealed class SessionManager
 
         RebuildDocumentAtPositionAsync(id, newCursor).GetAwaiter().GetResult();
         PersistCursorPosition(id, newCursor);
-        MaybeAutoSave(id);
 
         return new UndoRedoResult
         {
@@ -479,7 +427,6 @@ public sealed class SessionManager
         }
 
         PersistCursorPosition(id, newCursor);
-        MaybeAutoSave(id);
 
         return new UndoRedoResult
         {
@@ -510,7 +457,6 @@ public sealed class SessionManager
 
         RebuildDocumentAtPositionAsync(id, position).GetAwaiter().GetResult();
         PersistCursorPosition(id, position);
-        MaybeAutoSave(id);
 
         var stepsFromOld = Math.Abs(position - oldCursor);
         return new UndoRedoResult
@@ -621,7 +567,7 @@ public sealed class SessionManager
     private async Task<int> RestoreSessionsAsync()
     {
         // Load the index to get list of sessions
-        var (indexData, found) = await _storage.LoadIndexAsync(TenantId);
+        var (indexData, found) = await _history.LoadIndexAsync(TenantId);
         if (!found || indexData is null)
         {
             _logger.LogInformation("No session index found for tenant {TenantId}; nothing to restore.", TenantId);
@@ -664,7 +610,6 @@ public sealed class SessionManager
                 }
                 catch (Exception walEx)
                 {
-                    // WAL may be in legacy binary format - log and continue without replay
                     _logger.LogDebug(walEx, "Could not read WAL for session {SessionId} (may be legacy format); skipping replay.", sessionId);
                     walReadFailed = true;
                 }
@@ -680,7 +625,7 @@ public sealed class SessionManager
                 int checkpointPosition = 0;
 
                 // First try latest checkpoint
-                var (ckptData, ckptPos, ckptFound) = await _storage.LoadCheckpointAsync(
+                var (ckptData, ckptPos, ckptFound) = await _history.LoadCheckpointAsync(
                     TenantId, sessionId, (ulong)replayCount);
 
                 if (ckptFound && ckptData is not null)
@@ -691,7 +636,7 @@ public sealed class SessionManager
                 else
                 {
                     // Fallback to baseline
-                    var (baselineData, baselineFound) = await _storage.LoadSessionAsync(TenantId, sessionId);
+                    var (baselineData, baselineFound) = await _history.LoadSessionAsync(TenantId, sessionId);
                     if (!baselineFound || baselineData is null)
                     {
                         _logger.LogWarning("Session {SessionId} has no baseline; skipping.", sessionId);
@@ -760,7 +705,7 @@ public sealed class SessionManager
 
     private async Task<int> GetWalEntryCountAsync(string sessionId)
     {
-        var (entries, _) = await _storage.ReadWalAsync(TenantId, sessionId);
+        var (entries, _) = await _history.ReadWalAsync(TenantId, sessionId);
         return entries.Count;
     }
 
@@ -771,7 +716,7 @@ public sealed class SessionManager
     {
         try
         {
-            _storage.UpdateSessionInIndexAsync(
+            _history.UpdateSessionInIndexAsync(
                 TenantId, sessionId,
                 cursorPosition: (ulong)cursorPosition
             ).GetAwaiter().GetResult();
@@ -789,7 +734,7 @@ public sealed class SessionManager
     {
         try
         {
-            var (indexData, found) = _storage.LoadIndexAsync(TenantId).GetAwaiter().GetResult();
+            var (indexData, found) = _history.LoadIndexAsync(TenantId).GetAwaiter().GetResult();
             if (found && indexData is not null)
             {
                 var json = System.Text.Encoding.UTF8.GetString(indexData);
@@ -813,7 +758,7 @@ public sealed class SessionManager
 
     private async Task<List<WalEntry>> ReadWalEntriesAsync(string sessionId)
     {
-        var (grpcEntries, _) = await _storage.ReadWalAsync(TenantId, sessionId);
+        var (grpcEntries, _) = await _history.ReadWalAsync(TenantId, sessionId);
         var entries = new List<WalEntry>();
 
         foreach (var grpcEntry in grpcEntries)
@@ -854,207 +799,33 @@ public sealed class SessionManager
             Timestamp: entry.Timestamp
         );
 
-        await _storage.AppendWalAsync(TenantId, sessionId, new[] { grpcEntry });
+        await _history.AppendWalAsync(TenantId, sessionId, new[] { grpcEntry });
     }
 
     private async Task TruncateWalAtAsync(string sessionId, int keepCount)
     {
-        await _storage.TruncateWalAsync(TenantId, sessionId, (ulong)keepCount);
-    }
-
-    // --- Source Management ---
-
-    /// <summary>
-    /// Set the source path for a session (for new documents or "Save As").
-    /// If the session already has a source registered, updates it.
-    /// </summary>
-    public void SetSource(string id, string path, bool? autoSync = null)
-    {
-        var session = Get(id);
-        var absolutePath = Path.GetFullPath(path);
-        var effectiveAutoSync = autoSync ?? _autoSaveEnabled;
-
-        try
-        {
-            // Check if source is already registered
-            var status = _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
-
-            if (status is not null)
-            {
-                // Update existing source
-                var (success, error) = _storage.UpdateSourceAsync(
-                    TenantId, id,
-                    SourceType.LocalFile, absolutePath, effectiveAutoSync
-                ).GetAwaiter().GetResult();
-
-                if (!success)
-                    throw new InvalidOperationException($"Failed to update source: {error}");
-
-                _logger.LogInformation("Updated source for session {SessionId}: {Path} (auto_sync={AutoSync})",
-                    id, absolutePath, effectiveAutoSync);
-            }
-            else
-            {
-                // Register new source
-                var (success, error) = _storage.RegisterSourceAsync(
-                    TenantId, id,
-                    SourceType.LocalFile, absolutePath, effectiveAutoSync
-                ).GetAwaiter().GetResult();
-
-                if (!success)
-                    throw new InvalidOperationException($"Failed to register source: {error}");
-
-                _logger.LogInformation("Registered source for session {SessionId}: {Path} (auto_sync={AutoSync})",
-                    id, absolutePath, effectiveAutoSync);
-            }
-
-            // Update in-memory session's source path
-            session.SetSourcePath(absolutePath);
-
-            // Start watching for external changes via gRPC ExternalWatchService
-            try
-            {
-                var (watchSuccess, watchId, watchError) = _storage.StartWatchAsync(
-                    TenantId, id,
-                    SourceType.LocalFile, absolutePath
-                ).GetAwaiter().GetResult();
-
-                if (watchSuccess)
-                {
-                    _logger.LogDebug("Started external watch for session {SessionId}: watchId={WatchId}", id, watchId);
-                }
-                else
-                {
-                    _logger.LogWarning("Failed to start external watch for session {SessionId}: {Error}", id, watchError);
-                }
-            }
-            catch (Exception watchEx)
-            {
-                // Don't fail the whole operation if watch fails - it's optional
-                _logger.LogWarning(watchEx, "Exception starting external watch for session {SessionId}", id);
-            }
-
-            // Register with ExternalChangeTracker for change detection (gRPC handles actual watching)
-            _externalChangeTracker?.RegisterSession(id);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to set source for session {SessionId}.", id);
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// Get the sync status for a session.
-    /// </summary>
-    public SyncStatusDto? GetSyncStatus(string id)
-    {
-        Get(id); // Validate session exists
-        return _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
+        await _history.TruncateWalAsync(TenantId, sessionId, (ulong)keepCount);
     }
 
     // --- Private helpers ---
-
-    private void MaybeAutoSave(string id)
-    {
-        if (!_autoSaveEnabled)
-            return;
-
-        try
-        {
-            var session = Get(id);
-
-            // Check if source is registered with SourceSyncService
-            var status = _storage.GetSyncStatusAsync(TenantId, id).GetAwaiter().GetResult();
-            if (status is null || !status.AutoSyncEnabled)
-            {
-                // No source registered or auto-sync disabled - nothing to do
-                return;
-            }
-
-            // Use gRPC SourceSyncService for auto-save
-            var data = session.ToBytes();
-            var (success, error, syncedAt) = _storage.SyncToSourceAsync(TenantId, id, data).GetAwaiter().GetResult();
-
-            if (!success)
-            {
-                _logger.LogWarning("Auto-save failed for session {SessionId}: {Error}", id, error);
-                return;
-            }
-
-            _externalChangeTracker?.UpdateSessionSnapshot(id);
-            _logger.LogDebug("Auto-saved session {SessionId} to {Path} (synced_at={SyncedAt}).",
-                id, status.Uri, syncedAt);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Auto-save failed for session {SessionId}.", id);
-        }
-    }
 
     private async Task PersistNewSessionAsync(DocxSession session)
     {
         try
         {
             var bytes = session.ToBytes();
-            await _storage.SaveSessionAsync(TenantId, session.Id, bytes);
+            await _history.SaveSessionAsync(TenantId, session.Id, bytes);
 
             _cursors[session.Id] = 0;
 
             var now = DateTime.UtcNow;
-            await _storage.AddSessionToIndexAsync(TenantId, session.Id,
+            await _history.AddSessionToIndexAsync(TenantId, session.Id,
                 new Grpc.SessionIndexEntryDto(
                     session.SourcePath,
                     now,
                     now,
                     0,
                     Array.Empty<ulong>()));
-
-            // Register source with SourceSyncService for auto-save via gRPC
-            if (session.SourcePath is not null)
-            {
-                var (success, error) = await _storage.RegisterSourceAsync(
-                    TenantId, session.Id,
-                    SourceType.LocalFile, session.SourcePath, autoSync: _autoSaveEnabled);
-
-                if (!success)
-                {
-                    _logger.LogWarning("Failed to register source for session {SessionId}: {Error}",
-                        session.Id, error);
-                }
-                else
-                {
-                    _logger.LogDebug("Registered source for session {SessionId}: {Path}",
-                        session.Id, session.SourcePath);
-                }
-
-                // Start watching for external changes via gRPC
-                try
-                {
-                    var (watchSuccess, watchId, watchError) = await _storage.StartWatchAsync(
-                        TenantId, session.Id,
-                        SourceType.LocalFile, session.SourcePath);
-
-                    if (watchSuccess)
-                    {
-                        _logger.LogDebug("Started external watch for session {SessionId}: watchId={WatchId}",
-                            session.Id, watchId);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Failed to start external watch for session {SessionId}: {Error}",
-                            session.Id, watchError);
-                    }
-                }
-                catch (Exception watchEx)
-                {
-                    _logger.LogWarning(watchEx, "Exception starting external watch for session {SessionId}",
-                        session.Id);
-                }
-
-                // Register with ExternalChangeTracker for change detection (gRPC handles actual watching)
-                _externalChangeTracker?.RegisterSession(session.Id);
-            }
         }
         catch (Exception ex)
         {
@@ -1067,7 +838,7 @@ public sealed class SessionManager
         var checkpointPositions = await GetCheckpointPositionsAsync(id);
 
         // Try to load checkpoint
-        var (ckptData, ckptPos, ckptFound) = await _storage.LoadCheckpointAsync(
+        var (ckptData, ckptPos, ckptFound) = await _history.LoadCheckpointAsync(
             TenantId, id, (ulong)targetPosition);
 
         byte[] baseBytes;
@@ -1081,7 +852,7 @@ public sealed class SessionManager
         else
         {
             // Fallback to baseline
-            var (baselineData, _) = await _storage.LoadSessionAsync(TenantId, id);
+            var (baselineData, _) = await _history.LoadSessionAsync(TenantId, id);
             baseBytes = baselineData ?? throw new InvalidOperationException($"No baseline found for session {id}");
             checkpointPosition = 0;
         }
@@ -1128,9 +899,9 @@ public sealed class SessionManager
             {
                 var session = Get(id);
                 var bytes = session.ToBytes();
-                await _storage.SaveCheckpointAsync(TenantId, id, (ulong)newCursor, bytes);
+                await _history.SaveCheckpointAsync(TenantId, id, (ulong)newCursor, bytes);
 
-                await _storage.UpdateSessionInIndexAsync(TenantId, id,
+                await _history.UpdateSessionInIndexAsync(TenantId, id,
                     addCheckpointPositions: new[] { (ulong)newCursor });
 
                 _logger.LogInformation("Created checkpoint at position {Position} for session {SessionId}.", newCursor, id);

@@ -93,6 +93,7 @@ public sealed class ElementTools
         "  4. For tables: add the table first, then add rows using the table's ID")]
     public static string AddElement(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path where to add the element (e.g., /body/children/0, /body/table[0]/row).")] string path,
@@ -101,7 +102,7 @@ public sealed class ElementTools
     {
         var patches = new[] { new AddPatchInput { Path = path, Value = JsonDocument.Parse(value).RootElement } };
         var patchJson = JsonSerializer.Serialize(patches, DocxJsonContext.Default.AddPatchInputArray);
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 
     [McpServerTool(Name = "replace_element"), Description(
@@ -143,6 +144,7 @@ public sealed class ElementTools
         "  3. For partial text changes, use replace_text instead (preserves formatting)")]
     public static string ReplaceElement(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path to the element to replace.")] string path,
@@ -151,7 +153,7 @@ public sealed class ElementTools
     {
         var patches = new[] { new ReplacePatchInput { Path = path, Value = JsonDocument.Parse(value).RootElement } };
         var patchJson = JsonSerializer.Serialize(patches, DocxJsonContext.Default.ReplacePatchInputArray);
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 
     [McpServerTool(Name = "remove_element"), Description(
@@ -197,13 +199,14 @@ public sealed class ElementTools
         "  4. Remember you can undo with undo_patch if needed")]
     public static string RemoveElement(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path to the element to remove.")] string path,
         [Description("If true, simulates the operation without applying changes.")] bool dry_run = false)
     {
         var patchJson = $$"""[{"op": "remove", "path": "{{EscapeJson(path)}}"}]""";
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 
     [McpServerTool(Name = "move_element"), Description(
@@ -252,6 +255,7 @@ public sealed class ElementTools
         "  4. For duplicating (not moving), use copy_element instead")]
     public static string MoveElement(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path to the element to move.")] string from,
@@ -259,7 +263,7 @@ public sealed class ElementTools
         [Description("If true, simulates the operation without applying changes.")] bool dry_run = false)
     {
         var patchJson = $$"""[{"op": "move", "from": "{{EscapeJson(from)}}", "path": "{{EscapeJson(to)}}"}]""";
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 
     [McpServerTool(Name = "copy_element"), Description(
@@ -310,6 +314,7 @@ public sealed class ElementTools
         "  4. For moving (not copying), use move_element instead")]
     public static string CopyElement(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path to the element to copy.")] string from,
@@ -317,7 +322,7 @@ public sealed class ElementTools
         [Description("If true, simulates the operation without applying changes.")] bool dry_run = false)
     {
         var patchJson = $$"""[{"op": "copy", "from": "{{EscapeJson(from)}}", "path": "{{EscapeJson(to)}}"}]""";
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 
     private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
@@ -380,6 +385,7 @@ public sealed class TextTools
         "  4. For structural changes (add/remove paragraphs), use other tools")]
     public static string ReplaceText(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path to element(s) to search in.")] string path,
@@ -390,7 +396,7 @@ public sealed class TextTools
     {
         var patches = new[] { new ReplaceTextPatchInput { Path = path, Find = find, Replace = replace, MaxCount = max_count } };
         var patchJson = JsonSerializer.Serialize(patches, DocxJsonContext.Default.ReplaceTextPatchInputArray);
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 }
 
@@ -434,6 +440,7 @@ public sealed class TableTools
         "  4. For removing specific cells only, use remove_element on individual cells")]
     public static string RemoveTableColumn(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Path to the table.")] string path,
@@ -441,6 +448,6 @@ public sealed class TableTools
         [Description("If true, simulates the operation without applying changes.")] bool dry_run = false)
     {
         var patchJson = $$"""[{"op": "remove_column", "path": "{{path.Replace("\\", "\\\\").Replace("\"", "\\\"")}}", "column": {{column}}}]""";
-        return PatchTool.ApplyPatch(sessions, externalChangeTracker, doc_id, patchJson, dry_run);
+        return PatchTool.ApplyPatch(sessions, sync, externalChangeTracker, doc_id, patchJson, dry_run);
     }
 }

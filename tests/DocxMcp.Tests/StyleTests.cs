@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.Helpers;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Tools;
 using Xunit;
 
@@ -11,6 +12,7 @@ namespace DocxMcp.Tests;
 public class StyleTests
 {
     private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
+    private SyncManager CreateSyncManager() => TestHelpers.CreateSyncManager();
 
     private static string AddParagraphPatch(string text) =>
         $"[{{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{{\"type\":\"paragraph\",\"text\":\"{text}\"}}}}]";
@@ -32,9 +34,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddStyledParagraphPatch("test", "{\"italic\":true}"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddStyledParagraphPatch("test", "{\"italic\":true}"));
 
-        var result = StyleTools.StyleElement(mgr, id, "{\"bold\":true}");
+        var result = StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"bold\":true}");
         Assert.Contains("Styled", result);
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
@@ -49,9 +51,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddStyledParagraphPatch("test", "{\"bold\":true}"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddStyledParagraphPatch("test", "{\"bold\":true}"));
 
-        StyleTools.StyleElement(mgr, id, "{\"bold\":false}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"bold\":false}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.Null(run.RunProperties?.Bold);
@@ -64,9 +66,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleElement(mgr, id, "{\"color\":\"FF0000\"}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"color\":\"FF0000\"}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.Equal("FF0000", run.RunProperties?.Color?.Val?.Value);
@@ -79,9 +81,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddStyledParagraphPatch("test", "{\"color\":\"00FF00\"}"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddStyledParagraphPatch("test", "{\"color\":\"00FF00\"}"));
 
-        StyleTools.StyleElement(mgr, id, "{\"color\":null}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"color\":null}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.Null(run.RunProperties?.Color);
@@ -94,9 +96,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleElement(mgr, id, "{\"font_size\":14,\"font_name\":\"Arial\"}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"font_size\":14,\"font_name\":\"Arial\"}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.Equal("28", run.RunProperties?.FontSize?.Val?.Value); // 14pt * 2 = 28 half-points
@@ -110,9 +112,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleElement(mgr, id, "{\"highlight\":\"yellow\"}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"highlight\":\"yellow\"}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.Equal(HighlightColorValues.Yellow, run.RunProperties?.Highlight?.Val?.Value);
@@ -125,9 +127,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleElement(mgr, id, "{\"vertical_align\":\"superscript\"}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"vertical_align\":\"superscript\"}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.Equal(VerticalPositionValues.Superscript, run.RunProperties?.VerticalTextAlignment?.Val?.Value);
@@ -140,9 +142,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleElement(mgr, id, "{\"underline\":true,\"strike\":true}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"underline\":true,\"strike\":true}");
 
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.NotNull(run.RunProperties?.Underline);
@@ -161,12 +163,12 @@ public class StyleTests
         var id = session.Id;
 
         // Add paragraph, then set indent via patch
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
-        PatchTool.ApplyPatch(mgr, null, id,
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id,
             "[{\"op\":\"replace\",\"path\":\"/body/paragraph[0]/style\",\"value\":{\"indent_left\":720}}]");
 
         // Now merge alignment — indent should be preserved
-        StyleTools.StyleParagraph(mgr, id, "{\"alignment\":\"center\"}", "/body/paragraph[0]");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"alignment\":\"center\"}", "/body/paragraph[0]");
 
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal(JustificationValues.Center, para.ParagraphProperties?.Justification?.Val?.Value);
@@ -180,16 +182,16 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
         // Set spacing_before
-        StyleTools.StyleParagraph(mgr, id, "{\"spacing_before\":200}", "/body/paragraph[0]");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"spacing_before\":200}", "/body/paragraph[0]");
 
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal("200", para.ParagraphProperties?.SpacingBetweenLines?.Before?.Value);
 
         // Now set spacing_after — spacing_before should be preserved
-        StyleTools.StyleParagraph(mgr, id, "{\"spacing_after\":100}", "/body/paragraph[0]");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"spacing_after\":100}", "/body/paragraph[0]");
 
         para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal("200", para.ParagraphProperties?.SpacingBetweenLines?.Before?.Value);
@@ -203,9 +205,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleParagraph(mgr, id, "{\"shading\":\"FFFF00\"}");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"shading\":\"FFFF00\"}");
 
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal("FFFF00", para.ParagraphProperties?.Shading?.Fill?.Value);
@@ -218,9 +220,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleParagraph(mgr, id, "{\"style\":\"Heading1\"}");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"style\":\"Heading1\"}");
 
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal("Heading1", para.ParagraphProperties?.ParagraphStyleId?.Val?.Value);
@@ -233,10 +235,10 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleParagraph(mgr, id, "{\"indent_left\":720}", "/body/paragraph[0]");
-        StyleTools.StyleParagraph(mgr, id, "{\"indent_first_line\":360}", "/body/paragraph[0]");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"indent_left\":720}", "/body/paragraph[0]");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"indent_first_line\":360}", "/body/paragraph[0]");
 
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal("720", para.ParagraphProperties?.Indentation?.Left?.Value);
@@ -254,9 +256,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, style: "{\"border_style\":\"double\"}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, style: "{\"border_style\":\"double\"}");
 
         var table = mgr.Get(id).GetBody().Descendants<Table>().First();
         var borders = table.GetFirstChild<TableProperties>()?.TableBorders;
@@ -271,9 +273,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, cell_style: "{\"shading\":\"F0F0F0\"}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, cell_style: "{\"shading\":\"F0F0F0\"}");
 
         var cells = mgr.Get(id).GetBody().Descendants<TableCell>().ToList();
         Assert.True(cells.Count >= 4); // headers + data
@@ -290,9 +292,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, row_style: "{\"height\":400}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, row_style: "{\"height\":400}");
 
         var rows = mgr.Get(id).GetBody().Descendants<TableRow>().ToList();
         foreach (var row in rows)
@@ -310,9 +312,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, row_style: "{\"is_header\":true}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, row_style: "{\"is_header\":true}");
 
         var rows = mgr.Get(id).GetBody().Descendants<TableRow>().ToList();
         foreach (var row in rows)
@@ -328,9 +330,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, style: "{\"table_alignment\":\"center\"}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, style: "{\"table_alignment\":\"center\"}");
 
         var table = mgr.Get(id).GetBody().Descendants<Table>().First();
         var props = table.GetFirstChild<TableProperties>();
@@ -344,9 +346,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, cell_style: "{\"vertical_align\":\"center\"}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, cell_style: "{\"vertical_align\":\"center\"}");
 
         var cells = mgr.Get(id).GetBody().Descendants<TableCell>().ToList();
         foreach (var cell in cells)
@@ -367,10 +369,10 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("body text"));
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("body text"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleElement(mgr, id, "{\"bold\":true}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"bold\":true}");
 
         var runs = mgr.Get(id).GetBody().Descendants<Run>().ToList();
         Assert.True(runs.Count > 1);
@@ -387,10 +389,10 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("body text"));
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("body text"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleParagraph(mgr, id, "{\"alignment\":\"center\"}");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"alignment\":\"center\"}");
 
         var paragraphs = mgr.Get(id).GetBody().Descendants<Paragraph>().ToList();
         Assert.True(paragraphs.Count > 1);
@@ -411,10 +413,10 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("first"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("second"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("first"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("second"));
 
-        StyleTools.StyleElement(mgr, id, "{\"italic\":true}", "/body/paragraph[*]");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"italic\":true}", "/body/paragraph[*]");
 
         var runs = mgr.Get(id).GetBody().Descendants<Run>().ToList();
         foreach (var run in runs)
@@ -434,10 +436,10 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
         // Style it bold
-        StyleTools.StyleElement(mgr, id, "{\"bold\":true}");
+        StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"bold\":true}");
         var run = mgr.Get(id).GetBody().Descendants<Run>().First();
         Assert.NotNull(run.RunProperties?.Bold);
 
@@ -459,9 +461,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        StyleTools.StyleParagraph(mgr, id, "{\"alignment\":\"right\"}");
+        StyleTools.StyleParagraph(mgr, CreateSyncManager(), null, id, "{\"alignment\":\"right\"}");
         var para = mgr.Get(id).GetBody().Descendants<Paragraph>().First();
         Assert.Equal(JustificationValues.Right, para.ParagraphProperties?.Justification?.Val?.Value);
 
@@ -481,9 +483,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddTablePatch());
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddTablePatch());
 
-        StyleTools.StyleTable(mgr, id, style: "{\"border_style\":\"double\"}");
+        StyleTools.StyleTable(mgr, CreateSyncManager(), null, id, style: "{\"border_style\":\"double\"}");
         var table = mgr.Get(id).GetBody().Descendants<Table>().First();
         Assert.Equal(BorderValues.Double, table.GetFirstChild<TableProperties>()?.TableBorders?.TopBorder?.Val?.Value);
 
@@ -510,8 +512,8 @@ public class StyleTests
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("persist"));
-        StyleTools.StyleElement(mgr1, id, "{\"bold\":true,\"color\":\"00FF00\"}");
+        PatchTool.ApplyPatch(mgr1, CreateSyncManager(), null, id, AddParagraphPatch("persist"));
+        StyleTools.StyleElement(mgr1, CreateSyncManager(), null, id, "{\"bold\":true,\"color\":\"00FF00\"}");
 
         // Simulate restart: create new manager with same tenant, restore
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
@@ -530,8 +532,8 @@ public class StyleTests
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("persist"));
-        StyleTools.StyleParagraph(mgr1, id, "{\"alignment\":\"center\"}");
+        PatchTool.ApplyPatch(mgr1, CreateSyncManager(), null, id, AddParagraphPatch("persist"));
+        StyleTools.StyleParagraph(mgr1, CreateSyncManager(), null, id, "{\"alignment\":\"center\"}");
 
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         mgr2.RestoreSessions();
@@ -548,8 +550,8 @@ public class StyleTests
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, null, id, AddTablePatch());
-        StyleTools.StyleTable(mgr1, id, cell_style: "{\"shading\":\"AABBCC\"}");
+        PatchTool.ApplyPatch(mgr1, CreateSyncManager(), null, id, AddTablePatch());
+        StyleTools.StyleTable(mgr1, CreateSyncManager(), null, id, cell_style: "{\"shading\":\"AABBCC\"}");
 
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
         mgr2.RestoreSessions();
@@ -569,7 +571,7 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        var result = StyleTools.StyleElement(mgr, id, "not json");
+        var result = StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "not json");
         Assert.StartsWith("Error:", result);
     }
 
@@ -580,9 +582,9 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), null, id, AddParagraphPatch("test"));
 
-        var result = StyleTools.StyleElement(mgr, id, "{\"bold\":true}", "/body/paragraph[99]");
+        var result = StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "{\"bold\":true}", "/body/paragraph[99]");
         Assert.StartsWith("Error:", result);
     }
 
@@ -593,7 +595,7 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        var result = StyleTools.StyleTable(mgr, id);
+        var result = StyleTools.StyleTable(mgr, CreateSyncManager(), null, id);
         Assert.StartsWith("Error:", result);
     }
 
@@ -604,7 +606,7 @@ public class StyleTests
         var session = mgr.Create();
         var id = session.Id;
 
-        var result = StyleTools.StyleElement(mgr, id, "42");
+        var result = StyleTools.StyleElement(mgr, CreateSyncManager(), null, id, "42");
         Assert.Contains("must be a JSON object", result);
     }
 }

@@ -17,6 +17,7 @@ public sealed class DocumentTools
         "For existing files, external changes will be monitored automatically.")]
     public static string DocumentOpen(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Absolute path to the .docx file to open. Omit to create a new empty document.")]
         string? path = null)
@@ -25,10 +26,11 @@ public sealed class DocumentTools
             ? sessions.Open(path)
             : sessions.Create();
 
-        // Register for change tracking if we have a source file (gRPC handles actual watching)
-        if (session.SourcePath is not null && externalChangeTracker is not null)
+        // Register source + watch + tracker if we have a source file
+        if (session.SourcePath is not null)
         {
-            externalChangeTracker.RegisterSession(session.Id);
+            sync.RegisterAndWatch(sessions.TenantId, session.Id, session.SourcePath, autoSync: true);
+            externalChangeTracker?.RegisterSession(session.Id);
         }
 
         var source = session.SourcePath is not null
@@ -44,6 +46,8 @@ public sealed class DocumentTools
         "If auto_sync is true (default), the document will be auto-saved after each edit.")]
     public static string DocumentSetSource(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")]
         string doc_id,
         [Description("Absolute path where the document should be saved.")]
@@ -51,7 +55,9 @@ public sealed class DocumentTools
         [Description("Enable auto-save after each edit. Default true.")]
         bool auto_sync = true)
     {
-        sessions.SetSource(doc_id, path, auto_sync);
+        sync.SetSource(sessions.TenantId, doc_id, path, auto_sync);
+        sessions.SetSourcePath(doc_id, path);
+        externalChangeTracker?.RegisterSession(doc_id);
         return $"Source set to '{path}' for session '{doc_id}'. Auto-sync: {(auto_sync ? "enabled" : "disabled")}.";
     }
 
@@ -62,18 +68,24 @@ public sealed class DocumentTools
         "Updates the external change tracker snapshot after saving.")]
     public static string DocumentSave(
         SessionManager sessions,
+        SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document to save.")]
         string doc_id,
         [Description("Path to save the file to. If omitted, saves to the original path.")]
         string? output_path = null)
     {
-        sessions.Save(doc_id, output_path);
-
-        // Update the external change tracker's snapshot after save
-        externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        // If output_path is provided, update/register the source first
+        if (output_path is not null)
+        {
+            sync.SetSource(sessions.TenantId, doc_id, output_path, autoSync: true);
+            sessions.SetSourcePath(doc_id, output_path);
+        }
 
         var session = sessions.Get(doc_id);
+        sync.Save(sessions.TenantId, doc_id, session.ToBytes());
+        externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+
         var target = output_path ?? session.SourcePath ?? "(unknown)";
         return $"Document saved to '{target}'.";
     }
@@ -119,11 +131,13 @@ public sealed class DocumentTools
     /// </summary>
     public static string DocumentClose(
         SessionManager sessions,
+        SyncManager? sync,
         ExternalChangeTracker? externalChangeTracker,
         string doc_id)
     {
         // Unregister from change tracking before closing
         externalChangeTracker?.UnregisterSession(doc_id);
+        sync?.StopWatch(sessions.TenantId, doc_id);
 
         sessions.Close(doc_id);
         return $"Document session '{doc_id}' closed.";

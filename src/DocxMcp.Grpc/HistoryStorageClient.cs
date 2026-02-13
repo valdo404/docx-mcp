@@ -6,14 +6,14 @@ using Microsoft.Extensions.Logging;
 namespace DocxMcp.Grpc;
 
 /// <summary>
-/// High-level client wrapper for the gRPC storage service.
-/// Handles streaming for large files and provides a simple API.
+/// gRPC client for history storage operations (StorageService).
+/// Handles sessions, index, WAL, checkpoints, and health check.
 /// </summary>
-public sealed class StorageClient : IStorageClient
+public sealed class HistoryStorageClient : IHistoryStorage
 {
     private readonly GrpcChannel _channel;
     private readonly StorageService.StorageServiceClient _client;
-    private readonly ILogger<StorageClient>? _logger;
+    private readonly ILogger<HistoryStorageClient>? _logger;
     private readonly int _chunkSize;
 
     /// <summary>
@@ -21,7 +21,7 @@ public sealed class StorageClient : IStorageClient
     /// </summary>
     public const int DefaultChunkSize = 256 * 1024;
 
-    public StorageClient(GrpcChannel channel, ILogger<StorageClient>? logger = null, int chunkSize = DefaultChunkSize)
+    public HistoryStorageClient(GrpcChannel channel, ILogger<HistoryStorageClient>? logger = null, int chunkSize = DefaultChunkSize)
     {
         _channel = channel;
         _client = new StorageService.StorageServiceClient(channel);
@@ -30,12 +30,21 @@ public sealed class StorageClient : IStorageClient
     }
 
     /// <summary>
-    /// Create a StorageClient from options.
+    /// Create a HistoryStorageClient from options.
     /// </summary>
-    public static async Task<StorageClient> CreateAsync(
+    public static async Task<HistoryStorageClient> CreateAsync(
         StorageClientOptions options,
         GrpcLauncher? launcher = null,
-        ILogger<StorageClient>? logger = null,
+        ILogger<HistoryStorageClient>? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        var channel = await CreateChannelAsync(options, launcher, cancellationToken);
+        return new HistoryStorageClient(channel, logger);
+    }
+
+    internal static async Task<GrpcChannel> CreateChannelAsync(
+        StorageClientOptions options,
+        GrpcLauncher? launcher = null,
         CancellationToken cancellationToken = default)
     {
         string address;
@@ -54,30 +63,22 @@ public sealed class StorageClient : IStorageClient
                 "Either ServerUrl must be configured or a GrpcLauncher must be provided for auto-launch.");
         }
 
-        GrpcChannel channel;
-
         if (address.StartsWith("unix://"))
         {
-            // Unix Domain Socket requires a custom SocketsHttpHandler
             var socketPath = address.Substring("unix://".Length);
-
             var connectionFactory = new UnixDomainSocketConnectionFactory(socketPath);
             var socketsHandler = new SocketsHttpHandler
             {
                 ConnectCallback = connectionFactory.ConnectAsync
             };
 
-            channel = GrpcChannel.ForAddress("http://localhost", new GrpcChannelOptions
+            return GrpcChannel.ForAddress("http://localhost", new GrpcChannelOptions
             {
                 HttpHandler = socketsHandler
             });
         }
-        else
-        {
-            channel = GrpcChannel.ForAddress(address);
-        }
 
-        return new StorageClient(channel, logger);
+        return GrpcChannel.ForAddress(address);
     }
 
     /// <summary>
@@ -105,13 +106,8 @@ public sealed class StorageClient : IStorageClient
     // Session Operations
     // =========================================================================
 
-    /// <summary>
-    /// Load a session's DOCX bytes (streaming download).
-    /// </summary>
     public async Task<(byte[]? Data, bool Found)> LoadSessionAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
+        string tenantId, string sessionId, CancellationToken cancellationToken = default)
     {
         var request = new LoadSessionRequest
         {
@@ -131,11 +127,8 @@ public sealed class StorageClient : IStorageClient
             {
                 found = chunk.Found;
                 isFirst = false;
-
-                if (!found)
-                    return (null, false);
+                if (!found) return (null, false);
             }
-
             data.AddRange(chunk.Data);
         }
 
@@ -145,14 +138,8 @@ public sealed class StorageClient : IStorageClient
         return (data.ToArray(), found);
     }
 
-    /// <summary>
-    /// Save a session's DOCX bytes (streaming upload).
-    /// </summary>
     public async Task SaveSessionAsync(
-        string tenantId,
-        string sessionId,
-        byte[] data,
-        CancellationToken cancellationToken = default)
+        string tenantId, string sessionId, byte[] data, CancellationToken cancellationToken = default)
     {
         using var call = _client.SaveSession(cancellationToken: cancellationToken);
 
@@ -181,20 +168,14 @@ public sealed class StorageClient : IStorageClient
         var response = await call;
 
         if (!response.Success)
-        {
             throw new InvalidOperationException($"Failed to save session {sessionId}");
-        }
 
         _logger?.LogDebug("Saved session {SessionId} for tenant {TenantId} ({Bytes} bytes)",
             sessionId, tenantId, data.Length);
     }
 
-    /// <summary>
-    /// List all sessions for a tenant.
-    /// </summary>
     public async Task<IReadOnlyList<SessionInfoDto>> ListSessionsAsync(
-        string tenantId,
-        CancellationToken cancellationToken = default)
+        string tenantId, CancellationToken cancellationToken = default)
     {
         var request = new ListSessionsRequest
         {
@@ -211,13 +192,8 @@ public sealed class StorageClient : IStorageClient
         )).ToList();
     }
 
-    /// <summary>
-    /// Delete a session.
-    /// </summary>
     public async Task<bool> DeleteSessionAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
+        string tenantId, string sessionId, CancellationToken cancellationToken = default)
     {
         var request = new DeleteSessionRequest
         {
@@ -229,13 +205,8 @@ public sealed class StorageClient : IStorageClient
         return response.Existed;
     }
 
-    /// <summary>
-    /// Check if a session exists.
-    /// </summary>
     public async Task<bool> SessionExistsAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
+        string tenantId, string sessionId, CancellationToken cancellationToken = default)
     {
         var request = new SessionExistsRequest
         {
@@ -248,15 +219,11 @@ public sealed class StorageClient : IStorageClient
     }
 
     // =========================================================================
-    // Index Operations (Atomic - server handles locking internally)
+    // Index Operations
     // =========================================================================
 
-    /// <summary>
-    /// Load the session index.
-    /// </summary>
     public async Task<(byte[]? Data, bool Found)> LoadIndexAsync(
-        string tenantId,
-        CancellationToken cancellationToken = default)
+        string tenantId, CancellationToken cancellationToken = default)
     {
         var request = new LoadIndexRequest
         {
@@ -271,13 +238,8 @@ public sealed class StorageClient : IStorageClient
         return (response.IndexJson.ToByteArray(), true);
     }
 
-    /// <summary>
-    /// Atomically add a session to the index.
-    /// </summary>
     public async Task<(bool Success, bool AlreadyExists)> AddSessionToIndexAsync(
-        string tenantId,
-        string sessionId,
-        SessionIndexEntryDto entry,
+        string tenantId, string sessionId, SessionIndexEntryDto entry,
         CancellationToken cancellationToken = default)
     {
         var request = new AddSessionToIndexRequest
@@ -298,14 +260,9 @@ public sealed class StorageClient : IStorageClient
         return (response.Success, response.AlreadyExists);
     }
 
-    /// <summary>
-    /// Atomically update a session in the index.
-    /// </summary>
     public async Task<(bool Success, bool NotFound)> UpdateSessionInIndexAsync(
-        string tenantId,
-        string sessionId,
-        long? modifiedAtUnix = null,
-        ulong? walPosition = null,
+        string tenantId, string sessionId,
+        long? modifiedAtUnix = null, ulong? walPosition = null,
         IEnumerable<ulong>? addCheckpointPositions = null,
         IEnumerable<ulong>? removeCheckpointPositions = null,
         ulong? cursorPosition = null,
@@ -317,32 +274,18 @@ public sealed class StorageClient : IStorageClient
             SessionId = sessionId
         };
 
-        if (modifiedAtUnix.HasValue)
-            request.ModifiedAtUnix = modifiedAtUnix.Value;
-
-        if (walPosition.HasValue)
-            request.WalPosition = walPosition.Value;
-
-        if (addCheckpointPositions is not null)
-            request.AddCheckpointPositions.AddRange(addCheckpointPositions);
-
-        if (removeCheckpointPositions is not null)
-            request.RemoveCheckpointPositions.AddRange(removeCheckpointPositions);
-
-        if (cursorPosition.HasValue)
-            request.CursorPosition = cursorPosition.Value;
+        if (modifiedAtUnix.HasValue) request.ModifiedAtUnix = modifiedAtUnix.Value;
+        if (walPosition.HasValue) request.WalPosition = walPosition.Value;
+        if (addCheckpointPositions is not null) request.AddCheckpointPositions.AddRange(addCheckpointPositions);
+        if (removeCheckpointPositions is not null) request.RemoveCheckpointPositions.AddRange(removeCheckpointPositions);
+        if (cursorPosition.HasValue) request.CursorPosition = cursorPosition.Value;
 
         var response = await _client.UpdateSessionInIndexAsync(request, cancellationToken: cancellationToken);
         return (response.Success, response.NotFound);
     }
 
-    /// <summary>
-    /// Atomically remove a session from the index.
-    /// </summary>
     public async Task<(bool Success, bool Existed)> RemoveSessionFromIndexAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
+        string tenantId, string sessionId, CancellationToken cancellationToken = default)
     {
         var request = new RemoveSessionFromIndexRequest
         {
@@ -358,13 +301,8 @@ public sealed class StorageClient : IStorageClient
     // WAL Operations
     // =========================================================================
 
-    /// <summary>
-    /// Append entries to the WAL.
-    /// </summary>
     public async Task<ulong> AppendWalAsync(
-        string tenantId,
-        string sessionId,
-        IEnumerable<WalEntryDto> entries,
+        string tenantId, string sessionId, IEnumerable<WalEntryDto> entries,
         CancellationToken cancellationToken = default)
     {
         var request = new AppendWalRequest
@@ -388,21 +326,13 @@ public sealed class StorageClient : IStorageClient
         var response = await _client.AppendWalAsync(request, cancellationToken: cancellationToken);
 
         if (!response.Success)
-        {
             throw new InvalidOperationException($"Failed to append WAL for session {sessionId}");
-        }
 
         return response.NewPosition;
     }
 
-    /// <summary>
-    /// Read WAL entries.
-    /// </summary>
     public async Task<(IReadOnlyList<WalEntryDto> Entries, bool HasMore)> ReadWalAsync(
-        string tenantId,
-        string sessionId,
-        ulong fromPosition = 0,
-        ulong limit = 0,
+        string tenantId, string sessionId, ulong fromPosition = 0, ulong limit = 0,
         CancellationToken cancellationToken = default)
     {
         var request = new ReadWalRequest
@@ -416,9 +346,7 @@ public sealed class StorageClient : IStorageClient
         var response = await _client.ReadWalAsync(request, cancellationToken: cancellationToken);
 
         var entries = response.Entries.Select(e => new WalEntryDto(
-            e.Position,
-            e.Operation,
-            e.Path,
+            e.Position, e.Operation, e.Path,
             e.PatchJson.ToByteArray(),
             DateTimeOffset.FromUnixTimeSeconds(e.TimestampUnix).UtcDateTime
         )).ToList();
@@ -426,13 +354,8 @@ public sealed class StorageClient : IStorageClient
         return (entries, response.HasMore);
     }
 
-    /// <summary>
-    /// Truncate WAL entries.
-    /// </summary>
     public async Task<ulong> TruncateWalAsync(
-        string tenantId,
-        string sessionId,
-        ulong keepFromPosition,
+        string tenantId, string sessionId, ulong keepFromPosition,
         CancellationToken cancellationToken = default)
     {
         var request = new TruncateWalRequest
@@ -450,14 +373,8 @@ public sealed class StorageClient : IStorageClient
     // Checkpoint Operations
     // =========================================================================
 
-    /// <summary>
-    /// Save a checkpoint (streaming upload).
-    /// </summary>
     public async Task SaveCheckpointAsync(
-        string tenantId,
-        string sessionId,
-        ulong position,
-        byte[] data,
+        string tenantId, string sessionId, ulong position, byte[] data,
         CancellationToken cancellationToken = default)
     {
         using var call = _client.SaveCheckpoint(cancellationToken: cancellationToken);
@@ -488,21 +405,14 @@ public sealed class StorageClient : IStorageClient
         var response = await call;
 
         if (!response.Success)
-        {
             throw new InvalidOperationException($"Failed to save checkpoint at position {position}");
-        }
 
         _logger?.LogDebug("Saved checkpoint at position {Position} for session {SessionId} ({Bytes} bytes)",
             position, sessionId, data.Length);
     }
 
-    /// <summary>
-    /// Load a checkpoint (streaming download).
-    /// </summary>
     public async Task<(byte[]? Data, ulong Position, bool Found)> LoadCheckpointAsync(
-        string tenantId,
-        string sessionId,
-        ulong position = 0,
+        string tenantId, string sessionId, ulong position = 0,
         CancellationToken cancellationToken = default)
     {
         var request = new LoadCheckpointRequest
@@ -526,11 +436,8 @@ public sealed class StorageClient : IStorageClient
                 found = chunk.Found;
                 actualPosition = chunk.Position;
                 isFirst = false;
-
-                if (!found)
-                    return (null, 0, false);
+                if (!found) return (null, 0, false);
             }
-
             data.AddRange(chunk.Data);
         }
 
@@ -540,13 +447,8 @@ public sealed class StorageClient : IStorageClient
         return (data.ToArray(), actualPosition, found);
     }
 
-    /// <summary>
-    /// List checkpoints for a session.
-    /// </summary>
     public async Task<IReadOnlyList<CheckpointInfoDto>> ListCheckpointsAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
+        string tenantId, string sessionId, CancellationToken cancellationToken = default)
     {
         var request = new ListCheckpointsRequest
         {
@@ -556,9 +458,7 @@ public sealed class StorageClient : IStorageClient
 
         var response = await _client.ListCheckpointsAsync(request, cancellationToken: cancellationToken);
         return response.Checkpoints.Select(c => new CheckpointInfoDto(
-            c.Position,
-            DateTimeOffset.FromUnixTimeSeconds(c.CreatedAtUnix).UtcDateTime,
-            c.SizeBytes
+            c.Position, DateTimeOffset.FromUnixTimeSeconds(c.CreatedAtUnix).UtcDateTime, c.SizeBytes
         )).ToList();
     }
 
@@ -566,314 +466,11 @@ public sealed class StorageClient : IStorageClient
     // Health Check
     // =========================================================================
 
-    /// <summary>
-    /// Check server health.
-    /// </summary>
     public async Task<(bool Healthy, string Backend, string Version)> HealthCheckAsync(
         CancellationToken cancellationToken = default)
     {
         var response = await _client.HealthCheckAsync(new HealthCheckRequest(), cancellationToken: cancellationToken);
         return (response.Healthy, response.Backend, response.Version);
-    }
-
-    // =========================================================================
-    // SourceSync Operations
-    // =========================================================================
-
-    private SourceSyncService.SourceSyncServiceClient GetSyncClient()
-    {
-        return new SourceSyncService.SourceSyncServiceClient(_channel);
-    }
-
-    /// <summary>
-    /// Register a source for a session.
-    /// </summary>
-    public async Task<(bool Success, string Error)> RegisterSourceAsync(
-        string tenantId,
-        string sessionId,
-        SourceType sourceType,
-        string uri,
-        bool autoSync,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new RegisterSourceRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId,
-            Source = new SourceDescriptor
-            {
-                Type = sourceType,
-                Uri = uri
-            },
-            AutoSync = autoSync
-        };
-
-        var response = await GetSyncClient().RegisterSourceAsync(request, cancellationToken: cancellationToken);
-        return (response.Success, response.Error);
-    }
-
-    /// <summary>
-    /// Unregister a source for a session.
-    /// </summary>
-    public async Task<bool> UnregisterSourceAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new UnregisterSourceRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId
-        };
-
-        var response = await GetSyncClient().UnregisterSourceAsync(request, cancellationToken: cancellationToken);
-        return response.Success;
-    }
-
-    /// <summary>
-    /// Update source configuration for a session (change URI, toggle auto-sync).
-    /// </summary>
-    public async Task<(bool Success, string Error)> UpdateSourceAsync(
-        string tenantId,
-        string sessionId,
-        SourceType? sourceType = null,
-        string? uri = null,
-        bool? autoSync = null,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new UpdateSourceRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId
-        };
-
-        if (sourceType.HasValue && uri is not null)
-        {
-            request.Source = new SourceDescriptor
-            {
-                Type = sourceType.Value,
-                Uri = uri
-            };
-        }
-
-        if (autoSync.HasValue)
-        {
-            request.AutoSync = autoSync.Value;
-            request.UpdateAutoSync = true;
-        }
-
-        var response = await GetSyncClient().UpdateSourceAsync(request, cancellationToken: cancellationToken);
-        return (response.Success, response.Error);
-    }
-
-    /// <summary>
-    /// Sync session data to its registered source (streaming upload).
-    /// </summary>
-    public async Task<(bool Success, string Error, long SyncedAtUnix)> SyncToSourceAsync(
-        string tenantId,
-        string sessionId,
-        byte[] data,
-        CancellationToken cancellationToken = default)
-    {
-        using var call = GetSyncClient().SyncToSource(cancellationToken: cancellationToken);
-
-        var chunks = ChunkData(data);
-        bool isFirst = true;
-
-        foreach (var (chunk, isLast) in chunks)
-        {
-            var msg = new SyncToSourceChunk
-            {
-                Data = Google.Protobuf.ByteString.CopyFrom(chunk),
-                IsLast = isLast
-            };
-
-            if (isFirst)
-            {
-                msg.Context = new TenantContext { TenantId = tenantId };
-                msg.SessionId = sessionId;
-                isFirst = false;
-            }
-
-            await call.RequestStream.WriteAsync(msg, cancellationToken);
-        }
-
-        await call.RequestStream.CompleteAsync();
-        var response = await call;
-
-        _logger?.LogDebug("Synced session {SessionId} for tenant {TenantId} ({Bytes} bytes, success={Success})",
-            sessionId, tenantId, data.Length, response.Success);
-
-        return (response.Success, response.Error, response.SyncedAtUnix);
-    }
-
-    /// <summary>
-    /// Get sync status for a session.
-    /// </summary>
-    public async Task<SyncStatusDto?> GetSyncStatusAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new GetSyncStatusRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId
-        };
-
-        var response = await GetSyncClient().GetSyncStatusAsync(request, cancellationToken: cancellationToken);
-
-        if (!response.Registered || response.Status is null)
-            return null;
-
-        var status = response.Status;
-        return new SyncStatusDto(
-            status.SessionId,
-            (SourceType)(int)status.Source.Type,
-            status.Source.Uri,
-            status.AutoSyncEnabled,
-            status.LastSyncedAtUnix > 0 ? status.LastSyncedAtUnix : null,
-            status.HasPendingChanges,
-            string.IsNullOrEmpty(status.LastError) ? null : status.LastError);
-    }
-
-    // =========================================================================
-    // ExternalWatch Operations
-    // =========================================================================
-
-    private ExternalWatchService.ExternalWatchServiceClient GetWatchClient()
-    {
-        return new ExternalWatchService.ExternalWatchServiceClient(_channel);
-    }
-
-    /// <summary>
-    /// Start watching a source for external changes.
-    /// </summary>
-    public async Task<(bool Success, string WatchId, string Error)> StartWatchAsync(
-        string tenantId,
-        string sessionId,
-        SourceType sourceType,
-        string uri,
-        int pollIntervalSeconds = 0,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new StartWatchRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId,
-            Source = new SourceDescriptor
-            {
-                Type = sourceType,
-                Uri = uri
-            },
-            PollIntervalSeconds = pollIntervalSeconds
-        };
-
-        var response = await GetWatchClient().StartWatchAsync(request, cancellationToken: cancellationToken);
-        return (response.Success, response.WatchId, response.Error);
-    }
-
-    /// <summary>
-    /// Stop watching a source.
-    /// </summary>
-    public async Task<bool> StopWatchAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new StopWatchRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId
-        };
-
-        var response = await GetWatchClient().StopWatchAsync(request, cancellationToken: cancellationToken);
-        return response.Success;
-    }
-
-    /// <summary>
-    /// Poll for external changes.
-    /// </summary>
-    public async Task<(bool HasChanges, SourceMetadataDto? Current, SourceMetadataDto? Known)> CheckForChangesAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new CheckForChangesRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId
-        };
-
-        var response = await GetWatchClient().CheckForChangesAsync(request, cancellationToken: cancellationToken);
-
-        return (
-            response.HasChanges,
-            response.CurrentMetadata is not null ? ConvertMetadata(response.CurrentMetadata) : null,
-            response.KnownMetadata is not null ? ConvertMetadata(response.KnownMetadata) : null
-        );
-    }
-
-    /// <summary>
-    /// Get current source file metadata.
-    /// </summary>
-    public async Task<SourceMetadataDto?> GetSourceMetadataAsync(
-        string tenantId,
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var request = new GetSourceMetadataRequest
-        {
-            Context = new TenantContext { TenantId = tenantId },
-            SessionId = sessionId
-        };
-
-        var response = await GetWatchClient().GetSourceMetadataAsync(request, cancellationToken: cancellationToken);
-
-        if (!response.Success || response.Metadata is null)
-            return null;
-
-        return ConvertMetadata(response.Metadata);
-    }
-
-    /// <summary>
-    /// Subscribe to external change events for specified sessions.
-    /// </summary>
-    public async IAsyncEnumerable<ExternalChangeEventDto> WatchChangesAsync(
-        string tenantId,
-        IEnumerable<string> sessionIds,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        var request = new WatchChangesRequest
-        {
-            Context = new TenantContext { TenantId = tenantId }
-        };
-        request.SessionIds.AddRange(sessionIds);
-
-        using var call = GetWatchClient().WatchChanges(request, cancellationToken: cancellationToken);
-
-        await foreach (var evt in call.ResponseStream.ReadAllAsync(cancellationToken))
-        {
-            yield return new ExternalChangeEventDto(
-                evt.SessionId,
-                (ExternalChangeType)(int)evt.ChangeType,
-                evt.OldMetadata is not null ? ConvertMetadata(evt.OldMetadata) : null,
-                evt.NewMetadata is not null ? ConvertMetadata(evt.NewMetadata) : null,
-                evt.DetectedAtUnix,
-                string.IsNullOrEmpty(evt.NewUri) ? null : evt.NewUri
-            );
-        }
-    }
-
-    private static SourceMetadataDto ConvertMetadata(SourceMetadata metadata)
-    {
-        return new SourceMetadataDto(
-            metadata.SizeBytes,
-            metadata.ModifiedAtUnix,
-            string.IsNullOrEmpty(metadata.Etag) ? null : metadata.Etag,
-            string.IsNullOrEmpty(metadata.VersionId) ? null : metadata.VersionId,
-            metadata.ContentHash.IsEmpty ? null : metadata.ContentHash.ToByteArray()
-        );
     }
 
     // =========================================================================

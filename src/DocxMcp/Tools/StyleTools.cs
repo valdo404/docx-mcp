@@ -7,6 +7,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
+using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -28,6 +29,8 @@ public sealed class StyleTools
         "Use [*] wildcards for batch operations (e.g. /body/paragraph[*]).")]
     public static string StyleElement(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of run-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all runs in the document.")] string? path = null)
@@ -103,6 +106,8 @@ public sealed class StyleTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Styled {runs.Count} run(s).";
     }
@@ -123,6 +128,8 @@ public sealed class StyleTools
         "Use [*] wildcards for batch operations.")]
     public static string StyleParagraph(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of paragraph-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all paragraphs in the document.")] string? path = null)
@@ -198,6 +205,8 @@ public sealed class StyleTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Styled {paragraphs.Count} paragraph(s).";
     }
@@ -220,6 +229,8 @@ public sealed class StyleTools
         "Use [id='...'] for stable targeting (e.g. /body/table[id='1A2B3C4D']).")]
     public static string StyleTable(
         SessionManager sessions,
+        SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of table-level style properties to merge.")] string? style = null,
         [Description("JSON object of cell-level style properties to merge (applied to ALL cells).")] string? cell_style = null,
@@ -329,6 +340,8 @@ public sealed class StyleTools
 
         var walEntry = new JsonArray { (JsonNode)walObj };
         sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Styled {tables.Count} table(s).";
     }

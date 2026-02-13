@@ -35,7 +35,6 @@ public class SyncDuplicateTests : IDisposable
         _tenantId = $"test-sync-dup-{Guid.NewGuid():N}";
         _sessionManager = TestHelpers.CreateSessionManager(_tenantId);
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
-        _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
     [Fact]
@@ -230,7 +229,6 @@ public class SyncDuplicateTests : IDisposable
         // Simulate server restart by creating a new SessionManager with same tenant
         var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
         var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
-        newSessionManager.SetExternalChangeTracker(newTracker);
 
         // Act - restore sessions
         var restoredCount = newSessionManager.RestoreSessions();
@@ -271,7 +269,6 @@ public class SyncDuplicateTests : IDisposable
         // Simulate server restart with same tenant
         var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
         var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
-        newSessionManager.SetExternalChangeTracker(newTracker);
         newSessionManager.RestoreSessions();
 
         // Act - sync multiple times after restart
