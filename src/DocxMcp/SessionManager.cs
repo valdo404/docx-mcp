@@ -899,7 +899,7 @@ public sealed class SessionManager
     /// Replay a single patch operation against a session's document.
     /// Uses the same logic as PatchTool.ApplyPatch but without MCP tool wiring.
     /// </summary>
-    private static void ReplayPatch(DocxSession session, string patchesJson)
+    internal static void ReplayPatch(DocxSession session, string patchesJson)
     {
         var patchArray = JsonDocument.Parse(patchesJson).RootElement;
         if (patchArray.ValueKind != JsonValueKind.Array)

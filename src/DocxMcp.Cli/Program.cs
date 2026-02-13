@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using DocxMcp;
 using DocxMcp.Cli;
@@ -112,6 +113,9 @@ try
 
         // Session inspection
         "inspect" => CmdInspect(args),
+
+        // UI server
+        "server" => CmdServer(args),
 
         "help" or "--help" or "-h" => Usage(),
         _ => $"Unknown command: '{command}'. Run 'docx-cli help' for usage."
@@ -631,6 +635,40 @@ string FindOrCreateSession(string filePath)
     return session.Id;
 }
 
+string CmdServer(string[] a)
+{
+    var portArg = OptNamed(a, "--port") ?? OptNamed(a, "--Port");
+    var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? ".";
+    var uiBinary = OperatingSystem.IsWindows() ? "docx-ui.exe" : "docx-ui";
+    var uiPath = Path.Combine(exeDir, uiBinary);
+
+    if (!File.Exists(uiPath))
+    {
+        // Fallback: look via PATH
+        uiPath = uiBinary;
+    }
+
+    var psi = new ProcessStartInfo(uiPath)
+    {
+        UseShellExecute = false,
+    };
+
+    // Forward sessions dir
+    psi.Environment["DOCX_MCP_SESSIONS_DIR"] = sessionsDir;
+
+    if (portArg is not null)
+    {
+        psi.ArgumentList.Add("--Port");
+        psi.ArgumentList.Add(portArg);
+    }
+
+    using var proc = Process.Start(psi)
+        ?? throw new InvalidOperationException($"Failed to start {uiPath}");
+
+    proc.WaitForExit();
+    return "";
+}
+
 // --- Argument helpers ---
 
 static string Require(string[] a, int idx, string name)
@@ -769,6 +807,9 @@ static void PrintUsage()
                                  Sync session with external file (records in WAL)
       watch <path> [--auto-sync] [--debounce ms] [--pattern *.docx] [--recursive]
                                  Watch file or folder for changes (daemon mode)
+
+    Server:
+      server [--port N]                    Launch the session browser UI (default port 5200)
 
     Options:
       --dry-run    Simulate operation without applying changes
