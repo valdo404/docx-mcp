@@ -10,6 +10,13 @@ internal static class TestHelpers
     private static string? _testStorageDir;
 
     /// <summary>
+    /// True when tests run against a remote gRPC storage (STORAGE_GRPC_URL set).
+    /// Tests that require local-file behavior should skip in this mode.
+    /// </summary>
+    public static bool IsRemoteStorage =>
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("STORAGE_GRPC_URL"));
+
+    /// <summary>
     /// Create a SessionManager backed by the gRPC storage server.
     /// Auto-launches the Rust storage server if not already running.
     /// Uses a unique tenant ID per test to ensure isolation.

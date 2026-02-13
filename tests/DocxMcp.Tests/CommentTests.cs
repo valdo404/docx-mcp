@@ -536,9 +536,10 @@ public class CommentTests : IDisposable
         Assert.Contains("\"total\": 0", listResult2);
     }
 
-    [Fact]
+    [SkippableFact]
     public void AddComment_OnOpenedFile_SurvivesRestart_ThenUndo()
     {
+        Skip.If(TestHelpers.IsRemoteStorage, "Requires local file storage");
         // Use explicit tenant so second manager can find the session
         var tenantId = $"test-comment-file-restart-{Guid.NewGuid():N}";
 

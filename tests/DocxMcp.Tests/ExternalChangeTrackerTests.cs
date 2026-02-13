@@ -14,20 +14,22 @@ public class ExternalChangeTrackerTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly List<DocxSession> _sessions = [];
-    private readonly SessionManager _sessionManager;
-    private readonly ExternalChangeTracker _tracker;
+    private readonly SessionManager _sessionManager = null!;
+    private readonly ExternalChangeTracker _tracker = null!;
 
     public ExternalChangeTrackerTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
 
+        if (TestHelpers.IsRemoteStorage) return;
+
         _sessionManager = TestHelpers.CreateSessionManager();
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
         _sessionManager.SetExternalChangeTracker(_tracker);
     }
 
-    [Fact]
+    [SkippableFact]
     public void RegisterSession_WithValidSession_StartsTracking()
     {
         // Arrange
@@ -41,7 +43,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.False(_tracker.HasPendingChanges(session.Id));
     }
 
-    [Fact]
+    [SkippableFact]
     public void CheckForChanges_WhenNoChanges_ReturnsNull()
     {
         // Arrange
@@ -57,7 +59,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.False(_tracker.HasPendingChanges(session.Id));
     }
 
-    [Fact]
+    [SkippableFact]
     public void CheckForChanges_WhenFileModified_DetectsChanges()
     {
         // Arrange
@@ -79,7 +81,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.False(patch.Acknowledged);
     }
 
-    [Fact]
+    [SkippableFact]
     public void HasPendingChanges_AfterDetection_ReturnsTrue()
     {
         // Arrange
@@ -94,7 +96,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.True(_tracker.HasPendingChanges(session.Id));
     }
 
-    [Fact]
+    [SkippableFact]
     public void AcknowledgeChange_MarksPatchAsAcknowledged()
     {
         // Arrange
@@ -116,7 +118,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.True(pending.Changes[0].Acknowledged);
     }
 
-    [Fact]
+    [SkippableFact]
     public void AcknowledgeAllChanges_AcknowledgesMultipleChanges()
     {
         // Arrange
@@ -140,7 +142,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.False(_tracker.HasPendingChanges(session.Id));
     }
 
-    [Fact]
+    [SkippableFact]
     public void GetPendingChanges_ReturnsAllPendingChanges()
     {
         // Arrange
@@ -163,7 +165,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.NotNull(pending.MostRecentPending);
     }
 
-    [Fact]
+    [SkippableFact]
     public void GetLatestUnacknowledgedChange_ReturnsCorrectChange()
     {
         // Arrange
@@ -188,7 +190,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.Equal(second.Id, latest.Id);
     }
 
-    [Fact]
+    [SkippableFact]
     public void UpdateSessionSnapshot_ResetsChangeDetection()
     {
         // Arrange
@@ -210,7 +212,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.Null(patch);
     }
 
-    [Fact]
+    [SkippableFact]
     public void ExternalChangePatch_ToLlmSummary_ProducesReadableOutput()
     {
         // Arrange
@@ -230,7 +232,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.Contains("acknowledge_external_change", summary);
     }
 
-    [Fact]
+    [SkippableFact]
     public void UnregisterSession_StopsTrackingSession()
     {
         // Arrange
@@ -252,7 +254,7 @@ public class ExternalChangeTrackerTests : IDisposable
         Assert.False(_tracker.HasPendingChanges(session.Id) && patch is null);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Patch_ContainsValidPatches()
     {
         // Arrange
@@ -318,6 +320,7 @@ public class ExternalChangeTrackerTests : IDisposable
 
     private DocxSession OpenSession(string filePath)
     {
+        Skip.If(TestHelpers.IsRemoteStorage, "Requires local file storage");
         var session = _sessionManager.Open(filePath);
         _sessions.Add(session);
         return session;
