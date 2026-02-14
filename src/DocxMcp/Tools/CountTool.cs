@@ -24,11 +24,11 @@ public sealed class CountTool
         "  /body/table[0]/row[*] — count rows in first table\n" +
         "  /body/paragraph[text~='hello'] — count paragraphs containing 'hello'")]
     public static string CountElements(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path with selector (e.g. /body/paragraph[*], /body/table[0]/row[*]).")] string path)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         // Handle special paths with counts

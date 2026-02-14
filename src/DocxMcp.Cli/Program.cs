@@ -81,6 +81,7 @@ else
 }
 
 var sessions = new SessionManager(historyStorage, NullLogger<SessionManager>.Instance);
+var tenant = new TenantScope(sessions);
 var syncManager = new SyncManager(syncStorage, NullLogger<SyncManager>.Instance);
 var externalTracker = new ExternalChangeTracker(sessions, NullLogger<ExternalChangeTracker>.Instance);
 if (isDebug) Console.Error.WriteLine("[cli] Calling RestoreSessions...");
@@ -116,18 +117,18 @@ try
     var result = command switch
     {
         "open" => CmdOpen(args),
-        "list" => DocumentTools.DocumentList(sessions),
-        "close" => DocumentTools.DocumentClose(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
-        "save" => DocumentTools.DocumentSave(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
-        "set-source" => DocumentTools.DocumentSetSource(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "list" => DocumentTools.DocumentList(tenant),
+        "close" => DocumentTools.DocumentClose(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
+        "save" => DocumentTools.DocumentSave(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
+        "set-source" => DocumentTools.DocumentSetSource(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "path"), !HasFlag(args, "--no-auto-sync")),
-        "snapshot" => DocumentTools.DocumentSnapshot(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "snapshot" => DocumentTools.DocumentSnapshot(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
-        "query" => QueryTool.Query(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path"),
+        "query" => QueryTool.Query(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path"),
             OptNamed(args, "--format") ?? "json",
             ParseIntOpt(OptNamed(args, "--offset")),
             ParseIntOpt(OptNamed(args, "--limit"))),
-        "count" => CountTool.CountElements(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path")),
+        "count" => CountTool.CountElements(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path")),
 
         // Generic patch (multi-operation)
         "patch" => CmdPatch(args),
@@ -147,14 +148,14 @@ try
         "style-table" => CmdStyleTable(args),
 
         // History commands
-        "undo" => HistoryTools.DocumentUndo(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "undo" => HistoryTools.DocumentUndo(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(GetNonFlagArg(args, 2), 1)),
-        "redo" => HistoryTools.DocumentRedo(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "redo" => HistoryTools.DocumentRedo(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(GetNonFlagArg(args, 2), 1)),
-        "history" => HistoryTools.DocumentHistory(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "history" => HistoryTools.DocumentHistory(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(OptNamed(args, "--offset"), 0),
             ParseInt(OptNamed(args, "--limit"), 20)),
-        "jump-to" => HistoryTools.DocumentJumpTo(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "jump-to" => HistoryTools.DocumentJumpTo(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "position"))),
 
         // Comment commands
@@ -163,11 +164,11 @@ try
         "comment-delete" => CmdCommentDelete(args),
 
         // Export commands
-        "export-html" => ExportTools.ExportHtml(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "export-html" => ExportTools.ExportHtml(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "output_path")),
-        "export-markdown" => ExportTools.ExportMarkdown(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "export-markdown" => ExportTools.ExportMarkdown(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "output_path")),
-        "export-pdf" => ExportTools.ExportPdf(sessions, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "export-pdf" => ExportTools.ExportPdf(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "output_path")).GetAwaiter().GetResult(),
 
         // Read commands
@@ -176,11 +177,11 @@ try
 
         // Revision (Track Changes) commands
         "revision-list" => CmdRevisionList(args),
-        "revision-accept" => RevisionTools.RevisionAccept(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "revision-accept" => RevisionTools.RevisionAccept(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "revision_id"))),
-        "revision-reject" => RevisionTools.RevisionReject(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "revision-reject" => RevisionTools.RevisionReject(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "revision_id"))),
-        "track-changes-enable" => RevisionTools.TrackChangesEnable(sessions, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "track-changes-enable" => RevisionTools.TrackChangesEnable(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseBool(Require(args, 2, "enabled"))),
 
         // Diff commands
@@ -213,7 +214,7 @@ catch (Exception ex)
 string CmdOpen(string[] a)
 {
     var path = GetNonFlagArg(a, 1);
-    return DocumentTools.DocumentOpen(sessions, syncManager, externalTracker, path);
+    return DocumentTools.DocumentOpen(tenant, syncManager, externalTracker, path);
 }
 
 string CmdPatch(string[] a)
@@ -222,7 +223,7 @@ string CmdPatch(string[] a)
     var dryRun = HasFlag(a, "--dry-run");
     // patches can be arg[2] or read from stdin
     var patches = GetNonFlagArg(a, 2) ?? ReadStdin();
-    return PatchTool.ApplyPatch(sessions, syncManager, externalTracker, docId, patches, dryRun);
+    return PatchTool.ApplyPatch(tenant, syncManager, externalTracker, docId, patches, dryRun);
 }
 
 string CmdAdd(string[] a)
@@ -231,7 +232,7 @@ string CmdAdd(string[] a)
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.AddElement(sessions, syncManager, externalTracker, docId, path, value, dryRun);
+    return ElementTools.AddElement(tenant, syncManager, externalTracker, docId, path, value, dryRun);
 }
 
 string CmdReplace(string[] a)
@@ -240,7 +241,7 @@ string CmdReplace(string[] a)
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.ReplaceElement(sessions, syncManager, externalTracker, docId, path, value, dryRun);
+    return ElementTools.ReplaceElement(tenant, syncManager, externalTracker, docId, path, value, dryRun);
 }
 
 string CmdRemove(string[] a)
@@ -248,7 +249,7 @@ string CmdRemove(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.RemoveElement(sessions, syncManager, externalTracker, docId, path, dryRun);
+    return ElementTools.RemoveElement(tenant, syncManager, externalTracker, docId, path, dryRun);
 }
 
 string CmdMove(string[] a)
@@ -257,7 +258,7 @@ string CmdMove(string[] a)
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.MoveElement(sessions, syncManager, externalTracker, docId, from, to, dryRun);
+    return ElementTools.MoveElement(tenant, syncManager, externalTracker, docId, from, to, dryRun);
 }
 
 string CmdCopy(string[] a)
@@ -266,7 +267,7 @@ string CmdCopy(string[] a)
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.CopyElement(sessions, syncManager, externalTracker, docId, from, to, dryRun);
+    return ElementTools.CopyElement(tenant, syncManager, externalTracker, docId, from, to, dryRun);
 }
 
 string CmdReplaceText(string[] a)
@@ -277,7 +278,7 @@ string CmdReplaceText(string[] a)
     var replace = Require(a, 4, "replace");
     var maxCount = ParseInt(OptNamed(a, "--max-count"), 1);
     var dryRun = HasFlag(a, "--dry-run");
-    return TextTools.ReplaceText(sessions, syncManager, externalTracker, docId, path, find, replace, maxCount, dryRun);
+    return TextTools.ReplaceText(tenant, syncManager, externalTracker, docId, path, find, replace, maxCount, dryRun);
 }
 
 string CmdRemoveColumn(string[] a)
@@ -286,7 +287,7 @@ string CmdRemoveColumn(string[] a)
     var path = Require(a, 2, "path");
     var column = int.Parse(Require(a, 3, "column"));
     var dryRun = HasFlag(a, "--dry-run");
-    return TableTools.RemoveTableColumn(sessions, syncManager, externalTracker, docId, path, column, dryRun);
+    return TableTools.RemoveTableColumn(tenant, syncManager, externalTracker, docId, path, column, dryRun);
 }
 
 string CmdStyleElement(string[] a)
@@ -294,7 +295,7 @@ string CmdStyleElement(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = Require(a, 2, "style");
     var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
-    return StyleTools.StyleElement(sessions, syncManager, externalTracker, docId, style, path);
+    return StyleTools.StyleElement(tenant, syncManager, externalTracker, docId, style, path);
 }
 
 string CmdStyleParagraph(string[] a)
@@ -302,7 +303,7 @@ string CmdStyleParagraph(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = Require(a, 2, "style");
     var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
-    return StyleTools.StyleParagraph(sessions, syncManager, externalTracker, docId, style, path);
+    return StyleTools.StyleParagraph(tenant, syncManager, externalTracker, docId, style, path);
 }
 
 string CmdStyleTable(string[] a)
@@ -312,7 +313,7 @@ string CmdStyleTable(string[] a)
     var cellStyle = OptNamed(a, "--cell-style");
     var rowStyle = OptNamed(a, "--row-style");
     var path = OptNamed(a, "--path");
-    return StyleTools.StyleTable(sessions, syncManager, externalTracker, docId, style, cellStyle, rowStyle, path);
+    return StyleTools.StyleTable(tenant, syncManager, externalTracker, docId, style, cellStyle, rowStyle, path);
 }
 
 string CmdCommentAdd(string[] a)
@@ -323,7 +324,7 @@ string CmdCommentAdd(string[] a)
     var anchorText = OptNamed(a, "--anchor-text");
     var author = OptNamed(a, "--author");
     var initials = OptNamed(a, "--initials");
-    return CommentTools.CommentAdd(sessions, syncManager, externalTracker, docId, path, text, anchorText, author, initials);
+    return CommentTools.CommentAdd(tenant, syncManager, externalTracker, docId, path, text, anchorText, author, initials);
 }
 
 string CmdCommentList(string[] a)
@@ -332,7 +333,7 @@ string CmdCommentList(string[] a)
     var author = OptNamed(a, "--author");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
     var limit = ParseIntOpt(OptNamed(a, "--limit"));
-    return CommentTools.CommentList(sessions, docId, author, offset, limit);
+    return CommentTools.CommentList(tenant, docId, author, offset, limit);
 }
 
 string CmdCommentDelete(string[] a)
@@ -340,7 +341,7 @@ string CmdCommentDelete(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var commentId = ParseIntOpt(OptNamed(a, "--id"));
     var author = OptNamed(a, "--author");
-    return CommentTools.CommentDelete(sessions, syncManager, externalTracker, docId, commentId, author);
+    return CommentTools.CommentDelete(tenant, syncManager, externalTracker, docId, commentId, author);
 }
 
 string CmdReadSection(string[] a)
@@ -350,7 +351,7 @@ string CmdReadSection(string[] a)
     var format = OptNamed(a, "--format");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
     var limit = ParseIntOpt(OptNamed(a, "--limit"));
-    return ReadSectionTool.ReadSection(sessions, docId, sectionIndex, format, offset, limit);
+    return ReadSectionTool.ReadSection(tenant, docId, sectionIndex, format, offset, limit);
 }
 
 string CmdReadHeading(string[] a)
@@ -363,7 +364,7 @@ string CmdReadHeading(string[] a)
     var format = OptNamed(a, "--format");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
     var limit = ParseIntOpt(OptNamed(a, "--limit"));
-    return ReadHeadingContentTool.ReadHeadingContent(sessions, docId,
+    return ReadHeadingContentTool.ReadHeadingContent(tenant, docId,
         headingText, headingIndex, headingLevel, includeSubHeadings, format, offset, limit);
 }
 
@@ -374,7 +375,7 @@ string CmdRevisionList(string[] a)
     var type = OptNamed(a, "--type");
     var offset = ParseIntOpt(OptNamed(a, "--offset"));
     var limit = ParseIntOpt(OptNamed(a, "--limit"));
-    return RevisionTools.RevisionList(sessions, docId, author, type, offset, limit);
+    return RevisionTools.RevisionList(tenant, docId, author, type, offset, limit);
 }
 
 string CmdDiff(string[] a)

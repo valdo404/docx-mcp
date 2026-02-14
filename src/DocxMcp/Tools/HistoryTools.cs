@@ -12,14 +12,15 @@ public sealed class HistoryTools
         "Rebuilds the document from the nearest checkpoint. " +
         "The undone operations remain in history and can be redone.")]
     public static string DocumentUndo(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Number of steps to undo (default 1).")] int steps = 1)
     {
+        var sessions = tenant.Sessions;
         var result = sessions.Undo(doc_id, steps);
-        if (result.Steps > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+        if (result.Steps > 0 && sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
@@ -29,14 +30,15 @@ public sealed class HistoryTools
         "Replays patches forward from the current position. " +
         "Only available after undo — new edits after undo discard redo history.")]
     public static string DocumentRedo(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Number of steps to redo (default 1).")] int steps = 1)
     {
+        var sessions = tenant.Sessions;
         var result = sessions.Redo(doc_id, steps);
-        if (result.Steps > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+        if (result.Steps > 0 && sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
@@ -47,12 +49,12 @@ public sealed class HistoryTools
         "Position 0 is the baseline (original document). " +
         "Supports pagination with offset and limit.")]
     public static string DocumentHistory(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Start offset for pagination (default 0).")] int offset = 0,
         [Description("Maximum number of entries to return (default 20).")] int limit = 20)
     {
-        var result = sessions.GetHistory(doc_id, offset, limit);
+        var result = tenant.Sessions.GetHistory(doc_id, offset, limit);
 
         var lines = new List<string>
         {
@@ -90,14 +92,15 @@ public sealed class HistoryTools
         "Rebuilds the document from the nearest checkpoint. " +
         "Position 0 is the baseline, position N is after N patches applied.")]
     public static string DocumentJumpTo(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("WAL position to jump to (0 = baseline).")] int position)
     {
+        var sessions = tenant.Sessions;
         var result = sessions.JumpTo(doc_id, position);
-        if (result.Steps > 0 && sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+        if (result.Steps > 0 && sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }

@@ -28,12 +28,15 @@ public sealed class ExternalChangeTools
         "IMPORTANT: If external changes are detected, you MUST acknowledge them " +
         "(set acknowledge=true) before you can continue editing this document.")]
     public static string GetExternalChanges(
-        ExternalChangeTracker tracker,
+        ExternalChangeTracker? tracker,
         [Description("Session ID to check for external changes")]
         string doc_id,
         [Description("Set to true to acknowledge the changes and allow editing to continue")]
         bool acknowledge = false)
     {
+        if (tracker is null)
+            return """{"has_changes": false, "can_edit": true, "message": "External change tracking not available in HTTP mode."}""";
+
         // First check for any already-detected pending changes
         var pending = tracker.GetLatestUnacknowledgedChange(doc_id);
 
@@ -112,12 +115,15 @@ public sealed class ExternalChangeTools
         "5. Optionally acknowledges a pending change\n\n" +
         "Use this tool when you want to accept external changes and continue editing.")]
     public static string SyncExternalChanges(
-        ExternalChangeTracker tracker,
+        ExternalChangeTracker? tracker,
         [Description("Session ID to sync")]
         string doc_id,
         [Description("Optional change ID to acknowledge (from get_external_changes)")]
         string? change_id = null)
     {
+        if (tracker is null)
+            return """{"success": false, "message": "External change tracking not available in HTTP mode."}""";
+
         var syncResult = tracker.SyncExternalChanges(doc_id, change_id);
 
         var result = new JsonObject

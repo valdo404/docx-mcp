@@ -291,7 +291,7 @@ message HealthCheckResponse {
 // - Local files (current behavior)
 // - SharePoint documents
 // - OneDrive files
-// - S3/R2 objects
+// - Google Drive files
 
 service SourceSyncService {
   // Register a session's source for sync tracking
@@ -319,8 +319,8 @@ enum SourceType {
   SOURCE_TYPE_LOCAL_FILE = 1;
   SOURCE_TYPE_SHAREPOINT = 2;
   SOURCE_TYPE_ONEDRIVE = 3;
-  SOURCE_TYPE_S3 = 4;
-  SOURCE_TYPE_R2 = 5;
+  reserved 4, 5;                    // Formerly S3, R2 (never activated)
+  SOURCE_TYPE_GOOGLE_DRIVE = 6;
 }
 
 message SourceDescriptor {

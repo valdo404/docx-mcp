@@ -21,7 +21,7 @@ public sealed class ReadHeadingContentTool
         "and content element counts. Then call again targeting a specific heading.\n\n" +
         "Results are paginated: max 50 elements per call. Use offset to paginate within large heading blocks.")]
     public static string ReadHeadingContent(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Text to search for in heading content (case-insensitive partial match). " +
                      "Omit to list all headings.")] string? heading_text = null,
@@ -34,7 +34,7 @@ public sealed class ReadHeadingContentTool
         [Description("Number of elements to skip. Negative values count from the end. Default: 0.")] int? offset = null,
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
         var body = session.GetBody();
 

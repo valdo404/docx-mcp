@@ -35,14 +35,14 @@ public sealed class QueryTool
         "  /styles — style definitions\n\n" +
         "Every element has a stable 'id' field in JSON output. Use [id='...'] selectors for precise targeting.")]
     public static string Query(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path to query (e.g. /body/paragraph[0], /body/table[0]). Prefer direct indexed access.")] string path,
         [Description("Output format: json, text, or summary. Default: json.")] string? format = "json",
         [Description("Number of elements to skip. Negative values count from the end (e.g. -10 = last 10 elements). Default: 0.")] int? offset = null,
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         // Handle special paths

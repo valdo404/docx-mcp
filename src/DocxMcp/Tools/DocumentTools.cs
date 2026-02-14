@@ -16,12 +16,13 @@ public sealed class DocumentTools
         "If path is omitted, creates a new empty document. " +
         "For existing files, external changes will be monitored automatically.")]
     public static string DocumentOpen(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Absolute path to the .docx file to open. Omit to create a new empty document.")]
         string? path = null)
     {
+        var sessions = tenant.Sessions;
         var session = path is not null
             ? sessions.Open(path)
             : sessions.Create();
@@ -29,7 +30,7 @@ public sealed class DocumentTools
         // Register source + watch + tracker if we have a source file
         if (session.SourcePath is not null)
         {
-            sync.RegisterAndWatch(sessions.TenantId, session.Id, session.SourcePath, autoSync: true);
+            sync.RegisterAndWatch(tenant.TenantId, session.Id, session.SourcePath, autoSync: true);
             externalChangeTracker?.RegisterSession(session.Id);
         }
 
@@ -45,7 +46,7 @@ public sealed class DocumentTools
         "Use this for 'Save As' operations or to set a save path for new documents. " +
         "If auto_sync is true (default), the document will be auto-saved after each edit.")]
     public static string DocumentSetSource(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")]
@@ -55,8 +56,8 @@ public sealed class DocumentTools
         [Description("Enable auto-save after each edit. Default true.")]
         bool auto_sync = true)
     {
-        sync.SetSource(sessions.TenantId, doc_id, path, auto_sync);
-        sessions.SetSourcePath(doc_id, path);
+        sync.SetSource(tenant.TenantId, doc_id, path, auto_sync);
+        tenant.Sessions.SetSourcePath(doc_id, path);
         externalChangeTracker?.RegisterSession(doc_id);
         return $"Source set to '{path}' for session '{doc_id}'. Auto-sync: {(auto_sync ? "enabled" : "disabled")}.";
     }
@@ -67,7 +68,7 @@ public sealed class DocumentTools
         "Use this tool for 'Save As' (providing output_path) or to save new documents that have no source path. " +
         "Updates the external change tracker snapshot after saving.")]
     public static string DocumentSave(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document to save.")]
@@ -75,15 +76,16 @@ public sealed class DocumentTools
         [Description("Path to save the file to. If omitted, saves to the original path.")]
         string? output_path = null)
     {
+        var sessions = tenant.Sessions;
         // If output_path is provided, update/register the source first
         if (output_path is not null)
         {
-            sync.SetSource(sessions.TenantId, doc_id, output_path, autoSync: true);
+            sync.SetSource(tenant.TenantId, doc_id, output_path, autoSync: true);
             sessions.SetSourcePath(doc_id, output_path);
         }
 
         var session = sessions.Get(doc_id);
-        sync.Save(sessions.TenantId, doc_id, session.ToBytes());
+        sync.Save(tenant.TenantId, doc_id, session.ToBytes());
         externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         var target = output_path ?? session.SourcePath ?? "(unknown)";
@@ -92,8 +94,9 @@ public sealed class DocumentTools
 
     [McpServerTool(Name = "document_list"), Description(
         "List all currently open document sessions with track changes status.")]
-    public static string DocumentList(SessionManager sessions)
+    public static string DocumentList(TenantScope tenant)
     {
+        var sessions = tenant.Sessions;
         var list = sessions.List();
         if (list.Count == 0)
             return "No open documents.";
@@ -130,16 +133,16 @@ public sealed class DocumentTools
     /// This will delete all persisted data (baseline, WAL, checkpoints).
     /// </summary>
     public static string DocumentClose(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager? sync,
         ExternalChangeTracker? externalChangeTracker,
         string doc_id)
     {
         // Unregister from change tracking before closing
         externalChangeTracker?.UnregisterSession(doc_id);
-        sync?.StopWatch(sessions.TenantId, doc_id);
+        sync?.StopWatch(tenant.TenantId, doc_id);
 
-        sessions.Close(doc_id);
+        tenant.Sessions.Close(doc_id);
         return $"Document session '{doc_id}' closed.";
     }
 
@@ -150,13 +153,13 @@ public sealed class DocumentTools
     /// WAL compaction should only be performed via the CLI for administrative purposes.
     /// </summary>
     public static string DocumentSnapshot(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document to snapshot.")]
         string doc_id,
         [Description("If true, discard redo history when compacting. Default false.")]
         bool discard_redo = false)
     {
-        sessions.Compact(doc_id, discard_redo);
+        tenant.Sessions.Compact(doc_id, discard_redo);
         return $"Snapshot created for session '{doc_id}'. WAL compacted.";
     }
 }

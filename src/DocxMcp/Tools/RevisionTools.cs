@@ -18,14 +18,14 @@ public sealed class RevisionTools
         "Revision types: insertion, deletion, move_from, move_to, format_change, " +
         "paragraph_insertion, section_change, table_change, row_change, cell_change")]
     public static string RevisionList(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Filter by author name (case-insensitive).")] string? author = null,
         [Description("Filter by revision type.")] string? type = null,
         [Description("Number of revisions to skip. Default: 0.")] int? offset = null,
         [Description("Maximum number of revisions to return (1-100). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         var stats = RevisionHelper.GetRevisionStats(doc);
@@ -79,13 +79,13 @@ public sealed class RevisionTools
         "- Format changes: new formatting is kept\n" +
         "- Moves: content stays at new location")]
     public static string RevisionAccept(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Revision ID to accept.")] int revision_id)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         if (!RevisionHelper.AcceptRevision(doc, revision_id))
@@ -98,8 +98,8 @@ public sealed class RevisionTools
             ["revision_id"] = revision_id
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Accepted revision {revision_id}.";
@@ -113,13 +113,13 @@ public sealed class RevisionTools
         "- Format changes: previous formatting is restored\n" +
         "- Moves: content returns to original location")]
     public static string RevisionReject(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Revision ID to reject.")] int revision_id)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         if (!RevisionHelper.RejectRevision(doc, revision_id))
@@ -132,8 +132,8 @@ public sealed class RevisionTools
             ["revision_id"] = revision_id
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Rejected revision {revision_id}.";
@@ -144,13 +144,13 @@ public sealed class RevisionTools
         "When enabled, subsequent edits made in Word will be tracked.\n" +
         "Note: Edits made through this MCP server are not automatically tracked.")]
     public static string TrackChangesEnable(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("True to enable, false to disable Track Changes.")] bool enabled)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         RevisionHelper.SetTrackChangesEnabled(doc, enabled);
@@ -162,8 +162,8 @@ public sealed class RevisionTools
             ["enabled"] = enabled
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return enabled

@@ -28,14 +28,14 @@ public sealed class StyleTools
         "Use [id='...'] for stable targeting (e.g. /body/paragraph[id='1A2B3C4D']/run[id='5E6F7A8B']).\n" +
         "Use [*] wildcards for batch operations (e.g. /body/paragraph[*]).")]
     public static string StyleElement(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of run-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all runs in the document.")] string? path = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
         var body = doc.MainDocumentPart?.Document?.Body
             ?? throw new InvalidOperationException("Document has no body.");
@@ -105,8 +105,8 @@ public sealed class StyleTools
             ["style"] = JsonNode.Parse(style)
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Styled {runs.Count} run(s).";
@@ -127,14 +127,14 @@ public sealed class StyleTools
         "Use [id='...'] for stable targeting (e.g. /body/paragraph[id='1A2B3C4D']).\n" +
         "Use [*] wildcards for batch operations.")]
     public static string StyleParagraph(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of paragraph-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all paragraphs in the document.")] string? path = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
         var body = doc.MainDocumentPart?.Document?.Body
             ?? throw new InvalidOperationException("Document has no body.");
@@ -204,8 +204,8 @@ public sealed class StyleTools
             ["style"] = JsonNode.Parse(style)
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Styled {paragraphs.Count} paragraph(s).";
@@ -228,7 +228,7 @@ public sealed class StyleTools
         "Omit path to style ALL tables in the document.\n" +
         "Use [id='...'] for stable targeting (e.g. /body/table[id='1A2B3C4D']).")]
     public static string StyleTable(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
@@ -240,7 +240,7 @@ public sealed class StyleTools
         if (style is null && cell_style is null && row_style is null)
             return "Error: At least one of style, cell_style, or row_style must be provided.";
 
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
         var body = doc.MainDocumentPart?.Document?.Body
             ?? throw new InvalidOperationException("Document has no body.");
@@ -339,8 +339,8 @@ public sealed class StyleTools
             walObj["row_style"] = JsonNode.Parse(row_style);
 
         var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(sessions.TenantId, doc_id, session.ToBytes()))
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
             externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         return $"Styled {tables.Count} table(s).";

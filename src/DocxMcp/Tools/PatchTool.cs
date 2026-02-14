@@ -22,7 +22,7 @@ public sealed class PatchTool
     /// Apply JSON patches to a document. Used internally by element tools and CLI.
     /// </summary>
     public static string ApplyPatch(
-        SessionManager sessions,
+        TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
@@ -46,6 +46,7 @@ public sealed class PatchTool
             }
         }
 
+        var sessions = tenant.Sessions;
         var session = sessions.Get(doc_id);
         var wpDoc = session.Document;
         var mainPart = wpDoc.MainDocumentPart
@@ -157,7 +158,7 @@ public sealed class PatchTool
             {
                 var walPatches = $"[{string.Join(",", succeededPatches)}]";
                 sessions.AppendWal(doc_id, walPatches);
-                if (sync.MaybeAutoSave(sessions.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
+                if (sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
                     externalChangeTracker?.UpdateSessionSnapshot(doc_id);
             }
             catch { /* persistence is best-effort */ }
