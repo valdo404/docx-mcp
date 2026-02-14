@@ -31,10 +31,9 @@ public class AutoSaveTests : IDisposable
     private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
     private SyncManager CreateSyncManager() => TestHelpers.CreateSyncManager();
 
-    [SkippableFact]
+    [Fact]
     public void AppendWal_WithAutoSave_SavesFileOnDisk()
     {
-        Skip.If(TestHelpers.IsRemoteStorage, "Requires local file storage");
         var mgr = CreateManager();
         var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);
@@ -140,10 +139,9 @@ public class AutoSaveTests : IDisposable
         }
     }
 
-    [SkippableFact]
+    [Fact]
     public void StyleOperation_TriggersAutoSave()
     {
-        Skip.If(TestHelpers.IsRemoteStorage, "Requires local file storage");
         var mgr = CreateManager();
         var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);
@@ -160,10 +158,9 @@ public class AutoSaveTests : IDisposable
         Assert.NotEqual(originalBytes, afterBytes);
     }
 
-    [SkippableFact]
+    [Fact]
     public void CommentAdd_TriggersAutoSave()
     {
-        Skip.If(TestHelpers.IsRemoteStorage, "Requires local file storage");
         var mgr = CreateManager();
         var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);

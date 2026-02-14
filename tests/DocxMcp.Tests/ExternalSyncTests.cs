@@ -25,15 +25,13 @@ public class ExternalSyncTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-sync-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
 
-        if (TestHelpers.IsRemoteStorage) return;
-
         _sessionManager = TestHelpers.CreateSessionManager();
         _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
     }
 
     #region SyncExternalChanges Tests
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_WhenNoChanges_ReturnsNoChanges()
     {
         // Arrange
@@ -53,7 +51,7 @@ public class ExternalSyncTests : IDisposable
         Assert.Contains("No external changes", result.Message);
     }
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_WhenFileModified_SyncsAndRecordsInWal()
     {
         // Arrange
@@ -75,7 +73,7 @@ public class ExternalSyncTests : IDisposable
         Assert.True(result.WalPosition > 0);
     }
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_CreatesCheckpoint()
     {
         // Arrange
@@ -97,7 +95,7 @@ public class ExternalSyncTests : IDisposable
         Assert.NotNull(syncEntry);
     }
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_RecordsExternalSyncEntryType()
     {
         // Arrange
@@ -116,7 +114,7 @@ public class ExternalSyncTests : IDisposable
         Assert.NotNull(syncEntry.SyncSummary);
     }
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_AcknowledgesChangeIdIfProvided()
     {
         // Arrange
@@ -136,7 +134,7 @@ public class ExternalSyncTests : IDisposable
         Assert.False(_tracker.HasPendingChanges(session.Id));
     }
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_ReloadsDocumentFromDisk()
     {
         // Arrange
@@ -163,7 +161,7 @@ public class ExternalSyncTests : IDisposable
 
     #region Undo/Redo with External Sync Tests
 
-    [SkippableFact]
+    [Fact]
     public void Undo_AfterExternalSync_RestoresPreSyncState()
     {
         // Arrange
@@ -190,7 +188,7 @@ public class ExternalSyncTests : IDisposable
         Assert.Contains("Original", restoredText);
     }
 
-    [SkippableFact]
+    [Fact]
     public void Redo_AfterUndoingExternalSync_ReappliesSyncedState()
     {
         // Arrange
@@ -218,7 +216,7 @@ public class ExternalSyncTests : IDisposable
         Assert.Contains("Synced", text);
     }
 
-    [SkippableFact]
+    [Fact]
     public void JumpTo_ExternalSyncPosition_LoadsFromCheckpoint()
     {
         // Arrange
@@ -253,7 +251,7 @@ public class ExternalSyncTests : IDisposable
 
     #region Uncovered Change Detection Tests
 
-    [SkippableFact]
+    [Fact]
     public void DetectUncoveredChanges_DetectsHeaderModification()
     {
         // Arrange
@@ -270,7 +268,7 @@ public class ExternalSyncTests : IDisposable
         Assert.Contains(uncovered, u => u.Type == UncoveredChangeType.Header);
     }
 
-    [SkippableFact]
+    [Fact]
     public void DetectUncoveredChanges_DetectsStyleModification()
     {
         // Arrange
@@ -287,7 +285,7 @@ public class ExternalSyncTests : IDisposable
         Assert.Contains(uncovered, u => u.Type == UncoveredChangeType.StyleDefinition);
     }
 
-    [SkippableFact]
+    [Fact]
     public void SyncExternalChanges_IncludesUncoveredChanges()
     {
         // Arrange
@@ -310,7 +308,7 @@ public class ExternalSyncTests : IDisposable
 
     #region History Display Tests
 
-    [SkippableFact]
+    [Fact]
     public void GetHistory_ShowsExternalSyncEntriesDistinctly()
     {
         // Arrange
@@ -339,7 +337,7 @@ public class ExternalSyncTests : IDisposable
         Assert.NotEmpty(syncEntry.SyncSummary.SourcePath);
     }
 
-    [SkippableFact]
+    [Fact]
     public void ExternalSyncSummary_ContainsExpectedFields()
     {
         // Arrange
@@ -364,7 +362,7 @@ public class ExternalSyncTests : IDisposable
 
     #region WAL Entry Serialization Tests
 
-    [SkippableFact]
+    [Fact]
     public void WalEntry_ExternalSync_SerializesAndDeserializesCorrectly()
     {
         // Arrange
@@ -535,7 +533,6 @@ public class ExternalSyncTests : IDisposable
 
     private DocxSession OpenSession(string filePath)
     {
-        Skip.If(TestHelpers.IsRemoteStorage, "Requires local file storage");
         var session = _sessionManager.Open(filePath);
         _sessions.Add(session);
         return session;

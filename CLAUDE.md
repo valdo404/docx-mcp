@@ -8,8 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build (requires .NET 10 SDK)
 dotnet build
 
-# Run unit tests (xUnit, ~323 tests)
+# Run unit tests (xUnit, ~428 tests)
 dotnet test tests/DocxMcp.Tests/
+
+# Run tests with Cloudflare R2 backend (dual-server mode)
+# 1. Get credentials: source infra/env-setup.sh
+# 2. Build: cargo build --release -p docx-storage-cloudflare
+# 3. Launch server (in background):
+#    CLOUDFLARE_ACCOUNT_ID=... R2_BUCKET_NAME=... R2_ACCESS_KEY_ID=... \
+#    R2_SECRET_ACCESS_KEY=... GRPC_PORT=50052 \
+#    ./target/release/docx-storage-cloudflare &
+# 4. Run tests:
+STORAGE_GRPC_URL=http://localhost:50052 dotnet test tests/DocxMcp.Tests/
 
 # Run a single test by name
 dotnet test tests/DocxMcp.Tests/ --filter "FullyQualifiedName~TestMethodName"
@@ -48,7 +58,23 @@ MCP stdio / CLI command
     → SessionManager (session lifecycle + undo/redo + WAL coordination)
       → DocxSession (in-memory MemoryStream + WordprocessingDocument)
         → Open XML SDK (DocumentFormat.OpenXml)
+    → SyncManager (file sync + auto-save, caller-orchestrated)
 ```
+
+### Dual-Server Storage Architecture (`src/DocxMcp.Grpc/`)
+
+Storage is split into two interfaces for dual-server deployment:
+
+- **`IHistoryStorage`** — Sessions, WAL, index, checkpoints. Maps to `StorageService` gRPC. Can be remote (Cloudflare R2) or local embedded.
+- **`ISyncStorage`** — File sync + filesystem watch. Maps to `SourceSyncService` + `ExternalWatchService` gRPC. Always local (embedded staticlib).
+
+Implemented by `HistoryStorageClient` and `SyncStorageClient`.
+
+**Embedded mode** (no `STORAGE_GRPC_URL`): Both use in-memory channel via `NativeStorage.Init()` + `InMemoryPipeStream` (P/Invoke to Rust staticlib).
+
+**Dual mode** (`STORAGE_GRPC_URL` set): `IHistoryStorage` → remote gRPC, `ISyncStorage` → local embedded staticlib. Auto-save orchestration is caller-side: after each mutation, tool classes call `sync.MaybeAutoSave()`.
+
+The Rust storage server binary (`dist/{platform}/docx-storage-local`) is auto-launched by `GrpcLauncher` via Unix socket. **After modifying Rust code, rebuild and copy**: `cargo build --release -p docx-storage-local && cp target/release/docx-storage-local dist/macos-arm64/`
 
 ### Typed Path System (`src/DocxMcp/Paths/`)
 
@@ -84,10 +110,11 @@ Tools use attribute-based registration with DI:
 public sealed class SomeTools
 {
     [McpServerTool(Name = "tool_name"), Description("...")]
-    public static string ToolMethod(SessionManager sessions, string param) { ... }
+    public static string ToolMethod(SessionManager sessions, SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker, string param) { ... }
 }
 ```
-`SessionManager` and other services are auto-injected from the DI container.
+`SessionManager`, `SyncManager`, and `ExternalChangeTracker` are auto-injected from the DI container. Mutation tools call `sync.MaybeAutoSave()` after `sessions.AppendWal()`.
 
 ### Environment Variables
 
@@ -97,6 +124,7 @@ public sealed class SomeTools
 | `DOCX_CHECKPOINT_INTERVAL` | `10` | Edits between checkpoints |
 | `DOCX_WAL_COMPACT_THRESHOLD` | `50` | WAL entries before compaction |
 | `DOCX_AUTO_SAVE` | `true` | Auto-save to source file after each edit |
+| `STORAGE_GRPC_URL` | _(unset)_ | Remote gRPC URL for history storage (enables dual-server mode) |
 
 ## Key Conventions
 

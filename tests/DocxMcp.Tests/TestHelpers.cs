@@ -11,13 +11,6 @@ internal static class TestHelpers
     private static string? _testStorageDir;
 
     /// <summary>
-    /// True when tests run against a remote gRPC storage (STORAGE_GRPC_URL set).
-    /// Tests that require local-file behavior should skip in this mode.
-    /// </summary>
-    public static bool IsRemoteStorage =>
-        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("STORAGE_GRPC_URL"));
-
-    /// <summary>
     /// Create a SessionManager backed by the gRPC storage server.
     /// Auto-launches the Rust storage server if not already running.
     /// Uses a unique tenant ID per test to ensure isolation.
@@ -101,12 +94,29 @@ internal static class TestHelpers
         var options = StorageClientOptions.FromEnvironment();
         options.LocalStorageDir = _testStorageDir;
 
-        var launcher = new GrpcLauncher(options, NullLogger<GrpcLauncher>.Instance);
-        var channel = HistoryStorageClient.CreateChannelAsync(options, launcher)
-            .GetAwaiter().GetResult();
+        if (!string.IsNullOrEmpty(options.ServerUrl))
+        {
+            // Dual-server mode: history → remote STORAGE_GRPC_URL, sync → local embedded
+            var remoteChannel = HistoryStorageClient.CreateChannelAsync(options, launcher: null)
+                .GetAwaiter().GetResult();
+            _sharedHistoryStorage = new HistoryStorageClient(remoteChannel, NullLogger<HistoryStorageClient>.Instance);
 
-        _sharedHistoryStorage = new HistoryStorageClient(channel, NullLogger<HistoryStorageClient>.Instance);
-        _sharedSyncStorage = new SyncStorageClient(channel, NullLogger<SyncStorageClient>.Instance);
+            // Local embedded server for sync (always local file operations)
+            var localOptions = new StorageClientOptions { LocalStorageDir = _testStorageDir };
+            var localLauncher = new GrpcLauncher(localOptions, NullLogger<GrpcLauncher>.Instance);
+            var localChannel = HistoryStorageClient.CreateChannelAsync(localOptions, localLauncher)
+                .GetAwaiter().GetResult();
+            _sharedSyncStorage = new SyncStorageClient(localChannel, NullLogger<SyncStorageClient>.Instance);
+        }
+        else
+        {
+            // Embedded mode: single local server for both
+            var launcher = new GrpcLauncher(options, NullLogger<GrpcLauncher>.Instance);
+            var channel = HistoryStorageClient.CreateChannelAsync(options, launcher)
+                .GetAwaiter().GetResult();
+            _sharedHistoryStorage = new HistoryStorageClient(channel, NullLogger<HistoryStorageClient>.Instance);
+            _sharedSyncStorage = new SyncStorageClient(channel, NullLogger<SyncStorageClient>.Instance);
+        }
     }
 
     /// <summary>
