@@ -28,10 +28,6 @@ pub struct Config {
     /// R2 secret access key (for S3-compatible API)
     #[arg(long, env = "R2_SECRET_ACCESS_KEY")]
     pub r2_secret_access_key: String,
-
-    /// Polling interval for external watch (seconds)
-    #[arg(long, default_value = "30", env = "WATCH_POLL_INTERVAL")]
-    pub watch_poll_interval_secs: u32,
 }
 
 impl Config {

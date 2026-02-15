@@ -37,23 +37,12 @@ anyhow.workspace = true
 
 # Async utilities
 async-trait.workspace = true
-futures.workspace = true
 
 # Time
 chrono.workspace = true
 
-# UUID
-uuid = { version = "1", features = ["v4"] }
-
 # CLI
 clap.workspace = true
-
-# Concurrent data structures
-dashmap = "6"
-
-# Crypto (for SHA256 hash)
-sha2.workspace = true
-hex.workspace = true
 
 # Base64 encoding
 base64 = "0.22"
@@ -67,7 +56,6 @@ tonic-build = "0.13"
 [dev-dependencies]
 tempfile.workspace = true
 tokio-test = "0.4"
-wiremock = "0.6"
 
 [[bin]]
 name = "docx-storage-cloudflare"

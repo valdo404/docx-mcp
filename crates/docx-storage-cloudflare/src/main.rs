@@ -1,11 +1,7 @@
 mod config;
 mod error;
 mod service;
-mod service_sync;
-mod service_watch;
 mod storage;
-mod sync;
-mod watch;
 
 use std::sync::Arc;
 
@@ -20,15 +16,9 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
-use service::proto::external_watch_service_server::ExternalWatchServiceServer;
-use service::proto::source_sync_service_server::SourceSyncServiceServer;
 use service::proto::storage_service_server::StorageServiceServer;
 use service::StorageServiceImpl;
-use service_sync::SourceSyncServiceImpl;
-use service_watch::ExternalWatchServiceImpl;
 use storage::R2Storage;
-use sync::R2SyncBackend;
-use watch::PollingWatchBackend;
 
 /// File descriptor set for gRPC reflection
 pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("storage_descriptor");
@@ -46,7 +36,6 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting docx-storage-cloudflare server");
     info!("  R2 bucket: {}", config.r2_bucket_name);
-    info!("  Poll interval: {} secs", config.watch_poll_interval_secs);
 
     // Create S3 client for R2
     let credentials = Credentials::new(
@@ -67,36 +56,15 @@ async fn main() -> anyhow::Result<()> {
 
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
-    // Create storage backend (R2 only — no KV dependency)
+    // Create storage backend (R2 only — no sync/watch, Cloudflare is just a WAL/session store)
     let storage = Arc::new(R2Storage::new(
-        s3_client.clone(),
+        s3_client,
         config.r2_bucket_name.clone(),
     ));
 
-    // Create sync backend (R2)
-    let sync_backend: Arc<dyn docx_storage_core::SyncBackend> = Arc::new(R2SyncBackend::new(
-        s3_client.clone(),
-        config.r2_bucket_name.clone(),
-        storage.clone(),
-    ));
-
-    // Create watch backend (polling-based)
-    let watch_backend: Arc<dyn docx_storage_core::WatchBackend> =
-        Arc::new(PollingWatchBackend::new(
-            s3_client,
-            config.r2_bucket_name.clone(),
-            config.watch_poll_interval_secs,
-        ));
-
-    // Create gRPC services
+    // Create gRPC service (StorageService only)
     let storage_service = StorageServiceImpl::new(storage);
     let storage_svc = StorageServiceServer::new(storage_service);
-
-    let sync_service = SourceSyncServiceImpl::new(sync_backend);
-    let sync_svc = SourceSyncServiceServer::new(sync_service);
-
-    let watch_service = ExternalWatchServiceImpl::new(watch_backend);
-    let watch_svc = ExternalWatchServiceServer::new(watch_service);
 
     // Create shutdown signal
     let mut shutdown_rx = create_shutdown_signal();
@@ -116,8 +84,6 @@ async fn main() -> anyhow::Result<()> {
     Server::builder()
         .add_service(reflection_svc)
         .add_service(storage_svc)
-        .add_service(sync_svc)
-        .add_service(watch_svc)
         .serve_with_shutdown(addr, shutdown_future)
         .await?;
 
