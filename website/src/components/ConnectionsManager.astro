@@ -61,7 +61,7 @@ const connectBasePath = '/api/oauth/connect';
     </div>
 
     <div class="conn-list" id="conn-list">
-      <div class="conn-loading">Loading...</div>
+      <p class="conn-loading-text">Loading...</p>
     </div>
 
     <!-- Add Connection Modal -->
@@ -196,25 +196,27 @@ const connectBasePath = '/api/oauth/connect';
           const statusText = isExpired ? this.t.expired : this.t.connected;
 
           return `
-            <div class="conn-item" data-id="${conn.id}">
+            <div class="conn-item">
               <div class="conn-info">
                 <div class="conn-name">
                   <span class="conn-icon">${icon}</span>
-                  <span class="conn-provider">${providerName}</span>
-                  <span class="conn-account">${conn.displayName}</span>
+                  <strong>${providerName}</strong>
+                  <span class="conn-separator">—</span>
+                  <span>${conn.displayName}</span>
                 </div>
                 <div class="conn-meta">
-                  <span class="conn-status ${statusClass}">${statusText}</span>
-                  <span>${this.t.added}: ${this.formatDate(conn.createdAt)}</span>
+                  <span class="${statusClass}">${statusText}</span>
+                  <span class="conn-dot">·</span>
+                  <span>${this.t.added} ${this.formatDate(conn.createdAt)}</span>
                 </div>
               </div>
-              <button class="btn btn-danger btn-small delete-conn" data-id="${conn.id}">${this.t.delete}</button>
+              <button class="conn-delete" data-id="${conn.id}">${this.t.delete}</button>
             </div>
           `;
         })
         .join('');
 
-      list.querySelectorAll('.delete-conn').forEach((btn) => {
+      list.querySelectorAll('.conn-delete').forEach((btn) => {
         btn.addEventListener('click', async (e) => {
           const id = (e.target as HTMLElement).dataset.id;
           if (id && confirm(this.t.deleteConfirm)) {
@@ -283,64 +285,95 @@ const connectBasePath = '/api/oauth/connect';
     gap: var(--spacing-m);
   }
 
-  .conn-loading,
-  .conn-empty {
+  /* Dynamic content injected via JS — needs :global() for scoped styles */
+  .conn-loading-text {
     text-align: center;
     padding: var(--spacing-xl);
     color: var(--text-tertiary);
     font-size: var(--font-size-300);
   }
 
-  .conn-item {
+  .conn-list :global(.conn-empty) {
+    text-align: center;
+    padding: var(--spacing-xl);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-300);
+  }
+
+  .conn-list :global(.conn-item) {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--spacing-l);
+    padding: var(--spacing-l) var(--spacing-xl);
     background: var(--bg-layer-3);
     border-radius: var(--radius-m);
-    gap: var(--spacing-l);
+    gap: var(--spacing-xl);
   }
 
-  .conn-info {
+  .conn-list :global(.conn-info) {
     flex: 1;
     min-width: 0;
   }
 
-  .conn-name {
+  .conn-list :global(.conn-name) {
     display: flex;
     align-items: center;
-    gap: var(--spacing-m);
-    margin-bottom: var(--spacing-xs);
+    gap: var(--spacing-s);
+    margin-bottom: var(--spacing-s);
+    font-size: var(--font-size-300);
   }
 
-  .conn-icon {
+  .conn-list :global(.conn-icon) {
     display: flex;
     align-items: center;
     flex-shrink: 0;
+    margin-right: var(--spacing-xs);
   }
 
-  .conn-provider {
-    font-weight: var(--font-weight-semibold);
+  .conn-list :global(.conn-separator) {
+    color: var(--text-tertiary);
+    margin: 0 var(--spacing-xxs);
   }
 
-  .conn-account {
-    color: var(--text-secondary);
-    font-size: var(--font-size-200);
-  }
-
-  .conn-meta {
+  .conn-list :global(.conn-meta) {
     display: flex;
-    gap: var(--spacing-xl);
+    align-items: center;
+    gap: var(--spacing-s);
     font-size: var(--font-size-200);
     color: var(--text-tertiary);
   }
 
-  .conn-status {
+  .conn-list :global(.conn-dot) {
+    color: var(--text-tertiary);
+  }
+
+  .conn-list :global(.status-connected) {
+    color: var(--text-success, #16a34a);
     font-weight: var(--font-weight-medium);
   }
 
-  .status-connected { color: var(--text-success, #16a34a); }
-  .status-expired { color: var(--text-error, #dc2626); }
+  .conn-list :global(.status-expired) {
+    color: var(--text-error, #dc2626);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .conn-list :global(.conn-delete) {
+    padding: var(--spacing-s) var(--spacing-l);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-error, #dc2626);
+    border: 1px solid var(--border-error, rgba(220, 38, 38, 0.3));
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .conn-list :global(.conn-delete:hover) {
+    background: rgba(220, 38, 38, 0.1);
+    border-color: var(--border-error, #dc2626);
+  }
 
   /* Provider grid in modal */
   .provider-grid {
@@ -388,12 +421,10 @@ const connectBasePath = '/api/oauth/connect';
     border-radius: var(--radius-s);
   }
 
-  /* Shared button styles */
-  .btn {
+  .btn-primary {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: var(--spacing-s);
     padding: var(--spacing-m) var(--spacing-xl);
     border-radius: var(--radius-s);
     font-size: var(--font-size-300);
@@ -402,29 +433,27 @@ const connectBasePath = '/api/oauth/connect';
     cursor: pointer;
     text-decoration: none;
     border: none;
+    background: var(--brand-primary);
+    color: white;
   }
-
-  .btn-primary { background: var(--brand-primary); color: white; }
   .btn-primary:hover { opacity: 0.9; }
 
   .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-m) var(--spacing-xl);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    transition: all 0.15s ease;
+    cursor: pointer;
+    text-decoration: none;
     background: transparent;
     color: var(--text-primary);
     border: 1px solid var(--border-default);
   }
   .btn-secondary:hover { background: var(--bg-layer-3); }
-
-  .btn-danger {
-    background: transparent;
-    color: var(--text-error, #dc2626);
-    border: 1px solid var(--border-error, #dc2626);
-  }
-  .btn-danger:hover { background: rgba(220, 38, 38, 0.1); }
-
-  .btn-small {
-    padding: var(--spacing-s) var(--spacing-m);
-    font-size: var(--font-size-200);
-  }
 
   /* Modal */
   .modal {
