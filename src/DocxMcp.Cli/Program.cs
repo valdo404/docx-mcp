@@ -121,7 +121,7 @@ try
         "close" => DocumentTools.DocumentClose(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
         "save" => DocumentTools.DocumentSave(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
         "set-source" => DocumentTools.DocumentSetSource(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
-            Require(args, 2, "path"), !HasFlag(args, "--no-auto-sync")),
+            Require(args, 2, "path"), auto_sync: !HasFlag(args, "--no-auto-sync")),
         "snapshot" => DocumentTools.DocumentSnapshot(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
         "query" => QueryTool.Query(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")), Require(args, 2, "path"),

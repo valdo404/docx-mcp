@@ -61,6 +61,20 @@ public sealed class SessionManager
         return session;
     }
 
+    public DocxSession OpenFromBytes(byte[] data, string? displayPath = null)
+    {
+        var id = Guid.NewGuid().ToString("N")[..12];
+        var session = DocxSession.FromBytes(data, id, displayPath);
+        if (!_sessions.TryAdd(session.Id, session))
+        {
+            session.Dispose();
+            throw new InvalidOperationException("Session ID collision — this should not happen.");
+        }
+
+        PersistNewSessionAsync(session).GetAwaiter().GetResult();
+        return session;
+    }
+
     public DocxSession Create()
     {
         var session = DocxSession.Create();

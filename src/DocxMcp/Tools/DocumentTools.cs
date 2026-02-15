@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.ExternalChanges;
+using DocxMcp.Grpc;
 
 namespace DocxMcp.Tools;
 
@@ -13,38 +14,76 @@ public sealed class DocumentTools
     [McpServerTool(Name = "document_open"), Description(
         "Open an existing DOCX file or create a new empty document. " +
         "Returns a session ID to use with other tools. " +
-        "If path is omitted, creates a new empty document. " +
+        "If all parameters are omitted, creates a new empty document. " +
         "Use list_connections and list_connection_files to discover available files before opening. " +
-        "For existing files, external changes will be monitored automatically.")]
+        "For local files, provide path only. " +
+        "For cloud files (Google Drive), provide source_type, connection_id, file_id, and path.")]
     public static string DocumentOpen(
         TenantScope tenant,
         SyncManager sync,
         ExternalChangeTracker? externalChangeTracker,
-        [Description("Absolute path to the .docx file to open. Omit to create a new empty document.")]
-        string? path = null)
+        [Description("Absolute path for local files, or display path for cloud files.")]
+        string? path = null,
+        [Description("Source type: 'local', 'google_drive'. Omit for local or new document.")]
+        string? source_type = null,
+        [Description("Connection ID from list_connections (required for cloud sources).")]
+        string? connection_id = null,
+        [Description("Provider file ID from list_connection_files (required for cloud sources).")]
+        string? file_id = null)
     {
         var sessions = tenant.Sessions;
-        var session = path is not null
-            ? sessions.Open(path)
-            : sessions.Create();
 
-        // Register source + watch + tracker if we have a source file
-        if (session.SourcePath is not null)
+        // Determine source type
+        var type = source_type switch
         {
-            sync.RegisterAndWatch(tenant.TenantId, session.Id, session.SourcePath, autoSync: true);
-            externalChangeTracker?.RegisterSession(session.Id);
+            "google_drive" => SourceType.GoogleDrive,
+            "onedrive" => SourceType.Onedrive,
+            "local" => SourceType.LocalFile,
+            null => SourceType.LocalFile,
+            _ => throw new ArgumentException($"Unknown source_type: {source_type}")
+        };
+
+        DocxSession session;
+        string sourceDescription;
+
+        if (type != SourceType.LocalFile && file_id is not null)
+        {
+            // Cloud source: download bytes, create session, register source
+            var data = sync.DownloadFile(tenant.TenantId, type, connection_id, path ?? file_id, file_id);
+            session = sessions.OpenFromBytes(data, path ?? file_id);
+
+            // Register typed source for sync-back
+            sync.SetSource(tenant.TenantId, session.Id, type, connection_id, path ?? file_id, file_id, autoSync: true);
+            sessions.SetSourcePath(session.Id, path ?? file_id);
+
+            sourceDescription = $" from {source_type}://{path ?? file_id}";
+        }
+        else if (path is not null)
+        {
+            // Local file
+            session = sessions.Open(path);
+
+            if (session.SourcePath is not null)
+            {
+                sync.RegisterAndWatch(tenant.TenantId, session.Id, session.SourcePath, autoSync: true);
+                externalChangeTracker?.RegisterSession(session.Id);
+            }
+
+            sourceDescription = $" from '{session.SourcePath}'";
+        }
+        else
+        {
+            // New empty document
+            session = sessions.Create();
+            sourceDescription = " (new document)";
         }
 
-        var source = session.SourcePath is not null
-            ? $" from '{session.SourcePath}'"
-            : " (new document)";
-
-        return $"Opened document{source}. Session ID: {session.Id}";
+        return $"Opened document{sourceDescription}. Session ID: {session.Id}";
     }
 
     [McpServerTool(Name = "document_set_source"), Description(
-        "Set or change the file path where a document will be saved. " +
-        "Use this for 'Save As' operations or to set a save path for new documents. " +
+        "Set or change where a document will be saved. " +
+        "Use this for 'Save As' operations or to set a save target for new documents. " +
         "Use list_connections to discover available storage targets. " +
         "If auto_sync is true (default), the document will be auto-saved after each edit.")]
     public static string DocumentSetSource(
@@ -53,15 +92,33 @@ public sealed class DocumentTools
         ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")]
         string doc_id,
-        [Description("Absolute path where the document should be saved.")]
+        [Description("Path (absolute for local, display path for cloud).")]
         string path,
+        [Description("Source type: 'local', 'google_drive'. Default: local.")]
+        string? source_type = null,
+        [Description("Connection ID from list_connections (required for cloud sources).")]
+        string? connection_id = null,
+        [Description("Provider file ID (required for cloud sources).")]
+        string? file_id = null,
         [Description("Enable auto-save after each edit. Default true.")]
         bool auto_sync = true)
     {
-        sync.SetSource(tenant.TenantId, doc_id, path, auto_sync);
+        var type = source_type switch
+        {
+            "google_drive" => SourceType.GoogleDrive,
+            "onedrive" => SourceType.Onedrive,
+            "local" => SourceType.LocalFile,
+            null => SourceType.LocalFile,
+            _ => throw new ArgumentException($"Unknown source_type: {source_type}")
+        };
+
+        sync.SetSource(tenant.TenantId, doc_id, type, connection_id, path, file_id, auto_sync);
         tenant.Sessions.SetSourcePath(doc_id, path);
-        externalChangeTracker?.RegisterSession(doc_id);
-        return $"Source set to '{path}' for session '{doc_id}'. Auto-sync: {(auto_sync ? "enabled" : "disabled")}.";
+
+        if (type == SourceType.LocalFile)
+            externalChangeTracker?.RegisterSession(doc_id);
+
+        return $"Source set to '{path}' for session '{doc_id}'. Type: {type}. Auto-sync: {(auto_sync ? "enabled" : "disabled")}.";
     }
 
     [McpServerTool(Name = "document_save"), Description(
