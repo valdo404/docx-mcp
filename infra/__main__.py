@@ -1,13 +1,15 @@
-"""Cloudflare infrastructure for docx-mcp."""
+"""Cloudflare + GCP infrastructure for docx-mcp."""
 
 import hashlib
 import json
 
 import pulumi
 import pulumi_cloudflare as cloudflare
+import pulumi_gcp as gcp
 
 config = pulumi.Config()
 account_id = config.require("accountId")
+gcp_project = config.get("gcpProject") or "lv-project-313715"
 
 # =============================================================================
 # R2 — Document storage (DOCX baselines, WAL, checkpoints)
@@ -83,6 +85,28 @@ session_kv = cloudflare.WorkersKvNamespace(
 )
 
 # =============================================================================
+# GCP — Google Drive API (for OAuth file sync)
+# =============================================================================
+
+drive_api = gcp.projects.Service(
+    "drive-api",
+    project=gcp_project,
+    service="drive.googleapis.com",
+    disable_on_destroy=False,
+)
+
+# OAuth Client ID — must be created manually in GCP Console (no API available since
+# the IAP OAuth Admin API was deprecated in July 2025 with no replacement).
+#   1. Go to: https://console.cloud.google.com/apis/credentials?project=lv-project-313715
+#   2. Create OAuth 2.0 Client ID (type: Web application)
+#   3. Add redirect URI: https://docx.lapoule.dev/api/oauth/callback/google-drive
+#   4. Store credentials:
+#        pulumi config set --secret docx-mcp-infra:oauthGoogleClientId "<CLIENT_ID>"
+#        pulumi config set --secret docx-mcp-infra:oauthGoogleClientSecret "<CLIENT_SECRET>"
+oauth_google_client_id = config.get_secret("oauthGoogleClientId") or ""
+oauth_google_client_secret = config.get_secret("oauthGoogleClientSecret") or ""
+
+# =============================================================================
 # Outputs
 # =============================================================================
 
@@ -96,3 +120,5 @@ pulumi.export("r2_secret_access_key", pulumi.Output.secret(r2_secret_access_key)
 pulumi.export("storage_kv_namespace_id", storage_kv.id)
 pulumi.export("auth_d1_database_id", auth_db.id)
 pulumi.export("session_kv_namespace_id", session_kv.id)
+pulumi.export("oauth_google_client_id", pulumi.Output.secret(oauth_google_client_id))
+pulumi.export("oauth_google_client_secret", pulumi.Output.secret(oauth_google_client_secret))
