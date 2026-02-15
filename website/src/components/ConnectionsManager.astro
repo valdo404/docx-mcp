@@ -1,0 +1,466 @@
+---
+interface Props {
+  lang: 'fr' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const translations = {
+  fr: {
+    title: 'Connexions externes',
+    description: 'Connectez vos espaces de stockage pour synchroniser vos documents.',
+    add: 'Ajouter une connexion',
+    provider: 'Fournisseur',
+    selectProvider: 'Sélectionnez un fournisseur',
+    googleDrive: 'Google Drive',
+    onedrive: 'OneDrive',
+    sharepoint: 'SharePoint',
+    comingSoon: 'Bientôt',
+    connect: 'Connecter',
+    cancel: 'Annuler',
+    delete: 'Déconnecter',
+    deleteConfirm: 'Êtes-vous sûr de vouloir supprimer cette connexion ?',
+    empty: 'Aucune connexion configurée',
+    connected: 'Connecté',
+    expired: 'Expiré',
+    added: 'Ajouté le',
+  },
+  en: {
+    title: 'External connections',
+    description: 'Connect your storage providers to sync your documents.',
+    add: 'Add connection',
+    provider: 'Provider',
+    selectProvider: 'Select a provider',
+    googleDrive: 'Google Drive',
+    onedrive: 'OneDrive',
+    sharepoint: 'SharePoint',
+    comingSoon: 'Soon',
+    connect: 'Connect',
+    cancel: 'Cancel',
+    delete: 'Disconnect',
+    deleteConfirm: 'Are you sure you want to remove this connection?',
+    empty: 'No connections configured',
+    connected: 'Connected',
+    expired: 'Expired',
+    added: 'Added',
+  },
+};
+
+const t = translations[lang];
+const connectBasePath = '/api/oauth/connect';
+---
+
+<connections-manager data-lang={lang} data-translations={JSON.stringify(t)} data-connect-base={connectBasePath}>
+  <div class="conn-section">
+    <div class="conn-header">
+      <div>
+        <h2>{t.title}</h2>
+        <p class="conn-description">{t.description}</p>
+      </div>
+      <button class="btn btn-primary" id="add-conn-btn">{t.add}</button>
+    </div>
+
+    <div class="conn-list" id="conn-list">
+      <div class="conn-loading">Loading...</div>
+    </div>
+
+    <!-- Add Connection Modal -->
+    <dialog id="add-conn-modal" class="modal">
+      <div class="modal-content">
+        <h3>{t.add}</h3>
+        <div class="provider-grid">
+          <a href={`${connectBasePath}/google-drive`} class="provider-option" data-provider="google_drive">
+            <svg viewBox="0 0 24 24" class="provider-icon"><path d="M7.71 3.5L1.15 15l3.43 5.97L10.99 9.47 7.71 3.5zm1.14 0l6.36 11.03h6.64L15.5 3.5H8.85zM14.93 15.53H1.77L5.2 21.5h12.6l-2.87-5.97z" fill="#4285F4"/></svg>
+            <span>{t.googleDrive}</span>
+          </a>
+          <div class="provider-option disabled">
+            <svg viewBox="0 0 24 24" class="provider-icon"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z" fill="#0078d4"/></svg>
+            <span>{t.onedrive}</span>
+            <span class="badge-soon">{t.comingSoon}</span>
+          </div>
+          <div class="provider-option disabled">
+            <svg viewBox="0 0 24 24" class="provider-icon"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z" fill="#038387"/></svg>
+            <span>{t.sharepoint}</span>
+            <span class="badge-soon">{t.comingSoon}</span>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="cancel-conn">{t.cancel}</button>
+        </div>
+      </div>
+    </dialog>
+  </div>
+</connections-manager>
+
+<script>
+  interface ConnectionInfo {
+    id: string;
+    provider: string;
+    displayName: string;
+    providerAccountId: string | null;
+    scopes: string;
+    tokenExpiresAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }
+
+  interface Translations {
+    title: string;
+    description: string;
+    add: string;
+    provider: string;
+    selectProvider: string;
+    googleDrive: string;
+    onedrive: string;
+    sharepoint: string;
+    comingSoon: string;
+    connect: string;
+    cancel: string;
+    delete: string;
+    deleteConfirm: string;
+    empty: string;
+    connected: string;
+    expired: string;
+    added: string;
+  }
+
+  const providerLabels: Record<string, keyof Translations> = {
+    google_drive: 'googleDrive',
+    onedrive: 'onedrive',
+    sharepoint: 'sharepoint',
+  };
+
+  const providerIcons: Record<string, string> = {
+    google_drive: `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M7.71 3.5L1.15 15l3.43 5.97L10.99 9.47 7.71 3.5zm1.14 0l6.36 11.03h6.64L15.5 3.5H8.85zM14.93 15.53H1.77L5.2 21.5h12.6l-2.87-5.97z" fill="#4285F4"/></svg>`,
+    onedrive: `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z" fill="#0078d4"/></svg>`,
+    sharepoint: `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z" fill="#038387"/></svg>`,
+  };
+
+  class ConnectionsManager extends HTMLElement {
+    private t!: Translations;
+
+    async connectedCallback() {
+      this.t = JSON.parse(this.dataset.translations || '{}');
+
+      // Check for OAuth success/error in URL
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('oauth_success') || params.get('oauth_error')) {
+        // Clean up URL
+        const url = new URL(window.location.href);
+        url.searchParams.delete('oauth_success');
+        url.searchParams.delete('oauth_error');
+        window.history.replaceState({}, '', url.toString());
+      }
+
+      await this.loadConnections();
+      this.setupListeners();
+    }
+
+    setupListeners() {
+      const addBtn = this.querySelector('#add-conn-btn');
+      const modal = this.querySelector('#add-conn-modal') as HTMLDialogElement;
+      const cancelBtn = this.querySelector('#cancel-conn');
+
+      addBtn?.addEventListener('click', () => modal?.showModal());
+      cancelBtn?.addEventListener('click', () => modal?.close());
+    }
+
+    async loadConnections() {
+      try {
+        const res = await fetch('/api/oauth/connections');
+        if (!res.ok) throw new Error('Failed to load connections');
+        const connections: ConnectionInfo[] = await res.json();
+        this.renderConnections(connections);
+      } catch (e) {
+        console.error('Failed to load connections:', e);
+        this.renderConnections([]);
+      }
+    }
+
+    renderConnections(connections: ConnectionInfo[]) {
+      const list = this.querySelector('#conn-list');
+      if (!list) return;
+
+      if (connections.length === 0) {
+        list.innerHTML = `<div class="conn-empty">${this.t.empty}</div>`;
+        return;
+      }
+
+      list.innerHTML = connections
+        .map((conn) => {
+          const labelKey = providerLabels[conn.provider] || 'googleDrive';
+          const providerName = this.t[labelKey];
+          const icon = providerIcons[conn.provider] || '';
+          const isExpired = conn.tokenExpiresAt && new Date(conn.tokenExpiresAt) < new Date();
+          const statusClass = isExpired ? 'status-expired' : 'status-connected';
+          const statusText = isExpired ? this.t.expired : this.t.connected;
+
+          return `
+            <div class="conn-item" data-id="${conn.id}">
+              <div class="conn-info">
+                <div class="conn-name">
+                  <span class="conn-icon">${icon}</span>
+                  <span class="conn-provider">${providerName}</span>
+                  <span class="conn-account">${conn.displayName}</span>
+                </div>
+                <div class="conn-meta">
+                  <span class="conn-status ${statusClass}">${statusText}</span>
+                  <span>${this.t.added}: ${this.formatDate(conn.createdAt)}</span>
+                </div>
+              </div>
+              <button class="btn btn-danger btn-small delete-conn" data-id="${conn.id}">${this.t.delete}</button>
+            </div>
+          `;
+        })
+        .join('');
+
+      list.querySelectorAll('.delete-conn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const id = (e.target as HTMLElement).dataset.id;
+          if (id && confirm(this.t.deleteConfirm)) {
+            await this.deleteConnection(id);
+          }
+        });
+      });
+    }
+
+    formatDate(iso: string): string {
+      return new Date(iso).toLocaleDateString(this.dataset.lang === 'fr' ? 'fr-FR' : 'en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    }
+
+    async deleteConnection(id: string) {
+      try {
+        const res = await fetch('/api/oauth/connections', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId: id }),
+        });
+        if (!res.ok) throw new Error('Failed to delete connection');
+        await this.loadConnections();
+      } catch (e) {
+        console.error('Failed to delete connection:', e);
+      }
+    }
+  }
+
+  customElements.define('connections-manager', ConnectionsManager);
+</script>
+
+<style>
+  .conn-section {
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: var(--spacing-xxl);
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .conn-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .conn-header h2 {
+    font-size: var(--font-size-500);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xs);
+  }
+
+  .conn-description {
+    font-size: var(--font-size-300);
+    color: var(--text-secondary);
+  }
+
+  .conn-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-m);
+  }
+
+  .conn-loading,
+  .conn-empty {
+    text-align: center;
+    padding: var(--spacing-xl);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-300);
+  }
+
+  .conn-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-l);
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-m);
+    gap: var(--spacing-l);
+  }
+
+  .conn-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .conn-name {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-m);
+    margin-bottom: var(--spacing-xs);
+  }
+
+  .conn-icon {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .conn-provider {
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .conn-account {
+    color: var(--text-secondary);
+    font-size: var(--font-size-200);
+  }
+
+  .conn-meta {
+    display: flex;
+    gap: var(--spacing-xl);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+  }
+
+  .conn-status {
+    font-weight: var(--font-weight-medium);
+  }
+
+  .status-connected { color: var(--text-success, #16a34a); }
+  .status-expired { color: var(--text-error, #dc2626); }
+
+  /* Provider grid in modal */
+  .provider-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-m);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .provider-option {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-l);
+    padding: var(--spacing-l) var(--spacing-xl);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-m);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-decoration: none;
+    color: var(--text-primary);
+  }
+
+  a.provider-option:hover {
+    border-color: var(--brand-primary);
+    background: var(--bg-layer-3);
+  }
+
+  .provider-option.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .provider-icon {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+
+  .badge-soon {
+    margin-left: auto;
+    font-size: var(--font-size-100);
+    color: var(--text-tertiary);
+    background: var(--bg-layer-4);
+    padding: 2px 8px;
+    border-radius: var(--radius-s);
+  }
+
+  /* Shared button styles */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-s);
+    padding: var(--spacing-m) var(--spacing-xl);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    transition: all 0.15s ease;
+    cursor: pointer;
+    text-decoration: none;
+    border: none;
+  }
+
+  .btn-primary { background: var(--brand-primary); color: white; }
+  .btn-primary:hover { opacity: 0.9; }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+  }
+  .btn-secondary:hover { background: var(--bg-layer-3); }
+
+  .btn-danger {
+    background: transparent;
+    color: var(--text-error, #dc2626);
+    border: 1px solid var(--border-error, #dc2626);
+  }
+  .btn-danger:hover { background: rgba(220, 38, 38, 0.1); }
+
+  .btn-small {
+    padding: var(--spacing-s) var(--spacing-m);
+    font-size: var(--font-size-200);
+  }
+
+  /* Modal */
+  .modal {
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-l);
+    background: var(--bg-layer-2);
+    max-width: 480px;
+    width: 90%;
+  }
+
+  .modal::backdrop { background: rgba(0, 0, 0, 0.5); }
+
+  .modal-content { padding: var(--spacing-xxl); }
+
+  .modal-content h3 {
+    font-size: var(--font-size-500);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-m);
+  }
+
+  @media (max-width: 640px) {
+    .conn-item {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .conn-meta {
+      flex-direction: column;
+      gap: var(--spacing-xs);
+    }
+  }
+</style>
