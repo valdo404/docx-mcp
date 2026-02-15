@@ -107,6 +107,57 @@ oauth_google_client_id = config.get_secret("oauthGoogleClientId") or ""
 oauth_google_client_secret = config.get_secret("oauthGoogleClientSecret") or ""
 
 # =============================================================================
+# Cloudflare Pages — Website (secrets injection)
+# Import existing: pulumi import cloudflare:index/pagesProject:PagesProject docx-website <account_id>/docx-mcp-website
+# =============================================================================
+
+better_auth_secret = config.get_secret("betterAuthSecret") or ""
+oauth_github_client_id = config.get_secret("oauthGithubClientId") or ""
+oauth_github_client_secret = config.get_secret("oauthGithubClientSecret") or ""
+
+_pages_shared_config = {
+    "compatibility_date": "2026-01-16",
+    "compatibility_flags": ["nodejs_compat", "disable_nodejs_process_v2"],
+    "d1_databases": {"DB": {"id": auth_db.id}},
+    "kv_namespaces": {"SESSION": {"namespace_id": session_kv.id}},
+    "env_vars": {
+        "BETTER_AUTH_URL": {"type": "plain_text", "value": "https://docx.lapoule.dev"},
+        "GCS_BUCKET_NAME": {"type": "plain_text", "value": "docx-mcp-sessions"},
+    },
+    "fail_open": True,
+    "usage_model": "standard",
+}
+
+pages_project = cloudflare.PagesProject(
+    "docx-website",
+    account_id=account_id,
+    name="docx-mcp-website",
+    production_branch="main",
+    deployment_configs={
+        "production": {
+            **_pages_shared_config,
+            "env_vars": {
+                **_pages_shared_config["env_vars"],
+                "BETTER_AUTH_SECRET": {"type": "secret_text", "value": better_auth_secret},
+                "OAUTH_GITHUB_CLIENT_ID": {"type": "secret_text", "value": oauth_github_client_id},
+                "OAUTH_GITHUB_CLIENT_SECRET": {"type": "secret_text", "value": oauth_github_client_secret},
+                "OAUTH_GOOGLE_CLIENT_ID": {"type": "secret_text", "value": oauth_google_client_id},
+                "OAUTH_GOOGLE_CLIENT_SECRET": {"type": "secret_text", "value": oauth_google_client_secret},
+            },
+        },
+        "preview": {
+            **_pages_shared_config,
+            "env_vars": {
+                **_pages_shared_config["env_vars"],
+                "OAUTH_GOOGLE_CLIENT_ID": {"type": "secret_text", "value": oauth_google_client_id},
+                "OAUTH_GOOGLE_CLIENT_SECRET": {"type": "secret_text", "value": oauth_google_client_secret},
+            },
+        },
+    },
+    opts=pulumi.ResourceOptions(protect=True),
+)
+
+# =============================================================================
 # Outputs
 # =============================================================================
 
