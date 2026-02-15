@@ -148,7 +148,6 @@ impl D1Client {
     }
 
     /// List connections for a tenant and provider.
-    #[allow(dead_code)]
     pub async fn list_connections(
         &self,
         tenant_id: &str,

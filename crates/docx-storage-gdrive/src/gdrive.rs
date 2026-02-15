@@ -1,7 +1,6 @@
 //! Google Drive API v3 client wrapper.
 //!
 //! Token is passed per-call by the caller (TokenManager resolves it from D1).
-//! URI format: `gdrive://{connection_id}/{file_id}`
 
 use reqwest::Client;
 use serde::Deserialize;
@@ -21,6 +20,29 @@ pub struct FileMetadata {
     pub md5_checksum: Option<String>,
     #[serde(default)]
     pub head_revision_id: Option<String>,
+}
+
+/// A file entry from Drive API files.list.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveFileEntry {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub modified_time: Option<String>,
+}
+
+/// Response from Drive API files.list.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileListResponse {
+    #[serde(default)]
+    files: Vec<DriveFileEntry>,
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 /// Google Drive API client (stateless — token provided per-call).
@@ -65,7 +87,6 @@ impl GDriveClient {
     }
 
     /// Download file content from Google Drive.
-    #[allow(dead_code)]
     #[instrument(skip(self, token), level = "debug")]
     pub async fn download_file(
         &self,
@@ -128,45 +149,52 @@ impl GDriveClient {
         debug!("Updated file {} ({} bytes)", file_id, data.len());
         Ok(())
     }
-}
 
-/// Result of parsing a `gdrive://` URI.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GDriveUri {
-    pub connection_id: String,
-    pub file_id: String,
-}
-
-/// Parse a `gdrive://{connection_id}/{file_id}` URI.
-pub fn parse_gdrive_uri(uri: &str) -> Option<GDriveUri> {
-    let rest = uri.strip_prefix("gdrive://")?;
-    let (connection_id, file_id) = rest.split_once('/')?;
-    if connection_id.is_empty() || file_id.is_empty() {
-        return None;
-    }
-    Some(GDriveUri {
-        connection_id: connection_id.to_string(),
-        file_id: file_id.to_string(),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_gdrive_uri() {
-        assert_eq!(
-            parse_gdrive_uri("gdrive://conn-123/abc456"),
-            Some(GDriveUri {
-                connection_id: "conn-123".to_string(),
-                file_id: "abc456".to_string(),
-            })
+    /// List files in a folder on Google Drive.
+    /// Only returns .docx files and folders.
+    #[instrument(skip(self, token), level = "debug")]
+    pub async fn list_files(
+        &self,
+        token: &str,
+        parent_id: &str,
+        page_token: Option<&str>,
+        page_size: u32,
+    ) -> anyhow::Result<(Vec<DriveFileEntry>, Option<String>)> {
+        let query = format!(
+            "'{}' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document')",
+            parent_id
         );
-        assert_eq!(parse_gdrive_uri("gdrive://abc123"), None);
-        assert_eq!(parse_gdrive_uri("gdrive:///file"), None);
-        assert_eq!(parse_gdrive_uri("gdrive://conn/"), None);
-        assert_eq!(parse_gdrive_uri("s3://bucket/key"), None);
-        assert_eq!(parse_gdrive_uri(""), None);
+
+        let mut request = self
+            .http
+            .get("https://www.googleapis.com/drive/v3/files")
+            .bearer_auth(token)
+            .query(&[
+                ("q", query.as_str()),
+                ("fields", "nextPageToken,files(id,name,mimeType,size,modifiedTime)"),
+                ("pageSize", &page_size.to_string()),
+                ("orderBy", "folder,name"),
+            ]);
+
+        if let Some(pt) = page_token {
+            request = request.query(&[("pageToken", pt)]);
+        }
+
+        let resp = request.send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Google Drive list error {}: {}", status, body);
+        }
+
+        let list_response: FileListResponse = resp.json().await?;
+        debug!(
+            "Listed {} files in folder {}",
+            list_response.files.len(),
+            parent_id
+        );
+
+        Ok((list_response.files, list_response.next_page_token))
     }
 }

@@ -33,7 +33,7 @@ export const GET: APIRoute = async (context) => {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email',
+    scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email',
     access_type: 'offline',
     prompt: 'consent',
     state,

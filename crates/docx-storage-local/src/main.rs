@@ -39,12 +39,12 @@ async fn main() -> anyhow::Result<()> {
     // Create storage backends via shared helper
     let dir = config.effective_local_storage_dir();
     info!("  Local storage dir: {}", dir.display());
-    let (storage, lock_manager, sync_backend, watch_backend) =
+    let (storage, lock_manager, sync_backend, watch_backend, browse_backend) =
         docx_storage_local::server::create_backends(&dir);
 
     // Create gRPC services
     let storage_svc = StorageServiceServer::new(StorageServiceImpl::new(storage, lock_manager));
-    let sync_svc = SourceSyncServiceServer::new(SourceSyncServiceImpl::new(sync_backend));
+    let sync_svc = SourceSyncServiceServer::new(SourceSyncServiceImpl::new(sync_backend, browse_backend));
     let watch_svc = ExternalWatchServiceServer::new(ExternalWatchServiceImpl::new(watch_backend));
 
     // Set up parent death signal using OS-native mechanisms

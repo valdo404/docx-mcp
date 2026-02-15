@@ -311,6 +311,15 @@ service SourceSyncService {
 
   // List all registered sources for a tenant
   rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+
+  // List available connections for a tenant
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+
+  // List files in a folder of a connection
+  rpc ListConnectionFiles(ListConnectionFilesRequest) returns (ListConnectionFilesResponse);
+
+  // Download a file from a source (streaming)
+  rpc DownloadFromSource(DownloadFromSourceRequest) returns (stream DataChunk);
 }
 
 // Source types supported by the sync service
@@ -325,8 +334,10 @@ enum SourceType {
 
 message SourceDescriptor {
   SourceType type = 1;
-  string uri = 2;              // File path, SharePoint URL, S3 URI, etc.
-  map<string, string> metadata = 3;  // Type-specific metadata (credentials ref, etc.)
+  string connection_id = 2;    // OAuth connection ID (empty for local)
+  string path = 3;             // Human-readable path (local: absolute path, cloud: display path)
+  string file_id = 4;          // Provider-specific file ID (GDrive file ID, OneDrive item ID)
+                                // Empty for local (path is the identifier)
 }
 
 message RegisterSourceRequest {
@@ -407,6 +418,60 @@ message ListSourcesRequest {
 message ListSourcesResponse {
   repeated SyncStatus sources = 1;
 }
+
+// =============================================================================
+// Connection Browsing Messages
+// =============================================================================
+
+message ConnectionInfo {
+  string connection_id = 1;     // "" for local
+  SourceType type = 2;
+  string display_name = 3;      // "My personal Drive" or "Local filesystem"
+  string provider_account_id = 4; // email for GDrive, empty for local
+}
+
+message ListConnectionsRequest {
+  TenantContext context = 1;
+  SourceType filter_type = 2;   // 0 = all types
+}
+
+message ListConnectionsResponse {
+  repeated ConnectionInfo connections = 1;
+}
+
+message FileEntry {
+  string name = 1;              // file/folder name
+  string path = 2;              // human-readable path (local: absolute, cloud: display path)
+  string file_id = 3;           // provider-specific ID (GDrive file ID, empty for local)
+  bool is_folder = 4;
+  int64 size_bytes = 5;
+  int64 modified_at_unix = 6;
+  string mime_type = 7;
+}
+
+message ListConnectionFilesRequest {
+  TenantContext context = 1;
+  SourceType type = 2;
+  string connection_id = 3;     // empty for local
+  string path = 4;              // folder path (empty = root)
+  string page_token = 5;        // pagination
+  int32 page_size = 6;          // 0 = default (50)
+}
+
+message ListConnectionFilesResponse {
+  repeated FileEntry files = 1;
+  string next_page_token = 2;   // empty if no more pages
+}
+
+message DownloadFromSourceRequest {
+  TenantContext context = 1;
+  SourceType type = 2;
+  string connection_id = 3;
+  string path = 4;              // human-readable path
+  string file_id = 5;           // provider-specific ID (takes priority if non-empty)
+}
+
+// Response = stream DataChunk (already defined)
 
 // =============================================================================
 // ExternalWatchService - Monitor external sources for changes

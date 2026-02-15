@@ -60,7 +60,7 @@ impl LocalFileSyncBackend {
                 source.source_type
             )));
         }
-        Ok(PathBuf::from(&source.uri))
+        Ok(PathBuf::from(&source.path))
     }
 }
 
@@ -87,7 +87,7 @@ impl SyncBackend for LocalFileSyncBackend {
 
         let now = chrono::Utc::now();
         if let Some(entry) = index.get_mut(session_id) {
-            entry.source_path = Some(source.uri.clone());
+            entry.source_path = Some(source.path.clone());
             entry.auto_sync = auto_sync;
             entry.last_modified_at = now;
         } else {
@@ -96,7 +96,7 @@ impl SyncBackend for LocalFileSyncBackend {
             use docx_storage_core::SessionIndexEntry;
             let entry = SessionIndexEntry {
                 id: session_id.to_string(),
-                source_path: Some(source.uri.clone()),
+                source_path: Some(source.path.clone()),
                 auto_sync,
                 created_at: now,
                 last_modified_at: now,
@@ -116,7 +116,7 @@ impl SyncBackend for LocalFileSyncBackend {
 
         debug!(
             "Registered source for tenant {} session {} -> {} (auto_sync={})",
-            tenant_id, session_id, source.uri, auto_sync
+            tenant_id, session_id, source.path, auto_sync
         );
 
         Ok(())
@@ -185,10 +185,10 @@ impl SyncBackend for LocalFileSyncBackend {
                 )));
             }
             debug!(
-                "Updating source URI for tenant {} session {}: {:?} -> {}",
-                tenant_id, session_id, entry.source_path, new_source.uri
+                "Updating source path for tenant {} session {}: {:?} -> {}",
+                tenant_id, session_id, entry.source_path, new_source.path
             );
-            entry.source_path = Some(new_source.uri);
+            entry.source_path = Some(new_source.path);
         }
 
         // Update auto_sync if provided
@@ -312,8 +312,9 @@ impl SyncBackend for LocalFileSyncBackend {
             session_id: session_id.to_string(),
             source: SourceDescriptor {
                 source_type: SourceType::LocalFile,
-                uri: source_path.clone(),
-                metadata: Default::default(),
+                connection_id: None,
+                path: source_path.clone(),
+                file_id: None,
             },
             auto_sync_enabled: entry.auto_sync,
             last_synced_at: transient.as_ref().and_then(|t| t.last_synced_at),
@@ -336,8 +337,9 @@ impl SyncBackend for LocalFileSyncBackend {
                     session_id: entry.id.clone(),
                     source: SourceDescriptor {
                         source_type: SourceType::LocalFile,
-                        uri: source_path.clone(),
-                        metadata: Default::default(),
+                        connection_id: None,
+                        path: source_path.clone(),
+                        file_id: None,
                     },
                     auto_sync_enabled: entry.auto_sync,
                     last_synced_at: transient.as_ref().and_then(|t| t.last_synced_at),
@@ -437,8 +439,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         // Register
@@ -474,8 +477,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         backend
@@ -515,8 +519,9 @@ mod tests {
             let file_path = output_dir.path().join(format!("output-{}.docx", i));
             let source = SourceDescriptor {
                 source_type: SourceType::LocalFile,
-                uri: file_path.to_string_lossy().to_string(),
-                metadata: Default::default(),
+                connection_id: None,
+                path: file_path.to_string_lossy().to_string(),
+                file_id: None,
             };
             backend
                 .register_source(tenant, &session, source, i % 2 == 0)
@@ -545,8 +550,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         backend
@@ -596,8 +602,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::S3,
-            uri: "s3://bucket/key".to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: "s3://bucket/key".to_string(),
+            file_id: None,
         };
 
         let result = backend.register_source(tenant, session, source, true).await;
@@ -618,8 +625,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         // Register source
@@ -630,7 +638,7 @@ mod tests {
 
         // Verify initial state
         let status = backend.get_sync_status(tenant, session).await.unwrap().unwrap();
-        assert_eq!(status.source.uri, file_path.to_string_lossy());
+        assert_eq!(status.source.path, file_path.to_string_lossy());
         assert!(status.auto_sync_enabled);
 
         // Update only auto_sync
@@ -640,14 +648,15 @@ mod tests {
             .unwrap();
 
         let status = backend.get_sync_status(tenant, session).await.unwrap().unwrap();
-        assert_eq!(status.source.uri, file_path.to_string_lossy());
+        assert_eq!(status.source.path, file_path.to_string_lossy());
         assert!(!status.auto_sync_enabled);
 
-        // Update source URI
+        // Update source path
         let new_source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: new_file_path.to_string_lossy().to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: new_file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
         backend
             .update_source(tenant, session, Some(new_source), None)
@@ -655,14 +664,15 @@ mod tests {
             .unwrap();
 
         let status = backend.get_sync_status(tenant, session).await.unwrap().unwrap();
-        assert_eq!(status.source.uri, new_file_path.to_string_lossy());
+        assert_eq!(status.source.path, new_file_path.to_string_lossy());
         assert!(!status.auto_sync_enabled); // Should remain unchanged
 
         // Update both
         let final_source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: Default::default(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
         backend
             .update_source(tenant, session, Some(final_source), Some(true))
@@ -670,7 +680,7 @@ mod tests {
             .unwrap();
 
         let status = backend.get_sync_status(tenant, session).await.unwrap().unwrap();
-        assert_eq!(status.source.uri, file_path.to_string_lossy());
+        assert_eq!(status.source.path, file_path.to_string_lossy());
         assert!(status.auto_sync_enabled);
     }
 

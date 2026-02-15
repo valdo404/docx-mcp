@@ -92,11 +92,11 @@ pub fn init(storage_dir: &Path) -> Result<(), String> {
     let _guard = runtime.enter();
 
     // Create backends (shared with main.rs via server module)
-    let (storage, lock, sync, watch) = server::create_backends(storage_dir);
+    let (storage, lock, sync, watch, browse) = server::create_backends(storage_dir);
 
     // Create gRPC services
     let storage_svc = StorageServiceServer::new(StorageServiceImpl::new(storage, lock));
-    let sync_svc = SourceSyncServiceServer::new(SourceSyncServiceImpl::new(sync));
+    let sync_svc = SourceSyncServiceServer::new(SourceSyncServiceImpl::new(sync, browse));
     let watch_svc = ExternalWatchServiceServer::new(ExternalWatchServiceImpl::new(watch));
 
     // Create in-memory transport (256KB buffer — matches StorageClient chunk size)

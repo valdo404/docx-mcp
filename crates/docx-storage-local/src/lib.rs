@@ -1,4 +1,5 @@
 // Shared modules (used by both the standalone binary and the embedded staticlib)
+pub mod browse;
 pub mod config;
 pub mod error;
 pub mod lock;

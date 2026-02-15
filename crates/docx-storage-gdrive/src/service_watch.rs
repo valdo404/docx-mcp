@@ -45,8 +45,17 @@ impl ExternalWatchServiceImpl {
     ) -> Option<SourceDescriptor> {
         proto.map(|s| SourceDescriptor {
             source_type: Self::convert_source_type(s.r#type),
-            uri: s.uri.clone(),
-            metadata: s.metadata.clone(),
+            connection_id: if s.connection_id.is_empty() {
+                None
+            } else {
+                Some(s.connection_id.clone())
+            },
+            path: s.path.clone(),
+            file_id: if s.file_id.is_empty() {
+                None
+            } else {
+                Some(s.file_id.clone())
+            },
         })
     }
 

@@ -1,14 +1,15 @@
 namespace DocxMcp.Grpc;
 
 /// <summary>
-/// Interface for sync storage operations (source sync + external watch).
+/// Interface for sync storage operations (source sync + external watch + browsing).
 /// Maps to the SourceSyncService and ExternalWatchService gRPC services.
 /// </summary>
 public interface ISyncStorage : IAsyncDisposable
 {
     // SourceSync operations
     Task<(bool Success, string Error)> RegisterSourceAsync(
-        string tenantId, string sessionId, SourceType sourceType, string uri, bool autoSync,
+        string tenantId, string sessionId, SourceType sourceType,
+        string? connectionId, string path, string? fileId, bool autoSync,
         CancellationToken cancellationToken = default);
 
     Task<bool> UnregisterSourceAsync(
@@ -16,7 +17,8 @@ public interface ISyncStorage : IAsyncDisposable
 
     Task<(bool Success, string Error)> UpdateSourceAsync(
         string tenantId, string sessionId,
-        SourceType? sourceType = null, string? uri = null, bool? autoSync = null,
+        SourceType? sourceType = null, string? connectionId = null,
+        string? path = null, string? fileId = null, bool? autoSync = null,
         CancellationToken cancellationToken = default);
 
     Task<(bool Success, string Error, long SyncedAtUnix)> SyncToSourceAsync(
@@ -28,7 +30,8 @@ public interface ISyncStorage : IAsyncDisposable
 
     // ExternalWatch operations
     Task<(bool Success, string WatchId, string Error)> StartWatchAsync(
-        string tenantId, string sessionId, SourceType sourceType, string uri, int pollIntervalSeconds = 0,
+        string tenantId, string sessionId, SourceType sourceType,
+        string? connectionId, string path, string? fileId, int pollIntervalSeconds = 0,
         CancellationToken cancellationToken = default);
 
     Task<bool> StopWatchAsync(
@@ -46,6 +49,21 @@ public interface ISyncStorage : IAsyncDisposable
     /// </summary>
     IAsyncEnumerable<ExternalChangeEventDto> WatchChangesAsync(
         string tenantId, IEnumerable<string> sessionIds, CancellationToken cancellationToken = default);
+
+    // Browse operations
+    Task<List<ConnectionInfoDto>> ListConnectionsAsync(
+        string tenantId, SourceType? filterType = null,
+        CancellationToken cancellationToken = default);
+
+    Task<FileListResultDto> ListConnectionFilesAsync(
+        string tenantId, SourceType sourceType, string? connectionId,
+        string? path = null, string? pageToken = null, int pageSize = 50,
+        CancellationToken cancellationToken = default);
+
+    Task<byte[]> DownloadFromSourceAsync(
+        string tenantId, SourceType sourceType, string? connectionId,
+        string path, string? fileId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -54,7 +72,9 @@ public interface ISyncStorage : IAsyncDisposable
 public record SyncStatusDto(
     string SessionId,
     SourceType SourceType,
-    string Uri,
+    string? ConnectionId,
+    string Path,
+    string? FileId,
     bool AutoSyncEnabled,
     long? LastSyncedAtUnix,
     bool HasPendingChanges,
@@ -82,3 +102,31 @@ public record ExternalChangeEventDto(
     SourceMetadataDto? NewMetadata,
     long DetectedAtUnix,
     string? NewUri);
+
+/// <summary>
+/// Connection info DTO.
+/// </summary>
+public record ConnectionInfoDto(
+    string ConnectionId,
+    SourceType Type,
+    string DisplayName,
+    string? ProviderAccountId);
+
+/// <summary>
+/// File entry DTO.
+/// </summary>
+public record FileEntryDto(
+    string Name,
+    string Path,
+    string? FileId,
+    bool IsFolder,
+    long SizeBytes,
+    long ModifiedAtUnix,
+    string? MimeType);
+
+/// <summary>
+/// File list result DTO with pagination.
+/// </summary>
+public record FileListResultDto(
+    List<FileEntryDto> Files,
+    string? NextPageToken);

@@ -1,3 +1,4 @@
+mod browse;
 mod config;
 mod d1_client;
 mod gdrive;
@@ -17,6 +18,7 @@ use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use browse::GDriveBrowsableBackend;
 use config::Config;
 use d1_client::D1Client;
 use gdrive::GDriveClient;
@@ -58,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create token manager (reads tokens from D1, refreshes via Google OAuth2)
     let token_manager = Arc::new(TokenManager::new(
-        d1_client,
+        d1_client.clone(),
         config.google_client_id.clone(),
         config.google_client_secret.clone(),
     ));
@@ -72,6 +74,11 @@ async fn main() -> anyhow::Result<()> {
         GDriveSyncBackend::new(gdrive_client.clone(), token_manager.clone()),
     );
 
+    // Create browse backend
+    let browse_backend: Arc<dyn docx_storage_core::BrowsableBackend> = Arc::new(
+        GDriveBrowsableBackend::new(d1_client, gdrive_client.clone(), token_manager.clone()),
+    );
+
     // Create watch backend
     let watch_backend = Arc::new(GDriveWatchBackend::new(
         gdrive_client,
@@ -80,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Create gRPC services (sync + watch only — no StorageService)
-    let sync_service = SourceSyncServiceImpl::new(sync_backend);
+    let sync_service = SourceSyncServiceImpl::new(sync_backend, browse_backend);
     let sync_svc = proto::source_sync_service_server::SourceSyncServiceServer::new(sync_service);
 
     let watch_service = ExternalWatchServiceImpl::new(watch_backend);

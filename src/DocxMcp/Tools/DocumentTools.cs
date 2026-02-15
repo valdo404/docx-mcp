@@ -14,6 +14,7 @@ public sealed class DocumentTools
         "Open an existing DOCX file or create a new empty document. " +
         "Returns a session ID to use with other tools. " +
         "If path is omitted, creates a new empty document. " +
+        "Use list_connections and list_connection_files to discover available files before opening. " +
         "For existing files, external changes will be monitored automatically.")]
     public static string DocumentOpen(
         TenantScope tenant,
@@ -44,6 +45,7 @@ public sealed class DocumentTools
     [McpServerTool(Name = "document_set_source"), Description(
         "Set or change the file path where a document will be saved. " +
         "Use this for 'Save As' operations or to set a save path for new documents. " +
+        "Use list_connections to discover available storage targets. " +
         "If auto_sync is true (default), the document will be auto-saved after each edit.")]
     public static string DocumentSetSource(
         TenantScope tenant,

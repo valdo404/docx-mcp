@@ -6,9 +6,9 @@ namespace DocxMcp.Grpc;
 
 /// <summary>
 /// gRPC client for sync storage operations (SourceSyncService + ExternalWatchService).
-/// Handles source registration, sync-to-source, and external file watching.
+/// Handles source registration, sync-to-source, external file watching, and connection browsing.
 /// </summary>
-public sealed class SyncStorageClient : ISyncStorage
+public class SyncStorageClient : ISyncStorage
 {
     private readonly GrpcChannel _channel;
     private readonly ILogger<SyncStorageClient>? _logger;
@@ -37,14 +37,21 @@ public sealed class SyncStorageClient : ISyncStorage
     // =========================================================================
 
     public async Task<(bool Success, string Error)> RegisterSourceAsync(
-        string tenantId, string sessionId, SourceType sourceType, string uri, bool autoSync,
+        string tenantId, string sessionId, SourceType sourceType,
+        string? connectionId, string path, string? fileId, bool autoSync,
         CancellationToken cancellationToken = default)
     {
         var request = new RegisterSourceRequest
         {
             Context = new TenantContext { TenantId = tenantId },
             SessionId = sessionId,
-            Source = new SourceDescriptor { Type = sourceType, Uri = uri },
+            Source = new SourceDescriptor
+            {
+                Type = sourceType,
+                ConnectionId = connectionId ?? "",
+                Path = path,
+                FileId = fileId ?? ""
+            },
             AutoSync = autoSync
         };
 
@@ -67,7 +74,8 @@ public sealed class SyncStorageClient : ISyncStorage
 
     public async Task<(bool Success, string Error)> UpdateSourceAsync(
         string tenantId, string sessionId,
-        SourceType? sourceType = null, string? uri = null, bool? autoSync = null,
+        SourceType? sourceType = null, string? connectionId = null,
+        string? path = null, string? fileId = null, bool? autoSync = null,
         CancellationToken cancellationToken = default)
     {
         var request = new UpdateSourceRequest
@@ -76,9 +84,15 @@ public sealed class SyncStorageClient : ISyncStorage
             SessionId = sessionId
         };
 
-        if (sourceType.HasValue && uri is not null)
+        if (sourceType.HasValue && path is not null)
         {
-            request.Source = new SourceDescriptor { Type = sourceType.Value, Uri = uri };
+            request.Source = new SourceDescriptor
+            {
+                Type = sourceType.Value,
+                ConnectionId = connectionId ?? "",
+                Path = path,
+                FileId = fileId ?? ""
+            };
         }
 
         if (autoSync.HasValue)
@@ -145,7 +159,9 @@ public sealed class SyncStorageClient : ISyncStorage
         return new SyncStatusDto(
             status.SessionId,
             (SourceType)(int)status.Source.Type,
-            status.Source.Uri,
+            string.IsNullOrEmpty(status.Source.ConnectionId) ? null : status.Source.ConnectionId,
+            status.Source.Path,
+            string.IsNullOrEmpty(status.Source.FileId) ? null : status.Source.FileId,
             status.AutoSyncEnabled,
             status.LastSyncedAtUnix > 0 ? status.LastSyncedAtUnix : null,
             status.HasPendingChanges,
@@ -157,14 +173,21 @@ public sealed class SyncStorageClient : ISyncStorage
     // =========================================================================
 
     public async Task<(bool Success, string WatchId, string Error)> StartWatchAsync(
-        string tenantId, string sessionId, SourceType sourceType, string uri, int pollIntervalSeconds = 0,
+        string tenantId, string sessionId, SourceType sourceType,
+        string? connectionId, string path, string? fileId, int pollIntervalSeconds = 0,
         CancellationToken cancellationToken = default)
     {
         var request = new StartWatchRequest
         {
             Context = new TenantContext { TenantId = tenantId },
             SessionId = sessionId,
-            Source = new SourceDescriptor { Type = sourceType, Uri = uri },
+            Source = new SourceDescriptor
+            {
+                Type = sourceType,
+                ConnectionId = connectionId ?? "",
+                Path = path,
+                FileId = fileId ?? ""
+            },
             PollIntervalSeconds = pollIntervalSeconds
         };
 
@@ -245,6 +268,96 @@ public sealed class SyncStorageClient : ISyncStorage
         }
     }
 
+    // =========================================================================
+    // Browse Operations
+    // =========================================================================
+
+    public async Task<List<ConnectionInfoDto>> ListConnectionsAsync(
+        string tenantId, SourceType? filterType = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new ListConnectionsRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            FilterType = filterType ?? 0
+        };
+
+        var response = await GetSyncClient().ListConnectionsAsync(request, cancellationToken: cancellationToken);
+
+        return response.Connections.Select(c => new ConnectionInfoDto(
+            c.ConnectionId,
+            (SourceType)(int)c.Type,
+            c.DisplayName,
+            string.IsNullOrEmpty(c.ProviderAccountId) ? null : c.ProviderAccountId
+        )).ToList();
+    }
+
+    public async Task<FileListResultDto> ListConnectionFilesAsync(
+        string tenantId, SourceType sourceType, string? connectionId,
+        string? path = null, string? pageToken = null, int pageSize = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new ListConnectionFilesRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            Type = sourceType,
+            ConnectionId = connectionId ?? "",
+            Path = path ?? "",
+            PageToken = pageToken ?? "",
+            PageSize = pageSize
+        };
+
+        var response = await GetSyncClient().ListConnectionFilesAsync(request, cancellationToken: cancellationToken);
+
+        var files = response.Files.Select(f => new FileEntryDto(
+            f.Name,
+            f.Path,
+            string.IsNullOrEmpty(f.FileId) ? null : f.FileId,
+            f.IsFolder,
+            f.SizeBytes,
+            f.ModifiedAtUnix,
+            string.IsNullOrEmpty(f.MimeType) ? null : f.MimeType
+        )).ToList();
+
+        return new FileListResultDto(
+            files,
+            string.IsNullOrEmpty(response.NextPageToken) ? null : response.NextPageToken
+        );
+    }
+
+    public async Task<byte[]> DownloadFromSourceAsync(
+        string tenantId, SourceType sourceType, string? connectionId,
+        string path, string? fileId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new DownloadFromSourceRequest
+        {
+            Context = new TenantContext { TenantId = tenantId },
+            Type = sourceType,
+            ConnectionId = connectionId ?? "",
+            Path = path,
+            FileId = fileId ?? ""
+        };
+
+        using var call = GetSyncClient().DownloadFromSource(request, cancellationToken: cancellationToken);
+
+        var data = new MemoryStream();
+        await foreach (var chunk in call.ResponseStream.ReadAllAsync(cancellationToken))
+        {
+            if (chunk.Data.Length > 0)
+                data.Write(chunk.Data.Span);
+
+            if (chunk.IsLast)
+                break;
+        }
+
+        return data.ToArray();
+    }
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
     private static SourceMetadataDto ConvertMetadata(SourceMetadata metadata)
     {
         return new SourceMetadataDto(
@@ -255,10 +368,6 @@ public sealed class SyncStorageClient : ISyncStorage
             metadata.ContentHash.IsEmpty ? null : metadata.ContentHash.ToByteArray()
         );
     }
-
-    // =========================================================================
-    // Helpers
-    // =========================================================================
 
     private IEnumerable<(byte[] Chunk, bool IsLast)> ChunkData(byte[] data)
     {

@@ -1,7 +1,8 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
-use docx_storage_core::{SourceDescriptor, SourceType, SyncBackend};
-use tokio_stream::StreamExt;
+use docx_storage_core::{BrowsableBackend, SourceDescriptor, SourceType, SyncBackend};
+use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, instrument};
 
@@ -12,11 +13,18 @@ use proto::*;
 /// Implementation of the SourceSyncService gRPC service for Google Drive.
 pub struct SourceSyncServiceImpl {
     sync_backend: Arc<dyn SyncBackend>,
+    browse_backend: Arc<dyn BrowsableBackend>,
 }
 
 impl SourceSyncServiceImpl {
-    pub fn new(sync_backend: Arc<dyn SyncBackend>) -> Self {
-        Self { sync_backend }
+    pub fn new(
+        sync_backend: Arc<dyn SyncBackend>,
+        browse_backend: Arc<dyn BrowsableBackend>,
+    ) -> Self {
+        Self {
+            sync_backend,
+            browse_backend,
+        }
     }
 
     fn get_tenant_id(context: Option<&TenantContext>) -> Result<&str, Status> {
@@ -42,8 +50,17 @@ impl SourceSyncServiceImpl {
     ) -> Option<SourceDescriptor> {
         proto.map(|s| SourceDescriptor {
             source_type: Self::convert_source_type(s.r#type),
-            uri: s.uri.clone(),
-            metadata: s.metadata.clone(),
+            connection_id: if s.connection_id.is_empty() {
+                None
+            } else {
+                Some(s.connection_id.clone())
+            },
+            path: s.path.clone(),
+            file_id: if s.file_id.is_empty() {
+                None
+            } else {
+                Some(s.file_id.clone())
+            },
         })
     }
 
@@ -61,8 +78,9 @@ impl SourceSyncServiceImpl {
     fn to_proto_source_descriptor(source: &SourceDescriptor) -> proto::SourceDescriptor {
         proto::SourceDescriptor {
             r#type: Self::to_proto_source_type(source.source_type),
-            uri: source.uri.clone(),
-            metadata: source.metadata.clone(),
+            connection_id: source.connection_id.clone().unwrap_or_default(),
+            path: source.path.clone(),
+            file_id: source.file_id.clone().unwrap_or_default(),
         }
     }
 
@@ -78,8 +96,12 @@ impl SourceSyncServiceImpl {
     }
 }
 
+type DownloadFromSourceStream = Pin<Box<dyn Stream<Item = Result<DataChunk, Status>> + Send>>;
+
 #[tonic::async_trait]
 impl SourceSyncService for SourceSyncServiceImpl {
+    type DownloadFromSourceStream = DownloadFromSourceStream;
+
     #[instrument(skip(self, request), level = "debug")]
     async fn register_source(
         &self,
@@ -250,5 +272,135 @@ impl SourceSyncService for SourceSyncServiceImpl {
         Ok(Response::new(ListSourcesResponse {
             sources: proto_sources,
         }))
+    }
+
+    #[instrument(skip(self, request), level = "debug")]
+    async fn list_connections(
+        &self,
+        request: Request<ListConnectionsRequest>,
+    ) -> Result<Response<ListConnectionsResponse>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+
+        let connections = self
+            .browse_backend
+            .list_connections(tenant_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let proto_connections = connections
+            .into_iter()
+            .map(|c| proto::ConnectionInfo {
+                connection_id: c.connection_id,
+                r#type: Self::to_proto_source_type(c.source_type),
+                display_name: c.display_name,
+                provider_account_id: c.provider_account_id.unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(Response::new(ListConnectionsResponse {
+            connections: proto_connections,
+        }))
+    }
+
+    #[instrument(skip(self, request), level = "debug")]
+    async fn list_connection_files(
+        &self,
+        request: Request<ListConnectionFilesRequest>,
+    ) -> Result<Response<ListConnectionFilesResponse>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
+
+        let page_size = if req.page_size > 0 {
+            req.page_size as u32
+        } else {
+            50
+        };
+
+        let page_token = if req.page_token.is_empty() {
+            None
+        } else {
+            Some(req.page_token.as_str())
+        };
+
+        let result = self
+            .browse_backend
+            .list_files(
+                tenant_id,
+                &req.connection_id,
+                &req.path,
+                page_token,
+                page_size,
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let proto_files = result
+            .files
+            .into_iter()
+            .map(|f| proto::FileEntry {
+                name: f.name,
+                path: f.path,
+                file_id: f.file_id.unwrap_or_default(),
+                is_folder: f.is_folder,
+                size_bytes: f.size_bytes as i64,
+                modified_at_unix: f.modified_at,
+                mime_type: f.mime_type.unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(Response::new(ListConnectionFilesResponse {
+            files: proto_files,
+            next_page_token: result.next_page_token.unwrap_or_default(),
+        }))
+    }
+
+    #[instrument(skip(self, request), level = "debug")]
+    async fn download_from_source(
+        &self,
+        request: Request<DownloadFromSourceRequest>,
+    ) -> Result<Response<Self::DownloadFromSourceStream>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Self::get_tenant_id(req.context.as_ref())?.to_string();
+
+        let file_id = if req.file_id.is_empty() {
+            None
+        } else {
+            Some(req.file_id.as_str())
+        };
+
+        let data = self
+            .browse_backend
+            .download_file(&tenant_id, &req.connection_id, &req.path, file_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        // Stream in 256KB chunks
+        let stream = async_stream::stream! {
+            const CHUNK_SIZE: usize = 256 * 1024;
+            let mut offset = 0;
+            while offset < data.len() {
+                let end = (offset + CHUNK_SIZE).min(data.len());
+                let is_last = end >= data.len();
+                yield Ok(DataChunk {
+                    data: data[offset..end].to_vec(),
+                    is_last,
+                    found: true,
+                    total_size: data.len() as u64,
+                });
+                offset = end;
+            }
+            // Empty data → single empty chunk
+            if data.is_empty() {
+                yield Ok(DataChunk {
+                    data: vec![],
+                    is_last: true,
+                    found: true,
+                    total_size: 0,
+                });
+            }
+        };
+
+        Ok(Response::new(Box::pin(stream)))
     }
 }

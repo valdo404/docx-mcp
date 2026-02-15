@@ -116,7 +116,7 @@ impl NotifyWatchBackend {
                 source.source_type
             )));
         }
-        Ok(PathBuf::from(&source.uri))
+        Ok(PathBuf::from(&source.path))
     }
 
     /// Get file metadata synchronously (for use in sync context).
@@ -279,7 +279,7 @@ impl WatchBackend for NotifyWatchBackend {
         if let Some((_, watched)) = self.sources.remove(&key) {
             info!(
                 "Stopped watching {} for tenant {} session {}",
-                watched.source.uri, tenant_id, session_id
+                watched.source.path, tenant_id, session_id
             );
         }
 
@@ -398,7 +398,6 @@ impl WatchBackend for NotifyWatchBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use tempfile::TempDir;
     use tokio::time::{sleep, Duration};
 
@@ -420,8 +419,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: HashMap::new(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         // Start watch
@@ -452,8 +452,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: HashMap::new(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         backend.start_watch(tenant, session, &source, 0).await.unwrap();
@@ -491,8 +492,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: HashMap::new(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         backend.start_watch(tenant, session, &source, 0).await.unwrap();
@@ -515,8 +517,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::LocalFile,
-            uri: file_path.to_string_lossy().to_string(),
-            metadata: HashMap::new(),
+            connection_id: None,
+            path: file_path.to_string_lossy().to_string(),
+            file_id: None,
         };
 
         backend.start_watch(tenant, session, &source, 0).await.unwrap();
@@ -551,8 +554,9 @@ mod tests {
 
         let source = SourceDescriptor {
             source_type: SourceType::S3,
-            uri: "s3://bucket/key".to_string(),
-            metadata: HashMap::new(),
+            connection_id: None,
+            path: "s3://bucket/key".to_string(),
+            file_id: None,
         };
 
         let result = backend.start_watch(tenant, session, &source, 0).await;

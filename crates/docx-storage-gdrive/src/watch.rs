@@ -12,7 +12,7 @@ use docx_storage_core::{
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
-use crate::gdrive::{parse_gdrive_uri, GDriveClient};
+use crate::gdrive::GDriveClient;
 use crate::token_manager::TokenManager;
 
 /// State for a watched Google Drive file.
@@ -97,18 +97,24 @@ impl GDriveWatchBackend {
         }))
     }
 
-    /// Get a valid token for a URI, extracting connection_id (tenant-scoped).
-    async fn get_token_for_uri(&self, tenant_id: &str, uri: &str) -> Result<(String, String), StorageError> {
-        let parsed = parse_gdrive_uri(uri)
-            .ok_or_else(|| StorageError::Watch(format!("Invalid Google Drive URI: {}", uri)))?;
+    /// Get a valid token for a source, using its connection_id (tenant-scoped).
+    async fn get_token_for_source(
+        &self,
+        tenant_id: &str,
+        source: &SourceDescriptor,
+    ) -> Result<(String, String), StorageError> {
+        let connection_id = source.connection_id.as_deref().ok_or_else(|| {
+            StorageError::Watch("Google Drive source requires a connection_id".to_string())
+        })?;
 
         let token = self
             .token_manager
-            .get_valid_token(tenant_id, &parsed.connection_id)
+            .get_valid_token(tenant_id, connection_id)
             .await
             .map_err(|e| StorageError::Watch(format!("Token error: {}", e)))?;
 
-        Ok((token, parsed.file_id))
+        let file_id = source.effective_id().to_string();
+        Ok((token, file_id))
     }
 
     /// Compare metadata to detect changes. Prefers headRevisionId.
@@ -154,7 +160,7 @@ impl WatchBackend for GDriveWatchBackend {
             )));
         }
 
-        let (token, file_id) = self.get_token_for_uri(tenant_id, &source.uri).await?;
+        let (token, file_id) = self.get_token_for_source(tenant_id, source).await?;
 
         let watch_id = uuid::Uuid::new_v4().to_string();
         let map_key = Self::key(tenant_id, session_id);
@@ -193,7 +199,9 @@ impl WatchBackend for GDriveWatchBackend {
         if let Some((_, watched)) = self.sources.remove(&key) {
             debug!(
                 "Stopped watching {} for tenant {} session {}",
-                watched.source.uri, tenant_id, session_id
+                watched.source.effective_id(),
+                tenant_id,
+                session_id
             );
         }
 
@@ -220,7 +228,7 @@ impl WatchBackend for GDriveWatchBackend {
             None => return Ok(None),
         };
 
-        let (token, file_id) = self.get_token_for_uri(tenant_id, &watched.source.uri).await?;
+        let (token, file_id) = self.get_token_for_source(tenant_id, &watched.source).await?;
 
         // Get current metadata
         let current_metadata = match self.fetch_metadata(&token, &file_id).await? {
@@ -247,7 +255,9 @@ impl WatchBackend for GDriveWatchBackend {
             if Self::has_changed(known, &current_metadata) {
                 debug!(
                     "Detected change in {} (revision: {:?} -> {:?})",
-                    watched.source.uri, known.version_id, current_metadata.version_id
+                    watched.source.effective_id(),
+                    known.version_id,
+                    current_metadata.version_id
                 );
 
                 let event = ExternalChangeEvent {
@@ -279,7 +289,7 @@ impl WatchBackend for GDriveWatchBackend {
             None => return Ok(None),
         };
 
-        let (token, file_id) = self.get_token_for_uri(tenant_id, &watched.source.uri).await?;
+        let (token, file_id) = self.get_token_for_source(tenant_id, &watched.source).await?;
         self.fetch_metadata(&token, &file_id).await
     }
 

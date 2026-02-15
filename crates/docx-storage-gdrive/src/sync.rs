@@ -1,7 +1,7 @@
 //! Google Drive SyncBackend implementation (multi-tenant).
 //!
 //! Resolves OAuth tokens per-connection via TokenManager.
-//! URI format: `gdrive://{connection_id}/{file_id}`
+//! Source is identified by typed SourceDescriptor (connection_id + file_id).
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use docx_storage_core::{SourceDescriptor, SourceType, StorageError, SyncBackend, SyncStatus};
 use tracing::{debug, instrument, warn};
 
-use crate::gdrive::{parse_gdrive_uri, GDriveClient};
+use crate::gdrive::GDriveClient;
 use crate::token_manager::TokenManager;
 
 /// Transient sync state (in-memory only).
@@ -62,26 +62,28 @@ impl SyncBackend for GDriveSyncBackend {
             )));
         }
 
-        if parse_gdrive_uri(&source.uri).is_none() {
-            return Err(StorageError::Sync(format!(
-                "Invalid Google Drive URI: {}. Expected format: gdrive://{{connection_id}}/{{file_id}}",
-                source.uri
-            )));
+        if source.connection_id.is_none() {
+            return Err(StorageError::Sync(
+                "Google Drive source requires a connection_id".to_string(),
+            ));
         }
 
         let key = Self::key(tenant_id, session_id);
+        debug!(
+            "Registered Google Drive source for tenant {} session {} -> {} (auto_sync={})",
+            tenant_id,
+            session_id,
+            source.effective_id(),
+            auto_sync
+        );
+
         self.state.insert(
             key,
             TransientSyncState {
-                source: Some(source.clone()),
+                source: Some(source),
                 auto_sync,
                 ..Default::default()
             },
-        );
-
-        debug!(
-            "Registered Google Drive source for tenant {} session {} -> {} (auto_sync={})",
-            tenant_id, session_id, source.uri, auto_sync
         );
 
         Ok(())
@@ -146,7 +148,7 @@ impl SyncBackend for GDriveSyncBackend {
     ) -> Result<i64, StorageError> {
         let key = Self::key(tenant_id, session_id);
 
-        let source_uri = {
+        let (connection_id, file_id) = {
             let entry = self.state.get(&key).ok_or_else(|| {
                 StorageError::Sync(format!(
                     "No source registered for tenant {} session {}",
@@ -154,31 +156,29 @@ impl SyncBackend for GDriveSyncBackend {
                 ))
             })?;
 
-            entry
-                .source
-                .as_ref()
-                .map(|s| s.uri.clone())
-                .ok_or_else(|| {
-                    StorageError::Sync(format!(
-                        "No source configured for tenant {} session {}",
-                        tenant_id, session_id
-                    ))
-                })?
-        };
+            let source = entry.source.as_ref().ok_or_else(|| {
+                StorageError::Sync(format!(
+                    "No source configured for tenant {} session {}",
+                    tenant_id, session_id
+                ))
+            })?;
 
-        let parsed = parse_gdrive_uri(&source_uri).ok_or_else(|| {
-            StorageError::Sync(format!("Invalid Google Drive URI: {}", source_uri))
-        })?;
+            let conn_id = source.connection_id.clone().ok_or_else(|| {
+                StorageError::Sync("Google Drive source requires a connection_id".to_string())
+            })?;
+            let fid = source.effective_id().to_string();
+            (conn_id, fid)
+        };
 
         // Get a valid token for this connection (tenant-scoped)
         let token = self
             .token_manager
-            .get_valid_token(tenant_id, &parsed.connection_id)
+            .get_valid_token(tenant_id, &connection_id)
             .await
             .map_err(|e| StorageError::Sync(format!("Token error: {}", e)))?;
 
         self.client
-            .update_file(&token, &parsed.file_id, data)
+            .update_file(&token, &file_id, data)
             .await
             .map_err(|e| StorageError::Sync(format!("Google Drive upload failed: {}", e)))?;
 
@@ -194,7 +194,7 @@ impl SyncBackend for GDriveSyncBackend {
         debug!(
             "Synced {} bytes to {} for tenant {} session {}",
             data.len(),
-            source_uri,
+            file_id,
             tenant_id,
             session_id
         );
