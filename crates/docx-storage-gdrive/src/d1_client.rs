@@ -126,17 +126,18 @@ impl D1Client {
             .unwrap_or_default())
     }
 
-    /// Get an OAuth connection by ID.
+    /// Get an OAuth connection by ID, scoped to the given tenant.
     pub async fn get_connection(
         &self,
+        tenant_id: &str,
         connection_id: &str,
     ) -> anyhow::Result<Option<OAuthConnection>> {
         let results = self
             .execute_query(
                 "SELECT id, tenantId, provider, displayName, providerAccountId, \
                  accessToken, refreshToken, tokenExpiresAt, scopes \
-                 FROM oauth_connection WHERE id = ?1",
-                vec![connection_id.to_string()],
+                 FROM oauth_connection WHERE id = ?1 AND tenantId = ?2",
+                vec![connection_id.to_string(), tenant_id.to_string()],
             )
             .await?;
 

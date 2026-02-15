@@ -170,10 +170,10 @@ impl SyncBackend for GDriveSyncBackend {
             StorageError::Sync(format!("Invalid Google Drive URI: {}", source_uri))
         })?;
 
-        // Get a valid token for this connection
+        // Get a valid token for this connection (tenant-scoped)
         let token = self
             .token_manager
-            .get_valid_token(&parsed.connection_id)
+            .get_valid_token(tenant_id, &parsed.connection_id)
             .await
             .map_err(|e| StorageError::Sync(format!("Token error: {}", e)))?;
 

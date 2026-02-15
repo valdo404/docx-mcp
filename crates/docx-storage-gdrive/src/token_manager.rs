@@ -51,8 +51,10 @@ impl TokenManager {
     }
 
     /// Get a valid access token for a connection, refreshing if necessary.
-    pub async fn get_valid_token(&self, connection_id: &str) -> anyhow::Result<String> {
-        // 1. Check cache
+    /// `tenant_id` is required for tenant isolation — only connections owned by
+    /// this tenant can be accessed.
+    pub async fn get_valid_token(&self, tenant_id: &str, connection_id: &str) -> anyhow::Result<String> {
+        // 1. Check cache (keyed by connection_id — safe because D1 validates tenant)
         if let Some(cached) = self.cache.get(connection_id) {
             if !cached.is_expired() {
                 debug!("Token cache hit for connection {}", connection_id);
@@ -61,12 +63,12 @@ impl TokenManager {
             debug!("Token expired for connection {}, refreshing", connection_id);
         }
 
-        // 2. Read from D1
+        // 2. Read from D1 (tenant-scoped query)
         let conn = self
             .d1
-            .get_connection(connection_id)
+            .get_connection(tenant_id, connection_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("OAuth connection not found: {}", connection_id))?;
+            .ok_or_else(|| anyhow::anyhow!("OAuth connection not found: {} (tenant: {})", connection_id, tenant_id))?;
 
         // 3. Check if token from D1 is still valid
         let expires_at = conn

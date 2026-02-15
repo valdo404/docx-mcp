@@ -97,14 +97,14 @@ impl GDriveWatchBackend {
         }))
     }
 
-    /// Get a valid token for a URI, extracting connection_id.
-    async fn get_token_for_uri(&self, uri: &str) -> Result<(String, String), StorageError> {
+    /// Get a valid token for a URI, extracting connection_id (tenant-scoped).
+    async fn get_token_for_uri(&self, tenant_id: &str, uri: &str) -> Result<(String, String), StorageError> {
         let parsed = parse_gdrive_uri(uri)
             .ok_or_else(|| StorageError::Watch(format!("Invalid Google Drive URI: {}", uri)))?;
 
         let token = self
             .token_manager
-            .get_valid_token(&parsed.connection_id)
+            .get_valid_token(tenant_id, &parsed.connection_id)
             .await
             .map_err(|e| StorageError::Watch(format!("Token error: {}", e)))?;
 
@@ -154,7 +154,7 @@ impl WatchBackend for GDriveWatchBackend {
             )));
         }
 
-        let (token, file_id) = self.get_token_for_uri(&source.uri).await?;
+        let (token, file_id) = self.get_token_for_uri(tenant_id, &source.uri).await?;
 
         let watch_id = uuid::Uuid::new_v4().to_string();
         let map_key = Self::key(tenant_id, session_id);
@@ -220,7 +220,7 @@ impl WatchBackend for GDriveWatchBackend {
             None => return Ok(None),
         };
 
-        let (token, file_id) = self.get_token_for_uri(&watched.source.uri).await?;
+        let (token, file_id) = self.get_token_for_uri(tenant_id, &watched.source.uri).await?;
 
         // Get current metadata
         let current_metadata = match self.fetch_metadata(&token, &file_id).await? {
@@ -279,7 +279,7 @@ impl WatchBackend for GDriveWatchBackend {
             None => return Ok(None),
         };
 
-        let (token, file_id) = self.get_token_for_uri(&watched.source.uri).await?;
+        let (token, file_id) = self.get_token_for_uri(tenant_id, &watched.source.uri).await?;
         self.fetch_metadata(&token, &file_id).await
     }
 
