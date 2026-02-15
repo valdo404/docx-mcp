@@ -125,6 +125,42 @@ public sealed class SomeTools
 | `DOCX_WAL_COMPACT_THRESHOLD` | `50` | WAL entries before compaction |
 | `DOCX_AUTO_SAVE` | `true` | Auto-save to source file after each edit |
 | `STORAGE_GRPC_URL` | _(unset)_ | Remote gRPC URL for history storage (enables dual-server mode) |
+| `SYNC_GRPC_URL` | _(unset)_ | Remote gRPC URL for sync/watch (e.g. `http://gdrive:50052`). Falls back to `STORAGE_GRPC_URL` if unset |
+
+### Docker Compose Deployment
+
+Two profiles are available:
+
+- **`proxy`** — Local development. `docx-storage-local` serves all 3 gRPC services on `:50051` (history + sync/watch for local files).
+- **`cloud`** — Production. `docx-storage-cloudflare` (R2, StorageService) + `docx-storage-gdrive` (SourceSyncService + ExternalWatchService, multi-tenant OAuth tokens from D1).
+
+```bash
+# Always source credentials first
+source infra/env-setup.sh
+
+# Local dev
+docker compose --profile proxy up -d
+
+# Production (R2 + Google Drive)
+docker compose --profile cloud up -d
+```
+
+### Multi-Tenant Google Drive Architecture (`crates/docx-storage-gdrive/`)
+
+Google Drive sync uses per-tenant OAuth tokens stored in D1 (`oauth_connection` table). The gdrive server never holds static credentials — each operation resolves the token from D1 via `TokenManager`.
+
+**Flow:** Website OAuth consent → tokens stored in D1 → gdrive server reads tokens per-connection → auto-refresh via `refresh_token` grant.
+
+**URI format:** `gdrive://{connection_id}/{file_id}` — the `connection_id` identifies which OAuth connection (and thus which Google account) to use.
+
+**Key files:**
+- Config: `crates/docx-storage-gdrive/src/config.rs`
+- D1 client: `crates/docx-storage-gdrive/src/d1_client.rs`
+- Token manager: `crates/docx-storage-gdrive/src/token_manager.rs`
+- GDrive API: `crates/docx-storage-gdrive/src/gdrive.rs`
+- OAuth routes: `website/src/pages/api/oauth/`
+- OAuth connections lib: `website/src/lib/oauth-connections.ts`
+- D1 migration: `website/migrations/0005_oauth_connections.sql`
 
 ## Key Conventions
 
