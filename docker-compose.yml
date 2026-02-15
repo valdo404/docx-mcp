@@ -1,216 +1,99 @@
 # =============================================================================
-# docx-mcp Docker Compose
-# Full stack for local development and testing
+# docx-mcp — Full Stack Docker Compose
+#
+# All services start together: R2 storage + Google Drive sync + MCP server + proxy
+#
+# Usage:
+#   source infra/env-setup.sh && docker compose up -d          # Start all
+#   source infra/env-setup.sh && docker compose up -d --build  # Rebuild + start
+#
+# Environment (source infra/env-setup.sh before docker compose):
+#   # Cloudflare (R2 storage + proxy auth)
+#   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID
+#   R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
+#
+#   # Google Drive OAuth (tokens stored per-tenant in D1)
+#   OAUTH_GOOGLE_CLIENT_ID, OAUTH_GOOGLE_CLIENT_SECRET
+#   WATCH_POLL_INTERVAL (default: 60)
 # =============================================================================
 
 services:
-  # =========================================================================
-  # LOCAL MODE (default)
-  # =========================================================================
-
-  # gRPC storage server (local filesystem)
+  # ─── R2 Storage (StorageService gRPC) ──────────────────────────────────────
   storage:
-    build:
-      context: .
-      dockerfile: crates/docx-storage-local/Dockerfile
+    build: { context: ., dockerfile: Dockerfile.storage-cloudflare }
     environment:
       RUST_LOG: info
       GRPC_HOST: "0.0.0.0"
       GRPC_PORT: "50051"
-      STORAGE_BACKEND: local
-      LOCAL_STORAGE_DIR: /app/data
-    volumes:
-      - storage-data:/app/data
-    ports:
-      - "50051:50051"
-    healthcheck:
-      test: ["CMD", "sh", "-c", "echo > /dev/tcp/localhost/50051"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # MCP stdio server (embedded storage — no separate server needed)
-  mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      LOCAL_STORAGE_DIR: /app/data
-    volumes:
-      - storage-data:/app/data
-    stdin_open: true
-    tty: true
-    restart: "no"
-
-  # MCP stdio server (remote storage — connects to separate gRPC server)
-  mcp-remote:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    depends_on:
-      storage:
-        condition: service_healthy
-    environment:
-      STORAGE_GRPC_URL: http://storage:50051
-    stdin_open: true
-    tty: true
-    profiles:
-      - remote
-    restart: "no"
-
-  # CLI tool (embedded storage)
-  cli:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    entrypoint: ["./docx-cli"]
-    environment:
-      LOCAL_STORAGE_DIR: /app/data
-    volumes:
-      - storage-data:/app/data
-      - ./examples:/workspace:ro
-    working_dir: /workspace
-    profiles:
-      - cli
-
-  # =========================================================================
-  # CLOUD MODE (Cloudflare R2 + KV)
-  # =========================================================================
-
-  # gRPC storage server (Cloudflare R2 + KV)
-  storage-cloud:
-    build:
-      context: .
-      dockerfile: crates/docx-storage-cloudflare/Dockerfile
-    environment:
-      RUST_LOG: info
-      GRPC_HOST: "0.0.0.0"
-      GRPC_PORT: "50051"
-      # Required - set via .env file or environment
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       R2_BUCKET_NAME: ${R2_BUCKET_NAME}
-      KV_NAMESPACE_ID: ${KV_NAMESPACE_ID}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
-      # Optional
-      WATCH_POLL_INTERVAL: ${WATCH_POLL_INTERVAL:-30}
     ports:
       - "50051:50051"
     healthcheck:
-      test: ["CMD", "sh", "-c", "echo > /dev/tcp/localhost/50051"]
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
       interval: 10s
       timeout: 5s
       retries: 5
-    profiles:
-      - cloud
     restart: unless-stopped
 
-  # MCP server for cloud mode
-  mcp-cloud:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    depends_on:
-      storage-cloud:
-        condition: service_healthy
-    environment:
-      STORAGE_GRPC_URL: http://storage-cloud:50051
-      RUST_LOG: info
-    volumes:
-      - sessions-data:/home/app/.docx-mcp/sessions
-    stdin_open: true
-    tty: true
-    profiles:
-      - cloud
-    restart: "no"
-
-  # =========================================================================
-  # SSE PROXY (for remote MCP clients)
-  # =========================================================================
-
-  # SSE/HTTP proxy with D1 auth (local storage)
-  proxy:
-    build:
-      context: .
-      dockerfile: crates/docx-mcp-sse-proxy/Dockerfile
-    depends_on:
-      storage:
-        condition: service_healthy
+  # ─── Google Drive (SourceSyncService + ExternalWatchService gRPC) ──────────
+  gdrive:
+    build: { context: ., dockerfile: Dockerfile.gdrive }
     environment:
       RUST_LOG: info
-      PROXY_HOST: "0.0.0.0"
-      PROXY_PORT: "8080"
+      GRPC_HOST: "0.0.0.0"
+      GRPC_PORT: "50052"
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      D1_DATABASE_ID: ${D1_DATABASE_ID}
+      GOOGLE_CLIENT_ID: ${OAUTH_GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${OAUTH_GOOGLE_CLIENT_SECRET}
+      WATCH_POLL_INTERVAL: ${WATCH_POLL_INTERVAL:-60}
+    ports:
+      - "50052:50052"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50052"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── MCP Server (.NET NativeAOT, dual-server: R2 history + gdrive sync) ───
+  mcp-http:
+    build: { context: ., dockerfile: Dockerfile }
+    depends_on:
+      storage: { condition: service_healthy }
+      gdrive: { condition: service_healthy }
+    environment:
+      MCP_TRANSPORT: http
+      ASPNETCORE_URLS: http://+:3000
       STORAGE_GRPC_URL: http://storage:50051
-      # Required for PAT validation
-      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
-      D1_DATABASE_ID: ${D1_DATABASE_ID}
-    ports:
-      - "8080:8080"
+      SYNC_GRPC_URL: http://gdrive:50052
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    profiles:
-      - proxy
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  # SSE/HTTP proxy (cloud storage)
-  proxy-cloud:
-    build:
-      context: .
-      dockerfile: crates/docx-mcp-sse-proxy/Dockerfile
+  # ─── Auth Proxy (PAT auth via D1 + HTTP reverse proxy) ────────────────────
+  proxy:
+    build: { context: ., dockerfile: Dockerfile.proxy }
     depends_on:
-      storage-cloud:
-        condition: service_healthy
+      mcp-http: { condition: service_healthy }
     environment:
       RUST_LOG: info
-      PROXY_HOST: "0.0.0.0"
-      PROXY_PORT: "8080"
-      STORAGE_GRPC_URL: http://storage-cloud:50051
-      # Required for PAT validation
+      MCP_BACKEND_URL: http://mcp-http:3000
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       D1_DATABASE_ID: ${D1_DATABASE_ID}
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    profiles:
-      - cloud
     restart: unless-stopped
-
-volumes:
-  storage-data:
-    driver: local
-
-# =============================================================================
-# Usage:
-#
-# LOCAL MODE (default):
-#   docker-compose up storage        # Storage server only
-#   docker-compose run --rm mcp      # Interactive MCP server
-#   docker-compose --profile cli run --rm cli document list
-#   docker-compose --profile proxy up  # With SSE proxy
-#
-# CLOUD MODE (Cloudflare R2 + KV):
-#   # First, create .env file with Cloudflare credentials:
-#   #   CLOUDFLARE_ACCOUNT_ID=xxx
-#   #   CLOUDFLARE_API_TOKEN=xxx
-#   #   R2_BUCKET_NAME=docx-mcp
-#   #   KV_NAMESPACE_ID=xxx
-#   #   R2_ACCESS_KEY_ID=xxx
-#   #   R2_SECRET_ACCESS_KEY=xxx
-#   #   D1_DATABASE_ID=xxx
-#
-#   docker-compose --profile cloud up storage-cloud
-#   docker-compose --profile cloud run --rm mcp-cloud
-#   docker-compose --profile cloud up  # Full stack with proxy
-#
-# =============================================================================

@@ -4,7 +4,7 @@
 # =============================================================================
 
 # Stage 1: Build Rust staticlib
-FROM rust:1.85-slim-bookworm AS rust-builder
+FROM rust:1.93-slim-bookworm AS rust-builder
 
 WORKDIR /rust
 
