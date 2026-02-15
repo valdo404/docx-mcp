@@ -5,6 +5,7 @@ members = [
     "crates/docx-storage-core",
     "crates/docx-storage-local",
     "crates/docx-storage-cloudflare",
+    "crates/docx-storage-gdrive",
     "crates/docx-mcp-sse-proxy",
 ]
 

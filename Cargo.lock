@@ -1036,11 +1036,9 @@ name = "docx-mcp-sse-proxy"
 version = "1.6.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
  "chrono",
  "clap",
- "futures",
  "hex",
  "moka",
  "reqwest",
@@ -1049,7 +1047,6 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -1067,16 +1064,12 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "dashmap",
  "docx-storage-core",
- "futures",
- "hex",
  "prost",
  "prost-types",
  "serde",
  "serde_bytes",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1087,8 +1080,6 @@ dependencies = [
  "tonic-reflection",
  "tracing",
  "tracing-subscriber",
- "uuid",
- "wiremock",
 ]
 
 [[package]]
@@ -1101,6 +1092,36 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "docx-storage-gdrive"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "dashmap",
+ "docx-storage-core",
+ "hex",
+ "prost",
+ "prost-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tonic",
+ "tonic-build",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2648,6 +2669,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2 0.4.13",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -2672,12 +2694,14 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls 0.26.4",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots",
 ]
@@ -3703,6 +3727,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f01b580c9ac74c8d8f0c0e4afb04eeef2acf145458e52c03845ee9cd23e3d12"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

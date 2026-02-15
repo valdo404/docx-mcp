@@ -14,6 +14,7 @@ pub enum SourceType {
     OneDrive,
     S3,
     R2,
+    GoogleDrive,
 }
 
 impl Default for SourceType {

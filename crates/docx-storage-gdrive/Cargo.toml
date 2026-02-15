@@ -1,0 +1,67 @@
+[package]
+name = "docx-storage-gdrive"
+description = "Google Drive sync/watch backend for docx-mcp multi-tenant architecture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Core traits
+docx-storage-core = { path = "../docx-storage-core" }
+
+# gRPC
+tonic.workspace = true
+tonic-reflection = "0.13"
+prost.workspace = true
+prost-types.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+
+# HTTP client (Google Drive API + D1 REST API + OAuth2 token refresh)
+reqwest.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Async utilities
+async-trait.workspace = true
+
+# Time
+chrono.workspace = true
+
+# UUID (watch IDs)
+uuid = { version = "1", features = ["v4"] }
+
+# CLI
+clap.workspace = true
+
+# Concurrent data structures
+dashmap = "6"
+
+# Crypto (MD5 checksum hex decoding)
+hex.workspace = true
+
+[build-dependencies]
+tonic-build = "0.13"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-test = "0.4"
+wiremock = "0.6"
+
+[[bin]]
+name = "docx-storage-gdrive"
+path = "src/main.rs"
+
+[lints]
+workspace = true

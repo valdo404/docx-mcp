@@ -5,11 +5,11 @@ use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, instrument};
 
-use crate::service::proto;
+use crate::proto;
 use proto::source_sync_service_server::SourceSyncService;
 use proto::*;
 
-/// Implementation of the SourceSyncService gRPC service.
+/// Implementation of the SourceSyncService gRPC service for Google Drive.
 pub struct SourceSyncServiceImpl {
     sync_backend: Arc<dyn SyncBackend>,
 }
@@ -19,14 +19,12 @@ impl SourceSyncServiceImpl {
         Self { sync_backend }
     }
 
-    /// Extract tenant_id from request context.
     fn get_tenant_id(context: Option<&TenantContext>) -> Result<&str, Status> {
         context
             .map(|c| c.tenant_id.as_str())
             .ok_or_else(|| Status::invalid_argument("tenant context is required"))
     }
 
-    /// Convert proto SourceType to core SourceType.
     fn convert_source_type(proto_type: i32) -> SourceType {
         match proto_type {
             1 => SourceType::LocalFile,
@@ -34,12 +32,14 @@ impl SourceSyncServiceImpl {
             3 => SourceType::OneDrive,
             4 => SourceType::S3,
             5 => SourceType::R2,
-            _ => SourceType::LocalFile, // Default
+            6 => SourceType::GoogleDrive,
+            _ => SourceType::LocalFile,
         }
     }
 
-    /// Convert proto SourceDescriptor to core SourceDescriptor.
-    fn convert_source_descriptor(proto: Option<&proto::SourceDescriptor>) -> Option<SourceDescriptor> {
+    fn convert_source_descriptor(
+        proto: Option<&proto::SourceDescriptor>,
+    ) -> Option<SourceDescriptor> {
         proto.map(|s| SourceDescriptor {
             source_type: Self::convert_source_type(s.r#type),
             uri: s.uri.clone(),
@@ -47,7 +47,6 @@ impl SourceSyncServiceImpl {
         })
     }
 
-    /// Convert core SourceType to proto SourceType.
     fn to_proto_source_type(source_type: SourceType) -> i32 {
         match source_type {
             SourceType::LocalFile => 1,
@@ -59,7 +58,6 @@ impl SourceSyncServiceImpl {
         }
     }
 
-    /// Convert core SourceDescriptor to proto SourceDescriptor.
     fn to_proto_source_descriptor(source: &SourceDescriptor) -> proto::SourceDescriptor {
         proto::SourceDescriptor {
             r#type: Self::to_proto_source_type(source.source_type),
@@ -68,7 +66,6 @@ impl SourceSyncServiceImpl {
         }
     }
 
-    /// Convert core SyncStatus to proto SyncStatus.
     fn to_proto_sync_status(status: &docx_storage_core::SyncStatus) -> proto::SyncStatus {
         proto::SyncStatus {
             session_id: status.session_id.clone(),
@@ -129,10 +126,6 @@ impl SourceSyncService for SourceSyncServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        debug!(
-            "Unregistered source for tenant {} session {}",
-            tenant_id, req.session_id
-        );
         Ok(Response::new(UnregisterSourceResponse { success: true }))
     }
 
@@ -144,10 +137,7 @@ impl SourceSyncService for SourceSyncServiceImpl {
         let req = request.into_inner();
         let tenant_id = Self::get_tenant_id(req.context.as_ref())?;
 
-        // Convert optional source
         let source = Self::convert_source_descriptor(req.source.as_ref());
-
-        // Convert optional auto_sync (only if update_auto_sync is true)
         let auto_sync = if req.update_auto_sync {
             Some(req.auto_sync)
         } else {
@@ -159,16 +149,10 @@ impl SourceSyncService for SourceSyncServiceImpl {
             .update_source(tenant_id, &req.session_id, source, auto_sync)
             .await
         {
-            Ok(()) => {
-                debug!(
-                    "Updated source for tenant {} session {}",
-                    tenant_id, req.session_id
-                );
-                Ok(Response::new(UpdateSourceResponse {
-                    success: true,
-                    error: String::new(),
-                }))
-            }
+            Ok(()) => Ok(Response::new(UpdateSourceResponse {
+                success: true,
+                error: String::new(),
+            })),
             Err(e) => Ok(Response::new(UpdateSourceResponse {
                 success: false,
                 error: e.to_string(),
@@ -190,7 +174,6 @@ impl SourceSyncService for SourceSyncServiceImpl {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
 
-            // Extract metadata from first chunk
             if tenant_id.is_none() {
                 tenant_id = chunk.context.map(|c| c.tenant_id);
                 session_id = Some(chunk.session_id);
@@ -208,13 +191,6 @@ impl SourceSyncService for SourceSyncServiceImpl {
         let session_id = session_id
             .filter(|s| !s.is_empty())
             .ok_or_else(|| Status::invalid_argument("session_id is required in first chunk"))?;
-
-        debug!(
-            "Syncing {} bytes to source for tenant {} session {}",
-            data.len(),
-            tenant_id,
-            session_id
-        );
 
         match self
             .sync_backend
@@ -268,10 +244,8 @@ impl SourceSyncService for SourceSyncServiceImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let proto_sources: Vec<proto::SyncStatus> = sources
-            .iter()
-            .map(Self::to_proto_sync_status)
-            .collect();
+        let proto_sources: Vec<proto::SyncStatus> =
+            sources.iter().map(Self::to_proto_sync_status).collect();
 
         Ok(Response::new(ListSourcesResponse {
             sources: proto_sources,
