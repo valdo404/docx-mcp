@@ -20,19 +20,14 @@ const tenant = Astro.locals.tenant!;
     <div class="container">
       <h1>{t('dashboard.welcome')}, {user.name}</h1>
 
-      <div class="cards">
-        <div class="card">
-          <h3>{t('dashboard.storage')}</h3>
-          <p class="coming-soon">{t('dashboard.comingSoon')}</p>
-        </div>
+      <ConnectionsManager lang="fr" />
 
+      <div class="cards">
         <div class="card">
           <h3>{t('dashboard.documents')}</h3>
           <p class="coming-soon">{t('dashboard.comingSoon')}</p>
         </div>
       </div>
-
-      <ConnectionsManager lang="fr" />
 
       <PatManager lang="fr" />
 
