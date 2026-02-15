@@ -1,5 +1,6 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
 using DocxMcp.Tools;
 using Xunit;
@@ -114,7 +115,7 @@ public class SessionPersistenceTests
         var id = session.Id;
 
         // Apply a patch through PatchTool
-        PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), null, id,
+        PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id,
             "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"WAL entry\"}}]");
 
         // Verify WAL has entries via history
@@ -176,9 +177,9 @@ public class SessionPersistenceTests
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), null, id,
+        PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id,
             "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"First\"}}]");
-        PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), null, id,
+        PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id,
             "[{\"op\":\"add\",\"path\":\"/body/children/1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Second\"}}]");
 
         // Restart

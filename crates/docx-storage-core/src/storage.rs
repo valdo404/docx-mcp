@@ -121,6 +121,9 @@ pub struct SessionIndexEntry {
     /// Checkpoint positions
     #[serde(default)]
     pub checkpoint_positions: Vec<u64>,
+    /// Whether there is a pending external change for this session
+    #[serde(default)]
+    pub pending_external_change: bool,
 }
 
 fn default_auto_sync() -> bool {

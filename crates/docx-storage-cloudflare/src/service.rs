@@ -221,7 +221,19 @@ impl StorageService for StorageServiceImpl {
             .await
             .map_storage_err()?;
 
-        Ok(Response::new(SessionExistsResponse { exists }))
+        // Read pending_external_change from the index
+        let pending_external_change = if exists {
+            self.storage
+                .load_index(tenant_id)
+                .await
+                .map_storage_err()?
+                .and_then(|idx| idx.get(&req.session_id).map(|e| e.pending_external_change))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        Ok(Response::new(SessionExistsResponse { exists, pending_external_change }))
     }
 
     // =========================================================================
@@ -295,6 +307,7 @@ impl StorageService for StorageServiceImpl {
                         wal_count: entry.wal_position,
                         cursor_position: entry.wal_position,
                         checkpoint_positions: entry.checkpoint_positions.clone(),
+                        pending_external_change: entry.pending_external_change,
                     });
                 }
             })
@@ -323,6 +336,7 @@ impl StorageService for StorageServiceImpl {
         let modified_at_unix = req.modified_at_unix;
         let wal_position = req.wal_position;
         let cursor_position = req.cursor_position;
+        let pending_external_change = req.pending_external_change;
         let add_checkpoint_positions = req.add_checkpoint_positions.clone();
         let remove_checkpoint_positions = req.remove_checkpoint_positions.clone();
 
@@ -347,6 +361,9 @@ impl StorageService for StorageServiceImpl {
                 }
                 if let Some(cursor_pos) = cursor_position {
                     entry.cursor_position = cursor_pos;
+                }
+                if let Some(pending) = pending_external_change {
+                    entry.pending_external_change = pending;
                 }
 
                 for pos in &add_checkpoint_positions {

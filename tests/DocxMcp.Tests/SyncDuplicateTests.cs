@@ -3,7 +3,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
-using Microsoft.Extensions.Logging.Abstractions;
+using DocxMcp.Tools;
 using Xunit;
 
 namespace DocxMcp.Tests;
@@ -20,7 +20,6 @@ public class SyncDuplicateTests : IDisposable
     private readonly string _tempFile;
     private readonly string _tenantId;
     private readonly SessionManager _sessionManager;
-    private readonly ExternalChangeTracker _tracker;
 
     public SyncDuplicateTests()
     {
@@ -34,7 +33,6 @@ public class SyncDuplicateTests : IDisposable
 
         _tenantId = $"test-sync-dup-{Guid.NewGuid():N}";
         _sessionManager = TestHelpers.CreateSessionManager(_tenantId);
-        _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
     }
 
     [Fact]
@@ -44,10 +42,10 @@ public class SyncDuplicateTests : IDisposable
         var session = _sessionManager.Open(_tempFile);
 
         // Act - first sync (may or may not have changes depending on ID assignment)
-        var result1 = _tracker.SyncExternalChanges(session.Id);
+        var result1 = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Act - second sync (should NOT create a new entry)
-        var result2 = _tracker.SyncExternalChanges(session.Id);
+        var result2 = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.False(result2.HasChanges, "Second sync should report no changes");
@@ -64,9 +62,9 @@ public class SyncDuplicateTests : IDisposable
         var session = _sessionManager.Open(_tempFile);
 
         // Act
-        _tracker.SyncExternalChanges(session.Id);
-        var result2 = _tracker.SyncExternalChanges(session.Id);
-        var result3 = _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
+        var result2 = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
+        var result3 = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.False(result2.HasChanges, "Second sync should report no changes");
@@ -78,14 +76,14 @@ public class SyncDuplicateTests : IDisposable
     {
         // Arrange
         var session = _sessionManager.Open(_tempFile);
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Modify the external file
         Thread.Sleep(100); // Ensure different timestamp
         ModifyTestDocx(_tempFile, "Modified content");
 
         // Act
-        var result = _tracker.SyncExternalChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.True(result.HasChanges, "Sync after file modification should have changes");
@@ -98,16 +96,16 @@ public class SyncDuplicateTests : IDisposable
         var session = _sessionManager.Open(_tempFile);
 
         // First sync (no changes or initial sync)
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Modify and sync
         Thread.Sleep(100);
         ModifyTestDocx(_tempFile, "Modified");
-        var modifyResult = _tracker.SyncExternalChanges(session.Id);
+        var modifyResult = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
         Assert.True(modifyResult.HasChanges);
 
         // Sync again without changes
-        var noChangeResult = _tracker.SyncExternalChanges(session.Id);
+        var noChangeResult = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.False(noChangeResult.HasChanges, "Sync after modification sync without further changes should have no changes");
@@ -219,7 +217,7 @@ public class SyncDuplicateTests : IDisposable
         // Sync external (creates checkpoint with new content)
         Thread.Sleep(100);
         ModifyTestDocx(_tempFile, "New content from external");
-        var syncResult = _tracker.SyncExternalChanges(sessionId);
+        var syncResult = ExternalChangeTools.PerformSync(_sessionManager, sessionId, isImport: false);
         Assert.True(syncResult.HasChanges, "Sync should detect changes");
 
         // Verify synced content is in memory
@@ -228,7 +226,6 @@ public class SyncDuplicateTests : IDisposable
 
         // Simulate server restart by creating a new SessionManager with same tenant
         var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
-        var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
 
         // Act - restore sessions
         var restoredCount = newSessionManager.RestoreSessions();
@@ -240,11 +237,8 @@ public class SyncDuplicateTests : IDisposable
         Assert.Contains("New content from external", restoredText);
 
         // Additional check: syncing again should NOT create a new WAL entry
-        var secondSyncResult = newTracker.SyncExternalChanges(sessionId);
+        var secondSyncResult = ExternalChangeTools.PerformSync(newSessionManager, sessionId, isImport: false);
         Assert.False(secondSyncResult.HasChanges, "Sync after restore should report no changes");
-
-        // Cleanup the new tracker
-        newTracker.Dispose();
     }
 
     [Fact]
@@ -261,29 +255,25 @@ public class SyncDuplicateTests : IDisposable
         // Create external sync entry
         Thread.Sleep(100);
         ModifyTestDocx(_tempFile, "Externally modified content");
-        _tracker.SyncExternalChanges(sessionId);
+        ExternalChangeTools.PerformSync(_sessionManager, sessionId, isImport: false);
 
         var historyBefore = _sessionManager.GetHistory(sessionId);
         var syncEntriesBefore = historyBefore.Entries.Count(e => e.IsExternalSync);
 
         // Simulate server restart with same tenant
         var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
-        var newTracker = new ExternalChangeTracker(newSessionManager, NullLogger<ExternalChangeTracker>.Instance);
         newSessionManager.RestoreSessions();
 
         // Act - sync multiple times after restart
-        newTracker.SyncExternalChanges(sessionId);
-        newTracker.SyncExternalChanges(sessionId);
-        newTracker.SyncExternalChanges(sessionId);
+        ExternalChangeTools.PerformSync(newSessionManager, sessionId, isImport: false);
+        ExternalChangeTools.PerformSync(newSessionManager, sessionId, isImport: false);
+        ExternalChangeTools.PerformSync(newSessionManager, sessionId, isImport: false);
 
         // Assert - should still have the same number of sync entries
         var historyAfter = newSessionManager.GetHistory(sessionId);
         var syncEntriesAfter = historyAfter.Entries.Count(e => e.IsExternalSync);
 
         Assert.Equal(syncEntriesBefore, syncEntriesAfter);
-
-        // Cleanup
-        newTracker.Dispose();
     }
 
     #region Helpers
@@ -329,8 +319,6 @@ public class SyncDuplicateTests : IDisposable
 
     public void Dispose()
     {
-        _tracker.Dispose();
-
         // Close any open sessions
         foreach (var (id, _) in _sessionManager.List().ToList())
         {

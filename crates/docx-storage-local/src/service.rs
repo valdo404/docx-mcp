@@ -224,7 +224,19 @@ impl StorageService for StorageServiceImpl {
             .await
             .map_storage_err()?;
 
-        Ok(Response::new(SessionExistsResponse { exists }))
+        // Read pending_external_change from the index
+        let pending_external_change = if exists {
+            self.storage
+                .load_index(tenant_id)
+                .await
+                .map_storage_err()?
+                .and_then(|idx| idx.get(&req.session_id).map(|e| e.pending_external_change))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        Ok(Response::new(SessionExistsResponse { exists, pending_external_change }))
     }
 
     // =========================================================================
@@ -309,6 +321,7 @@ impl StorageService for StorageServiceImpl {
                     wal_count: entry.wal_position,
                     cursor_position: entry.wal_position,
                     checkpoint_positions: entry.checkpoint_positions,
+                    pending_external_change: entry.pending_external_change,
                 });
                 self.storage.save_index(tenant_id, &index).await.map_storage_err()?;
             }
@@ -381,6 +394,9 @@ impl StorageService for StorageServiceImpl {
                 }
                 if let Some(cursor_position) = req.cursor_position {
                     entry.cursor_position = cursor_position;
+                }
+                if let Some(pending) = req.pending_external_change {
+                    entry.pending_external_change = pending;
                 }
 
                 // Add checkpoint positions

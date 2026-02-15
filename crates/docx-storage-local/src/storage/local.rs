@@ -856,6 +856,7 @@ mod tests {
             wal_count: 5,
             cursor_position: 5,
             checkpoint_positions: vec![],
+            pending_external_change: false,
         });
 
         storage.save_index(tenant, &index).await.unwrap();
@@ -890,6 +891,7 @@ mod tests {
                 wal_count: 0,
                 cursor_position: 0,
                 checkpoint_positions: vec![],
+                pending_external_change: false,
             });
 
             // Save
@@ -977,6 +979,7 @@ mod tests {
                     wal_count: 0,
                     cursor_position: 0,
                     checkpoint_positions: vec![],
+                    pending_external_change: false,
                 });
 
                 // Save - ensure this completes before releasing lock

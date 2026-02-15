@@ -1,6 +1,5 @@
 using System.Text.Json;
 using DocxMcp;
-using DocxMcp.Cli;
 using DocxMcp.Diff;
 using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
@@ -83,17 +82,14 @@ else
 var sessions = new SessionManager(historyStorage, NullLogger<SessionManager>.Instance);
 var tenant = new TenantScope(sessions);
 var syncManager = new SyncManager(syncStorage, NullLogger<SyncManager>.Instance);
-var externalTracker = new ExternalChangeTracker(sessions, NullLogger<ExternalChangeTracker>.Instance);
+var gate = new ExternalChangeGate(historyStorage);
 if (isDebug) Console.Error.WriteLine("[cli] Calling RestoreSessions...");
 sessions.RestoreSessions();
 // Re-register watches for restored sessions
 foreach (var (sessionId, sourcePath) in sessions.List())
 {
     if (sourcePath is not null)
-    {
         syncManager.RegisterAndWatch(sessions.TenantId, sessionId, sourcePath, autoSync: true);
-        externalTracker.RegisterSession(sessionId);
-    }
 }
 if (isDebug) Console.Error.WriteLine("[cli] RestoreSessions done");
 
@@ -118,9 +114,9 @@ try
     {
         "open" => CmdOpen(args),
         "list" => DocumentTools.DocumentList(tenant),
-        "close" => DocumentTools.DocumentClose(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
-        "save" => DocumentTools.DocumentSave(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
-        "set-source" => DocumentTools.DocumentSetSource(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "close" => DocumentTools.DocumentClose(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
+        "save" => DocumentTools.DocumentSave(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
+        "set-source" => DocumentTools.DocumentSetSource(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "path"), auto_sync: !HasFlag(args, "--no-auto-sync")),
         "snapshot" => DocumentTools.DocumentSnapshot(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
@@ -148,14 +144,14 @@ try
         "style-table" => CmdStyleTable(args),
 
         // History commands
-        "undo" => HistoryTools.DocumentUndo(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "undo" => HistoryTools.DocumentUndo(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(GetNonFlagArg(args, 2), 1)),
-        "redo" => HistoryTools.DocumentRedo(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "redo" => HistoryTools.DocumentRedo(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(GetNonFlagArg(args, 2), 1)),
         "history" => HistoryTools.DocumentHistory(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseInt(OptNamed(args, "--offset"), 0),
             ParseInt(OptNamed(args, "--limit"), 20)),
-        "jump-to" => HistoryTools.DocumentJumpTo(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "jump-to" => HistoryTools.DocumentJumpTo(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "position"))),
 
         // Comment commands
@@ -177,11 +173,11 @@ try
 
         // Revision (Track Changes) commands
         "revision-list" => CmdRevisionList(args),
-        "revision-accept" => RevisionTools.RevisionAccept(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "revision-accept" => RevisionTools.RevisionAccept(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "revision_id"))),
-        "revision-reject" => RevisionTools.RevisionReject(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "revision-reject" => RevisionTools.RevisionReject(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             int.Parse(Require(args, 2, "revision_id"))),
-        "track-changes-enable" => RevisionTools.TrackChangesEnable(tenant, syncManager, externalTracker, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "track-changes-enable" => RevisionTools.TrackChangesEnable(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             ParseBool(Require(args, 2, "enabled"))),
 
         // Diff commands
@@ -214,7 +210,7 @@ catch (Exception ex)
 string CmdOpen(string[] a)
 {
     var path = GetNonFlagArg(a, 1);
-    return DocumentTools.DocumentOpen(tenant, syncManager, externalTracker, path);
+    return DocumentTools.DocumentOpen(tenant, syncManager, path);
 }
 
 string CmdPatch(string[] a)
@@ -223,7 +219,7 @@ string CmdPatch(string[] a)
     var dryRun = HasFlag(a, "--dry-run");
     // patches can be arg[2] or read from stdin
     var patches = GetNonFlagArg(a, 2) ?? ReadStdin();
-    return PatchTool.ApplyPatch(tenant, syncManager, externalTracker, docId, patches, dryRun);
+    return PatchTool.ApplyPatch(tenant, syncManager, gate, docId, patches, dryRun);
 }
 
 string CmdAdd(string[] a)
@@ -232,7 +228,7 @@ string CmdAdd(string[] a)
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.AddElement(tenant, syncManager, externalTracker, docId, path, value, dryRun);
+    return ElementTools.AddElement(tenant, syncManager, gate, docId, path, value, dryRun);
 }
 
 string CmdReplace(string[] a)
@@ -241,7 +237,7 @@ string CmdReplace(string[] a)
     var path = Require(a, 2, "path");
     var value = GetNonFlagArg(a, 3) ?? ReadStdin();
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.ReplaceElement(tenant, syncManager, externalTracker, docId, path, value, dryRun);
+    return ElementTools.ReplaceElement(tenant, syncManager, gate, docId, path, value, dryRun);
 }
 
 string CmdRemove(string[] a)
@@ -249,7 +245,7 @@ string CmdRemove(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var path = Require(a, 2, "path");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.RemoveElement(tenant, syncManager, externalTracker, docId, path, dryRun);
+    return ElementTools.RemoveElement(tenant, syncManager, gate, docId, path, dryRun);
 }
 
 string CmdMove(string[] a)
@@ -258,7 +254,7 @@ string CmdMove(string[] a)
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.MoveElement(tenant, syncManager, externalTracker, docId, from, to, dryRun);
+    return ElementTools.MoveElement(tenant, syncManager, gate, docId, from, to, dryRun);
 }
 
 string CmdCopy(string[] a)
@@ -267,7 +263,7 @@ string CmdCopy(string[] a)
     var from = Require(a, 2, "from");
     var to = Require(a, 3, "to");
     var dryRun = HasFlag(a, "--dry-run");
-    return ElementTools.CopyElement(tenant, syncManager, externalTracker, docId, from, to, dryRun);
+    return ElementTools.CopyElement(tenant, syncManager, gate, docId, from, to, dryRun);
 }
 
 string CmdReplaceText(string[] a)
@@ -278,7 +274,7 @@ string CmdReplaceText(string[] a)
     var replace = Require(a, 4, "replace");
     var maxCount = ParseInt(OptNamed(a, "--max-count"), 1);
     var dryRun = HasFlag(a, "--dry-run");
-    return TextTools.ReplaceText(tenant, syncManager, externalTracker, docId, path, find, replace, maxCount, dryRun);
+    return TextTools.ReplaceText(tenant, syncManager, gate, docId, path, find, replace, maxCount, dryRun);
 }
 
 string CmdRemoveColumn(string[] a)
@@ -287,7 +283,7 @@ string CmdRemoveColumn(string[] a)
     var path = Require(a, 2, "path");
     var column = int.Parse(Require(a, 3, "column"));
     var dryRun = HasFlag(a, "--dry-run");
-    return TableTools.RemoveTableColumn(tenant, syncManager, externalTracker, docId, path, column, dryRun);
+    return TableTools.RemoveTableColumn(tenant, syncManager, gate, docId, path, column, dryRun);
 }
 
 string CmdStyleElement(string[] a)
@@ -295,7 +291,7 @@ string CmdStyleElement(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = Require(a, 2, "style");
     var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
-    return StyleTools.StyleElement(tenant, syncManager, externalTracker, docId, style, path);
+    return StyleTools.StyleElement(tenant, syncManager, docId, style, path);
 }
 
 string CmdStyleParagraph(string[] a)
@@ -303,7 +299,7 @@ string CmdStyleParagraph(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var style = Require(a, 2, "style");
     var path = OptNamed(a, "--path") ?? GetNonFlagArg(a, 3);
-    return StyleTools.StyleParagraph(tenant, syncManager, externalTracker, docId, style, path);
+    return StyleTools.StyleParagraph(tenant, syncManager, docId, style, path);
 }
 
 string CmdStyleTable(string[] a)
@@ -313,7 +309,7 @@ string CmdStyleTable(string[] a)
     var cellStyle = OptNamed(a, "--cell-style");
     var rowStyle = OptNamed(a, "--row-style");
     var path = OptNamed(a, "--path");
-    return StyleTools.StyleTable(tenant, syncManager, externalTracker, docId, style, cellStyle, rowStyle, path);
+    return StyleTools.StyleTable(tenant, syncManager, docId, style, cellStyle, rowStyle, path);
 }
 
 string CmdCommentAdd(string[] a)
@@ -324,7 +320,7 @@ string CmdCommentAdd(string[] a)
     var anchorText = OptNamed(a, "--anchor-text");
     var author = OptNamed(a, "--author");
     var initials = OptNamed(a, "--initials");
-    return CommentTools.CommentAdd(tenant, syncManager, externalTracker, docId, path, text, anchorText, author, initials);
+    return CommentTools.CommentAdd(tenant, syncManager, docId, path, text, anchorText, author, initials);
 }
 
 string CmdCommentList(string[] a)
@@ -341,7 +337,7 @@ string CmdCommentDelete(string[] a)
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var commentId = ParseIntOpt(OptNamed(a, "--id"));
     var author = OptNamed(a, "--author");
-    return CommentTools.CommentDelete(tenant, syncManager, externalTracker, docId, commentId, author);
+    return CommentTools.CommentDelete(tenant, syncManager, docId, commentId, author);
 }
 
 string CmdReadSection(string[] a)
@@ -503,131 +499,19 @@ string CmdCheckExternal(string[] a)
 {
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var acknowledge = HasFlag(a, "--acknowledge");
-
-    // Check for pending changes first, then check for new changes
-    var pending = externalTracker.GetLatestUnacknowledgedChange(docId);
-    if (pending is null)
-    {
-        pending = externalTracker.CheckForChanges(docId);
-    }
-
-    if (pending is null)
-    {
-        return "No external changes detected. The document is in sync with the source file.";
-    }
-
-    // Acknowledge if requested
-    if (acknowledge)
-    {
-        externalTracker.AcknowledgeChange(docId, pending.Id);
-    }
-
-    var sb = new System.Text.StringBuilder();
-    sb.AppendLine($"External changes detected in '{Path.GetFileName(pending.SourcePath)}'");
-    sb.AppendLine($"Detected at: {pending.DetectedAt:yyyy-MM-dd HH:mm:ss UTC}");
-    sb.AppendLine();
-    sb.AppendLine($"Summary: +{pending.Summary.Added} -{pending.Summary.Removed} ~{pending.Summary.Modified}");
-    sb.AppendLine();
-    sb.AppendLine($"Change ID: {pending.Id}");
-    sb.AppendLine($"Source: {pending.SourcePath}");
-    sb.AppendLine($"Status: {(pending.Acknowledged || acknowledge ? "Acknowledged" : "Pending")}");
-
-    if (!pending.Acknowledged && !acknowledge)
-    {
-        sb.AppendLine();
-        sb.AppendLine("Use --acknowledge to acknowledge, or use 'sync-external' to sync.");
-    }
-
-    return sb.ToString();
+    return ExternalChangeTools.GetExternalChanges(tenant, gate, docId, acknowledge);
 }
 
 string CmdSyncExternal(string[] a)
 {
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
-    var changeId = OptNamed(a, "--change-id");
-
-    var result = externalTracker.SyncExternalChanges(docId, changeId);
-
-    var sb = new System.Text.StringBuilder();
-    sb.AppendLine(result.Message);
-
-    if (result.Success && result.HasChanges)
-    {
-        sb.AppendLine();
-        sb.AppendLine($"WAL Position: {result.WalPosition}");
-
-        if (result.Summary is not null)
-        {
-            sb.AppendLine();
-            sb.AppendLine("Body Changes:");
-            sb.AppendLine($"  Added: {result.Summary.Added}");
-            sb.AppendLine($"  Removed: {result.Summary.Removed}");
-            sb.AppendLine($"  Modified: {result.Summary.Modified}");
-        }
-
-        if (result.UncoveredChanges?.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine($"Uncovered Changes ({result.UncoveredChanges.Count}):");
-            foreach (var uc in result.UncoveredChanges.Take(10))
-            {
-                sb.AppendLine($"  [{uc.ChangeKind}] {uc.Type}: {uc.Description}");
-            }
-            if (result.UncoveredChanges.Count > 10)
-            {
-                sb.AppendLine($"  ... and {result.UncoveredChanges.Count - 10} more");
-            }
-        }
-    }
-
-    return sb.ToString();
+    return ExternalChangeTools.SyncExternalChanges(tenant, syncManager, gate, docId);
 }
 
-string CmdWatch(string[] a)
+string CmdWatch(string[] _)
 {
-    var path = Require(a, 1, "path");
-    var autoSync = HasFlag(a, "--auto-sync");
-    var debounceMs = ParseInt(OptNamed(a, "--debounce"), 500);
-    var pattern = OptNamed(a, "--pattern") ?? "*.docx";
-    var recursive = HasFlag(a, "--recursive");
-
-    using var daemon = new WatchDaemon(sessions, externalTracker, debounceMs, autoSync);
-
-    var fullPath = Path.GetFullPath(path);
-    if (File.Exists(fullPath))
-    {
-        // Watch a single file
-        var sessionId = FindOrCreateSession(fullPath);
-        daemon.WatchFile(sessionId, fullPath);
-    }
-    else if (Directory.Exists(fullPath))
-    {
-        // Watch a folder
-        daemon.WatchFolder(fullPath, pattern, recursive);
-    }
-    else
-    {
-        return $"Path not found: {fullPath}";
-    }
-
-    // Handle Ctrl+C
-    var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) =>
-    {
-        e.Cancel = true;
-        cts.Cancel();
-    };
-
-    try
-    {
-        daemon.RunAsync(cts.Token).GetAwaiter().GetResult();
-    }
-    catch (OperationCanceledException)
-    {
-        // Expected on Ctrl+C
-    }
-
-    return "[DAEMON] Stopped.";
+    return "Watch command removed. External change watching is now handled by the gRPC ExternalWatchService.\n" +
+           "Use 'check-external' to manually check for changes, or 'sync-external' to sync.";
 }
 
 string CmdInspect(string[] a)
@@ -681,17 +565,6 @@ string CmdInspect(string[] a)
         }
     }
 
-    // Check for pending external changes
-    var pending = externalTracker.GetLatestUnacknowledgedChange(session.Id);
-    if (pending is not null)
-    {
-        sb.AppendLine();
-        sb.AppendLine("Pending External Change:");
-        sb.AppendLine($"  Change ID: {pending.Id}");
-        sb.AppendLine($"  Detected: {pending.DetectedAt:yyyy-MM-dd HH:mm:ss} UTC");
-        sb.AppendLine($"  Summary: +{pending.Summary.Added} -{pending.Summary.Removed} ~{pending.Summary.Modified}");
-    }
-
     return sb.ToString();
 }
 
@@ -706,10 +579,7 @@ string FindOrCreateSession(string filePath)
         }
     }
 
-    // Create new session (use EnsureTracked instead of StartWatching
-    // to avoid creating an FSW that competes with the WatchDaemon)
     var session = sessions.Open(filePath);
-    externalTracker.EnsureTracked(session.Id);
     Console.WriteLine($"[SESSION] Created session {session.Id} for {Path.GetFileName(filePath)}");
     return session.Id;
 }

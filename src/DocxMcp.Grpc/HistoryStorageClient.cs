@@ -205,7 +205,7 @@ public sealed class HistoryStorageClient : IHistoryStorage
         return response.Existed;
     }
 
-    public async Task<bool> SessionExistsAsync(
+    public async Task<(bool Exists, bool PendingExternalChange)> SessionExistsAsync(
         string tenantId, string sessionId, CancellationToken cancellationToken = default)
     {
         var request = new SessionExistsRequest
@@ -215,7 +215,7 @@ public sealed class HistoryStorageClient : IHistoryStorage
         };
 
         var response = await _client.SessionExistsAsync(request, cancellationToken: cancellationToken);
-        return response.Exists;
+        return (response.Exists, response.PendingExternalChange);
     }
 
     // =========================================================================
@@ -266,6 +266,7 @@ public sealed class HistoryStorageClient : IHistoryStorage
         IEnumerable<ulong>? addCheckpointPositions = null,
         IEnumerable<ulong>? removeCheckpointPositions = null,
         ulong? cursorPosition = null,
+        bool? pendingExternalChange = null,
         CancellationToken cancellationToken = default)
     {
         var request = new UpdateSessionInIndexRequest
@@ -279,6 +280,7 @@ public sealed class HistoryStorageClient : IHistoryStorage
         if (addCheckpointPositions is not null) request.AddCheckpointPositions.AddRange(addCheckpointPositions);
         if (removeCheckpointPositions is not null) request.RemoveCheckpointPositions.AddRange(removeCheckpointPositions);
         if (cursorPosition.HasValue) request.CursorPosition = cursorPosition.Value;
+        if (pendingExternalChange.HasValue) request.PendingExternalChange = pendingExternalChange.Value;
 
         var response = await _client.UpdateSessionInIndexAsync(request, cancellationToken: cancellationToken);
         return (response.Success, response.NotFound);

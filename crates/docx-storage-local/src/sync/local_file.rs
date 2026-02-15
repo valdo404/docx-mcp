@@ -104,6 +104,7 @@ impl SyncBackend for LocalFileSyncBackend {
                 wal_count: 0,
                 cursor_position: 0,
                 checkpoint_positions: vec![],
+                pending_external_change: false,
             };
             index.sessions.push(entry);
         }
@@ -423,6 +424,7 @@ mod tests {
             wal_count: 0,
             cursor_position: 0,
             checkpoint_positions: vec![],
+            pending_external_change: false,
         });
         backend.storage.save_index(tenant, &index).await.unwrap();
     }

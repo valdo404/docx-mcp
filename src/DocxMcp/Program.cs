@@ -5,9 +5,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using DocxMcp;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
 using DocxMcp.Tools;
-using DocxMcp.ExternalChanges;
 
 var transport = Environment.GetEnvironmentVariable("MCP_TRANSPORT") ?? "stdio";
 
@@ -23,13 +23,9 @@ if (transport == "http")
     // Multi-tenant: pool of SessionManagers, one per tenant
     builder.Services.AddSingleton<SessionManagerPool>();
     builder.Services.AddSingleton<SyncManager>();
+    builder.Services.AddSingleton<ExternalChangeGate>();
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<TenantScope>();
-
-    // Register ExternalChangeTracker in DI so the MCP SDK recognizes it as a
-    // service parameter (not a JSON-bound user parameter). Returns null at runtime
-    // since HTTP mode has no local files to watch — tool methods handle null gracefully.
-    builder.Services.Add(ServiceDescriptor.Singleton<ExternalChangeTracker>(sp => null!));
 
     builder.Services
         .AddMcpServer(ConfigureMcpServer)
@@ -78,13 +74,10 @@ else
     RegisterStorageServices(builder.Services);
 
     builder.Services.AddSingleton<SyncManager>();
+    builder.Services.AddSingleton<ExternalChangeGate>();
     builder.Services.AddSingleton<SessionManager>();
     builder.Services.AddScoped<TenantScope>();
     builder.Services.AddHostedService<SessionRestoreService>();
-
-    // External change tracking (local files)
-    builder.Services.AddSingleton<ExternalChangeTracker>();
-    builder.Services.AddHostedService<ExternalChangeNotificationService>();
 
     builder.Services
         .AddMcpServer(ConfigureMcpServer)

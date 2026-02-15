@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml.Packaging;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
-using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -81,7 +80,6 @@ public sealed class RevisionTools
     public static string RevisionAccept(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Revision ID to accept.")] int revision_id)
     {
@@ -99,8 +97,7 @@ public sealed class RevisionTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Accepted revision {revision_id}.";
     }
@@ -115,7 +112,6 @@ public sealed class RevisionTools
     public static string RevisionReject(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Revision ID to reject.")] int revision_id)
     {
@@ -133,8 +129,7 @@ public sealed class RevisionTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Rejected revision {revision_id}.";
     }
@@ -146,7 +141,6 @@ public sealed class RevisionTools
     public static string TrackChangesEnable(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("True to enable, false to disable Track Changes.")] bool enabled)
     {
@@ -163,8 +157,7 @@ public sealed class RevisionTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return enabled
             ? "Track Changes enabled. Edits made in Word will be tracked."

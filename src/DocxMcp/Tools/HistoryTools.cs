@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using ModelContextProtocol.Server;
-using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -14,14 +13,13 @@ public sealed class HistoryTools
     public static string DocumentUndo(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Number of steps to undo (default 1).")] int steps = 1)
     {
         var sessions = tenant.Sessions;
         var result = sessions.Undo(doc_id, steps);
-        if (result.Steps > 0 && sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        if (result.Steps > 0)
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes());
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
 
@@ -32,14 +30,13 @@ public sealed class HistoryTools
     public static string DocumentRedo(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Number of steps to redo (default 1).")] int steps = 1)
     {
         var sessions = tenant.Sessions;
         var result = sessions.Redo(doc_id, steps);
-        if (result.Steps > 0 && sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        if (result.Steps > 0)
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes());
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
 
@@ -94,14 +91,13 @@ public sealed class HistoryTools
     public static string DocumentJumpTo(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("WAL position to jump to (0 = baseline).")] int position)
     {
         var sessions = tenant.Sessions;
         var result = sessions.JumpTo(doc_id, position);
-        if (result.Steps > 0 && sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        if (result.Steps > 0)
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes());
         return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
     }
 }

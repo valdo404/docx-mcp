@@ -2,20 +2,21 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
-using Microsoft.Extensions.Logging.Abstractions;
+using DocxMcp.Helpers;
+using DocxMcp.Tools;
 using Xunit;
 
 namespace DocxMcp.Tests;
 
 /// <summary>
-/// Tests for external change detection and tracking.
+/// Tests for external change detection via ExternalChangeTools and ExternalChangeGate.
 /// </summary>
 public class ExternalChangeTrackerTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly List<DocxSession> _sessions = [];
-    private readonly SessionManager _sessionManager = null!;
-    private readonly ExternalChangeTracker _tracker = null!;
+    private readonly SessionManager _sessionManager;
+    private readonly ExternalChangeGate _gate = TestHelpers.CreateExternalChangeGate();
 
     public ExternalChangeTrackerTests()
     {
@@ -23,37 +24,24 @@ public class ExternalChangeTrackerTests : IDisposable
         Directory.CreateDirectory(_tempDir);
 
         _sessionManager = TestHelpers.CreateSessionManager();
-        _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
     }
 
     [Fact]
-    public void RegisterSession_WithValidSession_StartsTracking()
+    public void CheckForChanges_WhenNoChanges_ReturnsNoChanges()
     {
         // Arrange
         var filePath = CreateTempDocx("Test content");
         var session = OpenSession(filePath);
 
-        // Act
-        _tracker.RegisterSession(session.Id);
-
-        // Assert - no exception means success
-        Assert.False(_tracker.HasPendingChanges(session.Id));
-    }
-
-    [Fact]
-    public void CheckForChanges_WhenNoChanges_ReturnsNull()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Test content");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
+        // Save the session back to disk to match (opening assigns IDs)
+        File.WriteAllBytes(filePath, _sessionManager.Get(session.Id).ToBytes());
 
         // Act
-        var patch = _tracker.CheckForChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
-        Assert.Null(patch);
-        Assert.False(_tracker.HasPendingChanges(session.Id));
+        Assert.True(result.Success);
+        Assert.False(result.HasChanges);
     }
 
     [Fact]
@@ -62,193 +50,49 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original content");
         var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
 
         // Modify the file externally
         ModifyDocx(filePath, "Modified content");
 
         // Act
-        var patch = _tracker.CheckForChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
-        Assert.NotNull(patch);
-        Assert.True(patch.Summary.TotalChanges > 0);
-        Assert.Equal(session.Id, patch.SessionId);
-        Assert.Equal(filePath, patch.SourcePath);
-        Assert.False(patch.Acknowledged);
+        Assert.True(result.Success);
+        Assert.True(result.HasChanges);
+        Assert.NotNull(result.Summary);
+        Assert.True(result.Summary.TotalChanges > 0);
     }
 
     [Fact]
-    public void HasPendingChanges_AfterDetection_ReturnsTrue()
+    public void PerformSync_WhenNoSourcePath_ReturnsFailure()
     {
-        // Arrange
-        var filePath = CreateTempDocx("Original");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        ModifyDocx(filePath, "Changed");
-        _tracker.CheckForChanges(session.Id);
-
-        // Act & Assert
-        Assert.True(_tracker.HasPendingChanges(session.Id));
-    }
-
-    [Fact]
-    public void AcknowledgeChange_MarksPatchAsAcknowledged()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Original");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        ModifyDocx(filePath, "Changed");
-        var patch = _tracker.CheckForChanges(session.Id)!;
+        // Arrange — create a new empty session (no source path)
+        var session = _sessionManager.Create();
+        _sessions.Add(session);
 
         // Act
-        var result = _tracker.AcknowledgeChange(session.Id, patch.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
-        Assert.True(result);
-        Assert.False(_tracker.HasPendingChanges(session.Id));
-
-        var pending = _tracker.GetPendingChanges(session.Id);
-        Assert.True(pending.Changes[0].Acknowledged);
+        Assert.False(result.Success);
+        Assert.Contains("no source path", result.Message);
     }
 
     [Fact]
-    public void AcknowledgeAllChanges_AcknowledgesMultipleChanges()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Original");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        // First change
-        ModifyDocx(filePath, "Change 1");
-        _tracker.CheckForChanges(session.Id);
-
-        // Second change
-        ModifyDocx(filePath, "Change 1 and 2");
-        _tracker.CheckForChanges(session.Id);
-
-        // Act
-        var count = _tracker.AcknowledgeAllChanges(session.Id);
-
-        // Assert
-        Assert.Equal(2, count);
-        Assert.False(_tracker.HasPendingChanges(session.Id));
-    }
-
-    [Fact]
-    public void GetPendingChanges_ReturnsAllPendingChanges()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Original");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        ModifyDocx(filePath, "Change 1");
-        _tracker.CheckForChanges(session.Id);
-
-        ModifyDocx(filePath, "Change 1 and Change 2");
-        _tracker.CheckForChanges(session.Id);
-
-        // Act
-        var pending = _tracker.GetPendingChanges(session.Id);
-
-        // Assert
-        Assert.Equal(2, pending.Changes.Count);
-        Assert.True(pending.HasPendingChanges);
-        Assert.NotNull(pending.MostRecentPending);
-    }
-
-    [Fact]
-    public void GetLatestUnacknowledgedChange_ReturnsCorrectChange()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Original");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        ModifyDocx(filePath, "First change");
-        var first = _tracker.CheckForChanges(session.Id)!;
-
-        ModifyDocx(filePath, "Second change is here");
-        var second = _tracker.CheckForChanges(session.Id)!;
-
-        // Acknowledge the first one
-        _tracker.AcknowledgeChange(session.Id, first.Id);
-
-        // Act
-        var latest = _tracker.GetLatestUnacknowledgedChange(session.Id);
-
-        // Assert
-        Assert.NotNull(latest);
-        Assert.Equal(second.Id, latest.Id);
-    }
-
-    [Fact]
-    public void UpdateSessionSnapshot_ResetsChangeDetection()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Original");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        // Make an external change
-        ModifyDocx(filePath, "External change");
-
-        // Simulate saving the document (which updates the snapshot)
-        File.WriteAllBytes(filePath, _sessionManager.Get(session.Id).ToBytes());
-        _tracker.UpdateSessionSnapshot(session.Id);
-
-        // Act - check for changes again
-        var patch = _tracker.CheckForChanges(session.Id);
-
-        // Assert - should be no changes because snapshot was updated
-        Assert.Null(patch);
-    }
-
-    [Fact]
-    public void ExternalChangePatch_ToLlmSummary_ProducesReadableOutput()
-    {
-        // Arrange
-        var filePath = CreateTempDocx("Original paragraph");
-        var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
-
-        ModifyDocx(filePath, "Modified paragraph with more content");
-        var patch = _tracker.CheckForChanges(session.Id)!;
-
-        // Act
-        var summary = patch.ToLlmSummary();
-
-        // Assert
-        Assert.Contains("External Document Change Detected", summary);
-        Assert.Contains(session.Id, summary);
-        Assert.Contains("acknowledge_external_change", summary);
-    }
-
-    [Fact]
-    public void UnregisterSession_StopsTrackingSession()
+    public void PerformSync_WhenSourceFileDeleted_ReturnsFailure()
     {
         // Arrange
         var filePath = CreateTempDocx("Test");
         var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
+        File.Delete(filePath);
 
         // Act
-        _tracker.UnregisterSession(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
-        // Modify file after stopping
-        ModifyDocx(filePath, "Changed after stop");
-
-        // Check for changes (should start fresh)
-        var patch = _tracker.CheckForChanges(session.Id);
-
-        // Assert - checking creates a new watch, so it depends on implementation
-        // At minimum, no pending changes from before StopWatching
-        Assert.False(_tracker.HasPendingChanges(session.Id) && patch is null);
+        // Assert
+        Assert.False(result.Success);
+        Assert.Contains("not found", result.Message);
     }
 
     [Fact]
@@ -257,20 +101,107 @@ public class ExternalChangeTrackerTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original paragraph");
         var session = OpenSession(filePath);
-        _tracker.RegisterSession(session.Id);
 
         ModifyDocx(filePath, "Completely different content here");
-        var patch = _tracker.CheckForChanges(session.Id)!;
+
+        // Act
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
-        Assert.NotEmpty(patch.Patches);
-        Assert.NotEmpty(patch.Changes);
+        Assert.True(result.HasChanges);
+        Assert.NotNull(result.Patches);
+        Assert.NotEmpty(result.Patches);
 
         // Each patch should have an 'op' field
-        foreach (var p in patch.Patches)
+        foreach (var p in result.Patches)
         {
             Assert.True(p.ContainsKey("op"));
         }
+    }
+
+    [Fact]
+    public void HasPendingChanges_AfterDetection_ReturnsTrue()
+    {
+        // Arrange
+        var filePath = CreateTempDocx("Original content");
+        var session = OpenSession(filePath);
+
+        // Modify the file externally
+        ModifyDocx(filePath, "Modified content");
+
+        // Act — gate detects changes
+        var pending = _gate.CheckForChanges(_sessionManager.TenantId, _sessionManager, session.Id);
+
+        // Assert
+        Assert.NotNull(pending);
+        Assert.True(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
+    }
+
+    [Fact]
+    public void AcknowledgeChange_MarksPatchAsAcknowledged()
+    {
+        // Arrange
+        var filePath = CreateTempDocx("Original content");
+        var session = OpenSession(filePath);
+        ModifyDocx(filePath, "Modified content");
+        _gate.CheckForChanges(_sessionManager.TenantId, _sessionManager, session.Id);
+
+        // Act
+        var acknowledged = _gate.Acknowledge(_sessionManager.TenantId, session.Id);
+
+        // Assert
+        Assert.True(acknowledged);
+        Assert.False(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
+    }
+
+    [Fact]
+    public void CheckForChanges_ReturnsCorrectChangeDetails()
+    {
+        // Arrange
+        var filePath = CreateTempDocx("Original content");
+        var session = OpenSession(filePath);
+        ModifyDocx(filePath, "Modified content");
+
+        // Act
+        var pending = _gate.CheckForChanges(_sessionManager.TenantId, _sessionManager, session.Id);
+
+        // Assert
+        Assert.NotNull(pending);
+        Assert.Equal(session.Id, pending.SessionId);
+        Assert.Equal(filePath, pending.SourcePath);
+        Assert.True(pending.Summary.TotalChanges > 0);
+    }
+
+    [Fact]
+    public void ClearPending_RemovesPendingState()
+    {
+        // Arrange
+        var filePath = CreateTempDocx("Original content");
+        var session = OpenSession(filePath);
+        ModifyDocx(filePath, "Modified content");
+        _gate.CheckForChanges(_sessionManager.TenantId, _sessionManager, session.Id);
+        Assert.True(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
+
+        // Act
+        _gate.ClearPending(_sessionManager.TenantId, session.Id);
+
+        // Assert
+        Assert.False(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
+    }
+
+    [Fact]
+    public void NotifyExternalChange_SetsPendingState()
+    {
+        // Arrange
+        var filePath = CreateTempDocx("Original content");
+        var session = OpenSession(filePath);
+        ModifyDocx(filePath, "Modified content");
+
+        // Act — simulate gRPC notification
+        _gate.NotifyExternalChange(_sessionManager.TenantId, _sessionManager, session.Id);
+
+        // Assert
+        Assert.True(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
     }
 
     #region Helpers
@@ -326,8 +257,6 @@ public class ExternalChangeTrackerTests : IDisposable
 
     public void Dispose()
     {
-        _tracker.Dispose();
-
         foreach (var session in _sessions)
         {
             try { _sessionManager.Close(session.Id); }

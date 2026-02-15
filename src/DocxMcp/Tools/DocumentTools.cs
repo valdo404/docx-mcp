@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
-using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
 
 namespace DocxMcp.Tools;
@@ -21,7 +20,6 @@ public sealed class DocumentTools
     public static string DocumentOpen(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Absolute path for local files, or display path for cloud files.")]
         string? path = null,
         [Description("Source type: 'local', 'google_drive'. Omit for local or new document.")]
@@ -64,10 +62,7 @@ public sealed class DocumentTools
             session = sessions.Open(path);
 
             if (session.SourcePath is not null)
-            {
                 sync.RegisterAndWatch(tenant.TenantId, session.Id, session.SourcePath, autoSync: true);
-                externalChangeTracker?.RegisterSession(session.Id);
-            }
 
             sourceDescription = $" from '{session.SourcePath}'";
         }
@@ -89,7 +84,6 @@ public sealed class DocumentTools
     public static string DocumentSetSource(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")]
         string doc_id,
         [Description("Path (absolute for local, display path for cloud).")]
@@ -115,9 +109,6 @@ public sealed class DocumentTools
         sync.SetSource(tenant.TenantId, doc_id, type, connection_id, path, file_id, auto_sync);
         tenant.Sessions.SetSourcePath(doc_id, path);
 
-        if (type == SourceType.LocalFile)
-            externalChangeTracker?.RegisterSession(doc_id);
-
         return $"Source set to '{path}' for session '{doc_id}'. Type: {type}. Auto-sync: {(auto_sync ? "enabled" : "disabled")}.";
     }
 
@@ -129,7 +120,6 @@ public sealed class DocumentTools
     public static string DocumentSave(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document to save.")]
         string doc_id,
         [Description("Path to save the file to. If omitted, saves to the original path.")]
@@ -145,7 +135,6 @@ public sealed class DocumentTools
 
         var session = sessions.Get(doc_id);
         sync.Save(tenant.TenantId, doc_id, session.ToBytes());
-        externalChangeTracker?.UpdateSessionSnapshot(doc_id);
 
         var target = output_path ?? session.SourcePath ?? "(unknown)";
         return $"Document saved to '{target}'.";
@@ -194,11 +183,8 @@ public sealed class DocumentTools
     public static string DocumentClose(
         TenantScope tenant,
         SyncManager? sync,
-        ExternalChangeTracker? externalChangeTracker,
         string doc_id)
     {
-        // Unregister from change tracking before closing
-        externalChangeTracker?.UnregisterSession(doc_id);
         sync?.StopWatch(tenant.TenantId, doc_id);
 
         tenant.Sessions.Close(doc_id);

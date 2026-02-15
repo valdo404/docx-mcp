@@ -7,7 +7,6 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
-using DocxMcp.ExternalChanges;
 
 namespace DocxMcp.Tools;
 
@@ -30,7 +29,6 @@ public sealed class StyleTools
     public static string StyleElement(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of run-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all runs in the document.")] string? path = null)
@@ -106,8 +104,7 @@ public sealed class StyleTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Styled {runs.Count} run(s).";
     }
@@ -129,7 +126,6 @@ public sealed class StyleTools
     public static string StyleParagraph(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of paragraph-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all paragraphs in the document.")] string? path = null)
@@ -205,8 +201,7 @@ public sealed class StyleTools
         };
         var walEntry = new JsonArray { (JsonNode)walObj };
         tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Styled {paragraphs.Count} paragraph(s).";
     }
@@ -230,7 +225,6 @@ public sealed class StyleTools
     public static string StyleTable(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of table-level style properties to merge.")] string? style = null,
         [Description("JSON object of cell-level style properties to merge (applied to ALL cells).")] string? cell_style = null,
@@ -340,8 +334,7 @@ public sealed class StyleTools
 
         var walEntry = new JsonArray { (JsonNode)walObj };
         tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        if (sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes()))
-            externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Styled {tables.Count} table(s).";
     }

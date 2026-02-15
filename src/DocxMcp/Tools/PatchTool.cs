@@ -4,10 +4,10 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using ModelContextProtocol.Server;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Helpers;
 using DocxMcp.Models;
 using DocxMcp.Paths;
-using DocxMcp.ExternalChanges;
 using static DocxMcp.Helpers.ElementIdManager;
 
 namespace DocxMcp.Tools;
@@ -24,26 +24,21 @@ public sealed class PatchTool
     public static string ApplyPatch(
         TenantScope tenant,
         SyncManager sync,
-        ExternalChangeTracker? externalChangeTracker,
+        ExternalChangeGate gate,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON array of patch operations (max 10 per call).")] string patches,
         [Description("If true, simulates operations without applying changes.")] bool dry_run = false)
     {
-        // Check for pending external changes that must be acknowledged first
-        if (externalChangeTracker is not null)
+        // Check for pending external changes — block edits until acknowledged
+        if (!dry_run && gate.HasPendingChanges(tenant.TenantId, doc_id))
         {
-            var pendingChange = externalChangeTracker.GetLatestUnacknowledgedChange(doc_id);
-            if (pendingChange is not null)
+            return new PatchResult
             {
-                return new PatchResult
-                {
-                    Success = false,
-                    Error = $"External changes detected. {pendingChange.Summary.TotalChanges} change(s) " +
-                            $"(+{pendingChange.Summary.Added} -{pendingChange.Summary.Removed} " +
-                            $"~{pendingChange.Summary.Modified} ↔{pendingChange.Summary.Moved}). " +
-                            $"Call get_external_changes with acknowledge=true to proceed."
-                }.ToJson();
-            }
+                Success = false,
+                Error = "External changes detected. " +
+                        "Call get_external_changes to review and acknowledge before editing, " +
+                        "or use sync_external_changes to reload the document."
+            }.ToJson();
         }
 
         var sessions = tenant.Sessions;
@@ -158,8 +153,7 @@ public sealed class PatchTool
             {
                 var walPatches = $"[{string.Join(",", succeededPatches)}]";
                 sessions.AppendWal(doc_id, walPatches);
-                if (sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes()))
-                    externalChangeTracker?.UpdateSessionSnapshot(doc_id);
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes());
             }
             catch { /* persistence is best-effort */ }
         }

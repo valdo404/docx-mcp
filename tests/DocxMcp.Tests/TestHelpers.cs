@@ -1,3 +1,4 @@
+using DocxMcp.ExternalChanges;
 using DocxMcp.Grpc;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -34,6 +35,15 @@ internal static class TestHelpers
     {
         var historyStorage = GetOrCreateHistoryStorage();
         return new SessionManager(historyStorage, NullLogger<SessionManager>.Instance, tenantId);
+    }
+
+    /// <summary>
+    /// Create an ExternalChangeGate backed by the shared gRPC history storage.
+    /// </summary>
+    public static ExternalChangeGate CreateExternalChangeGate()
+    {
+        var historyStorage = GetOrCreateHistoryStorage();
+        return new ExternalChangeGate(historyStorage);
     }
 
     /// <summary>

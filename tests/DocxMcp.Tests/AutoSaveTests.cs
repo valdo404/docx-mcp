@@ -75,7 +75,7 @@ public class AutoSaveTests : IDisposable
         var originalBytes = File.ReadAllBytes(_tempFile);
 
         // Apply patch with dry_run — this skips AppendWal entirely
-        PatchTool.ApplyPatch(mgr, sync, null, session.Id,
+        PatchTool.ApplyPatch(mgr, sync, TestHelpers.CreateExternalChangeGate(), session.Id,
             "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Dry run\"}}]",
             dry_run: true);
 
@@ -152,7 +152,7 @@ public class AutoSaveTests : IDisposable
         var originalBytes = File.ReadAllBytes(_tempFile);
 
         // Apply style (tool calls sync.MaybeAutoSave internally)
-        StyleTools.StyleElement(mgr, sync, null, session.Id, "{\"bold\": true}", "/body/paragraph[0]");
+        StyleTools.StyleElement(mgr, sync, session.Id, "{\"bold\": true}", "/body/paragraph[0]");
 
         var afterBytes = File.ReadAllBytes(_tempFile);
         Assert.NotEqual(originalBytes, afterBytes);
@@ -171,7 +171,7 @@ public class AutoSaveTests : IDisposable
         var originalBytes = File.ReadAllBytes(_tempFile);
 
         // Add comment (tool calls sync.MaybeAutoSave internally)
-        CommentTools.CommentAdd(mgr, sync, null, session.Id, "/body/paragraph[0]", "Test comment");
+        CommentTools.CommentAdd(mgr, sync, session.Id, "/body/paragraph[0]", "Test comment");
 
         var afterBytes = File.ReadAllBytes(_tempFile);
         Assert.NotEqual(originalBytes, afterBytes);

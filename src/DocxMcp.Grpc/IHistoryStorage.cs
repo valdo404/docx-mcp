@@ -16,7 +16,7 @@ public interface IHistoryStorage : IAsyncDisposable
     Task<bool> DeleteSessionAsync(
         string tenantId, string sessionId, CancellationToken cancellationToken = default);
 
-    Task<bool> SessionExistsAsync(
+    Task<(bool Exists, bool PendingExternalChange)> SessionExistsAsync(
         string tenantId, string sessionId, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<SessionInfoDto>> ListSessionsAsync(
@@ -36,6 +36,7 @@ public interface IHistoryStorage : IAsyncDisposable
         IEnumerable<ulong>? addCheckpointPositions = null,
         IEnumerable<ulong>? removeCheckpointPositions = null,
         ulong? cursorPosition = null,
+        bool? pendingExternalChange = null,
         CancellationToken cancellationToken = default);
 
     Task<(bool Success, bool Existed)> RemoveSessionFromIndexAsync(

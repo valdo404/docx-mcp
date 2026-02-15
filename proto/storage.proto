@@ -132,6 +132,7 @@ message SessionExistsRequest {
 
 message SessionExistsResponse {
   bool exists = 1;
+  bool pending_external_change = 2;
 }
 
 // =============================================================================
@@ -154,6 +155,7 @@ message SessionIndexEntry {
   int64 modified_at_unix = 3;
   uint64 wal_position = 4;
   repeated uint64 checkpoint_positions = 5;
+  bool pending_external_change = 6;
 }
 
 message AddSessionToIndexRequest {
@@ -177,6 +179,7 @@ message UpdateSessionInIndexRequest {
   repeated uint64 add_checkpoint_positions = 5;      // Positions to add
   repeated uint64 remove_checkpoint_positions = 6;   // Positions to remove
   optional uint64 cursor_position = 7;               // Current undo/redo cursor
+  optional bool pending_external_change = 8;          // External change pending flag
 }
 
 message UpdateSessionInIndexResponse {
