@@ -104,7 +104,7 @@ export const GET: APIRoute = async (context) => {
 
   // Store the connection in D1
   const { createConnection } = await import(
-    '../../../../lib/oauth-connections'
+    '@/lib/oauth-connections'
   );
 
   const expiresAt = new Date(

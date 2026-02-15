@@ -13,7 +13,7 @@ export const GET: APIRoute = async (context) => {
 
   const { env } = await import('cloudflare:workers');
   const typedEnv = env as unknown as Env;
-  const { listConnections } = await import('../../../lib/oauth-connections');
+  const { listConnections } = await import('@/lib/oauth-connections');
 
   const url = new URL(context.request.url);
   const provider = url.searchParams.get('provider') ?? undefined;
@@ -36,7 +36,7 @@ export const DELETE: APIRoute = async (context) => {
 
   const { env } = await import('cloudflare:workers');
   const typedEnv = env as unknown as Env;
-  const { deleteConnection } = await import('../../../lib/oauth-connections');
+  const { deleteConnection } = await import('@/lib/oauth-connections');
 
   const body = (await context.request.json()) as { connectionId?: string };
   if (!body.connectionId) {
