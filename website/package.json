@@ -1,7 +1,7 @@
 {
   "name": "docx-mcp-website",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
@@ -12,16 +12,16 @@
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "6.0.0-beta.7",
     "@astrojs/cloudflare": "13.0.0-beta.4",
+    "@google-cloud/storage": "^7.0.0",
+    "astro": "6.0.0-beta.7",
     "better-auth": "^1.0.0",
     "kysely": "^0.28.0",
-    "kysely-d1": "^0.3.0",
-    "@google-cloud/storage": "^7.0.0"
+    "kysely-d1": "^0.3.0"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0",
+    "@better-auth/cli": "^1.0.0",
     "@cloudflare/workers-types": "^4.0.0",
-    "@better-auth/cli": "^1.0.0"
+    "wrangler": "^4.65.0"
   }
 }

@@ -1,0 +1,65 @@
+[package]
+name = "docx-storage-cloudflare"
+description = "Cloudflare R2 storage backend for docx-mcp multi-tenant architecture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Core traits
+docx-storage-core = { path = "../docx-storage-core" }
+
+# gRPC
+tonic.workspace = true
+tonic-reflection = "0.13"
+prost.workspace = true
+prost-types.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+
+# S3/R2 client (R2 is S3-compatible)
+aws-sdk-s3.workspace = true
+aws-config.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_bytes = "0.11"
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Async utilities
+async-trait.workspace = true
+
+# Time
+chrono.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Base64 encoding
+base64 = "0.22"
+
+# Bytes
+bytes = "1"
+
+[build-dependencies]
+tonic-build = "0.13"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-test = "0.4"
+
+[[bin]]
+name = "docx-storage-cloudflare"
+path = "src/main.rs"
+
+[lints]
+workspace = true

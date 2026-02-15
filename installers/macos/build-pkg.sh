@@ -275,8 +275,8 @@ cat > "${RESOURCES_DIR}/welcome.html" <<EOF
     <p>Welcome to the DocX MCP Server installer.</p>
     <p>This package will install:</p>
     <ul>
-        <li><strong>docx-mcp</strong> - MCP server for AI-powered Word document manipulation</li>
-        <li><strong>docx-cli</strong> - Command-line interface for direct operations</li>
+        <li><strong>docx-mcp</strong> - MCP server for AI-powered Word document manipulation (storage engine built-in)</li>
+        <li><strong>docx-cli</strong> - Command-line interface for direct operations (storage engine built-in)</li>
     </ul>
     <p>The tools will be installed to <code>/usr/local/bin</code> and will be available from the terminal immediately after installation.</p>
 </body>

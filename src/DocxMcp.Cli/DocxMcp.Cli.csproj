@@ -16,4 +16,13 @@
     <ProjectReference Include="..\DocxMcp\DocxMcp.csproj" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(RustStaticLibPath)' != ''">
+    <NativeLibrary Include="$(RustStaticLibPath)" />
+  </ItemGroup>
+
+  <!-- macOS frameworks required by the Rust staticlib (notify crate uses FSEvents) -->
+  <ItemGroup Condition="'$(RustStaticLibPath)' != '' and $([MSBuild]::IsOSPlatform('OSX'))">
+    <LinkerArg Include="-framework CoreServices" />
+  </ItemGroup>
+
 </Project>

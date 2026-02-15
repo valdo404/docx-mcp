@@ -15,11 +15,11 @@ public sealed class ExportTools
         "Export a document to PDF using LibreOffice CLI (soffice). " +
         "LibreOffice must be installed on the system.")]
     public static async Task<string> ExportPdf(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Output path for the PDF file.")] string output_path)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
 
         // Save to a temp .docx first
         var tempDocx = Path.Combine(Path.GetTempPath(), $"docx-mcp-{session.Id}.docx");
@@ -77,11 +77,11 @@ public sealed class ExportTools
     [McpServerTool(Name = "export_html"), Description(
         "Export a document to HTML format.")]
     public static string ExportHtml(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Output path for the HTML file.")] string output_path)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var body = session.GetBody();
 
         var sb = new StringBuilder();
@@ -115,11 +115,11 @@ public sealed class ExportTools
     [McpServerTool(Name = "export_markdown"), Description(
         "Export a document to Markdown format.")]
     public static string ExportMarkdown(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Output path for the Markdown file.")] string output_path)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var body = session.GetBody();
 
         var sb = new StringBuilder();

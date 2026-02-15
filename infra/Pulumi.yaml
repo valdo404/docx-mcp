@@ -1,0 +1,6 @@
+name: docx-mcp-infra
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: Cloudflare infrastructure for docx-mcp (R2, KV, D1)

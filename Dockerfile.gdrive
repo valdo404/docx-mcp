@@ -1,0 +1,34 @@
+# docx-storage-gdrive — gRPC sync/watch server (Google Drive)
+
+FROM rust:1.93-slim-bookworm AS builder
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y \
+    pkg-config protobuf-compiler libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY proto/ ./proto/
+COPY crates/ ./crates/
+
+RUN cargo build --release --package docx-storage-gdrive
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*
+RUN useradd -m -u 1000 docx
+USER docx
+WORKDIR /app
+
+COPY --from=builder /build/target/release/docx-storage-gdrive /app/docx-storage-gdrive
+
+ENV RUST_LOG=info GRPC_HOST=0.0.0.0 GRPC_PORT=50052
+EXPOSE 50052
+
+# Required: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID,
+#           GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+# Optional: WATCH_POLL_INTERVAL (default 60s)
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["nc", "-z", "localhost", "50052"]
+
+ENTRYPOINT ["/app/docx-storage-gdrive"]

@@ -21,14 +21,14 @@ public sealed class ReadSectionTool
         "Then call again with a specific section_index to read its content.\n\n" +
         "Results are paginated: max 50 elements per call. Use offset to paginate within large sections.")]
     public static string ReadSection(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Zero-based section index. Omit or use -1 to list all sections.")] int? section_index = null,
         [Description("Output format: json, text, or summary. Default: json.")] string? format = "json",
         [Description("Number of elements to skip. Negative values count from the end (e.g. -10 = last 10 elements). Default: 0.")] int? offset = null,
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
         var body = doc.MainDocumentPart?.Document?.Body
             ?? throw new InvalidOperationException("Document has no body.");

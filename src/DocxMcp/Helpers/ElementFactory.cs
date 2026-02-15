@@ -301,10 +301,19 @@ public static class ElementFactory
         {
             paragraph.ParagraphProperties = CreateParagraphProperties(props);
         }
-        else if (value.TryGetProperty("style", out var style) && !value.TryGetProperty("runs", out _))
+        else if (value.TryGetProperty("style", out var style))
         {
-            // Legacy: when no runs array, "style" applies to both paragraph and run
-            paragraph.ParagraphProperties = CreateParagraphProperties(style);
+            if (value.TryGetProperty("runs", out _))
+            {
+                // When runs are present, "style" is a paragraph style name (e.g. "Heading1")
+                paragraph.ParagraphProperties ??= new ParagraphProperties();
+                paragraph.ParagraphProperties.ParagraphStyleId = new ParagraphStyleId { Val = style.GetString() };
+            }
+            else
+            {
+                // Legacy: when no runs array, "style" applies to both paragraph and run
+                paragraph.ParagraphProperties = CreateParagraphProperties(style);
+            }
         }
 
         PopulateRuns(paragraph, value);

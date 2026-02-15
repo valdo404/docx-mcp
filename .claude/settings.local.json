@@ -35,8 +35,31 @@
       "Bash(dist/macos-arm64/docx-mcp:*)",
       "Bash(echo:*)",
       "Bash(grep:*)",
-      "Bash(mcptools call query:*)"
+      "Bash(mcptools call query:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(git rebase:*)",
+      "Bash(xargs cat:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(/Users/laurentvaldes/Projects/docx-mcp/dist/macos-arm64/docx-cli:*)",
+      "Bash(xargs:*)",
+      "Bash(find:*)",
+      "Bash(cargo tree:*)",
+      "Bash(pulumi version:*)",
+      "Bash(pulumi stack output:*)",
+      "Bash(STORAGE_GRPC_URL=http://localhost:50052 dotnet test:*)",
+      "Bash(docker compose:*)",
+      "Bash(wrangler:*)",
+      "Bash(gcloud services list:*)",
+      "Bash(gcloud alpha iap oauth-clients list:*)",
+      "Bash(gcloud auth application-default print-access-token:*)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "tavily"
+  ]
 }

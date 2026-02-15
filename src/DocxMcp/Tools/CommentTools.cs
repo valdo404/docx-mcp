@@ -23,7 +23,8 @@ public sealed class CommentTools
         "  comment_add(doc_id, \"/body/paragraph[0]\", \"Needs revision\")\n" +
         "  comment_add(doc_id, \"/body/paragraph[id='1A2B3C4D']\", \"Fix this phrase\", anchor_text=\"specific words\")")]
     public static string CommentAdd(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path to the target element (must resolve to exactly 1 element).")] string path,
         [Description("Comment text. Use \\n for multi-paragraph comments.")] string text,
@@ -31,7 +32,7 @@ public sealed class CommentTools
         [Description("Comment author name. Default: 'AI Assistant'.")] string? author = null,
         [Description("Author initials. Default: 'AI'.")] string? initials = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         List<OpenXmlElement> elements;
@@ -88,7 +89,8 @@ public sealed class CommentTools
         };
         var walEntry = new JsonArray();
         walEntry.Add((JsonNode)walObj);
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Comment {commentId} added by '{effectiveAuthor}' on {path}.";
     }
@@ -98,13 +100,13 @@ public sealed class CommentTools
         "Returns a JSON object with pagination envelope and array of comment objects " +
         "containing id, author, initials, date, text, and anchored_text.")]
     public static string CommentList(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Filter by author name (case-insensitive).")] string? author = null,
         [Description("Number of comments to skip. Default: 0.")] int? offset = null,
         [Description("Maximum number of comments to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         var comments = CommentHelper.ListComments(doc, author);
@@ -153,7 +155,8 @@ public sealed class CommentTools
         "At least one of comment_id or author must be provided.\n" +
         "When deleting by author, each comment generates its own WAL entry for deterministic replay.")]
     public static string CommentDelete(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("ID of the specific comment to delete.")] int? comment_id = null,
         [Description("Delete all comments by this author (case-insensitive).")] string? author = null)
@@ -161,7 +164,7 @@ public sealed class CommentTools
         if (comment_id is null && author is null)
             return "Error: At least one of comment_id or author must be provided.";
 
-        var session = sessions.Get(doc_id);
+        var session = tenant.Sessions.Get(doc_id);
         var doc = session.Document;
 
         if (comment_id is not null)
@@ -178,7 +181,8 @@ public sealed class CommentTools
             };
             var walEntry = new JsonArray();
             walEntry.Add((JsonNode)walObj);
-            sessions.AppendWal(doc_id, walEntry.ToJsonString());
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
             return "Deleted 1 comment(s).";
         }
@@ -200,10 +204,14 @@ public sealed class CommentTools
                 };
                 var walEntry = new JsonArray();
                 walEntry.Add((JsonNode)walObj);
-                sessions.AppendWal(doc_id, walEntry.ToJsonString());
+                tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
                 deletedCount++;
             }
         }
+
+        // Auto-save after all deletions
+        if (deletedCount > 0)
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
 
         return $"Deleted {deletedCount} comment(s).";
     }

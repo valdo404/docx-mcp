@@ -14,7 +14,15 @@ public sealed class DocxSession : IDisposable
     public string Id { get; }
     public MemoryStream Stream { get; }
     public WordprocessingDocument Document { get; }
-    public string? SourcePath { get; }
+    public string? SourcePath { get; private set; }
+
+    /// <summary>
+    /// Set the source path (used when setting "Save As" target for new documents).
+    /// </summary>
+    internal void SetSourcePath(string? path)
+    {
+        SourcePath = path;
+    }
 
     private DocxSession(string id, WordprocessingDocument document, MemoryStream stream, string? sourcePath)
     {

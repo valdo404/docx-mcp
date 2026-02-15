@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Tools;
 using System.Text.Json;
 using Xunit;
@@ -13,10 +14,13 @@ public class TableModificationTests : IDisposable
 {
     private readonly DocxSession _session;
     private readonly SessionManager _sessions;
+    private readonly SyncManager _sync;
+    private readonly ExternalChangeGate _gate = TestHelpers.CreateExternalChangeGate();
 
     public TableModificationTests()
     {
         _sessions = TestHelpers.CreateSessionManager();
+        _sync = TestHelpers.CreateSyncManager();
         _session = _sessions.Create();
 
         var body = _session.GetBody();
@@ -462,7 +466,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void RemoveTableRow()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id,
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
             """[{"op": "remove", "path": "/body/table[0]/row[2]"}]""");
 
         Assert.Contains("\"success\": true", result);
@@ -475,7 +479,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void RemoveTableCell()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id,
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
             """[{"op": "remove", "path": "/body/table[0]/row[1]/cell[2]"}]""");
 
         Assert.Contains("\"success\": true", result);
@@ -489,7 +493,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void ReplaceTableCell()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "replace",
             "path": "/body/table[0]/row[1]/cell[0]",
@@ -513,7 +517,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void ReplaceTableRow()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "replace",
             "path": "/body/table[0]/row[2]",
@@ -541,7 +545,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void RemoveColumn()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id,
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
             """[{"op": "remove_column", "path": "/body/table[0]", "column": 1}]""");
 
         Assert.Contains("\"success\": true", result);
@@ -562,7 +566,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void RemoveFirstColumn()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id,
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
             """[{"op": "remove_column", "path": "/body/table[0]", "column": 0}]""");
 
         Assert.Contains("\"success\": true", result);
@@ -576,7 +580,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void RemoveLastColumn()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id,
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
             """[{"op": "remove_column", "path": "/body/table[0]", "column": 2}]""");
 
         Assert.Contains("\"success\": true", result);
@@ -601,7 +605,7 @@ public class TableModificationTests : IDisposable
                 new Text(" is great") { Space = SpaceProcessingModeValues.Preserve }));
         body.AppendChild(p);
 
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "replace_text",
             "path": "/body/paragraph[text~='Hello World']",
@@ -631,7 +635,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void ReplaceTextInTableCell()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "replace_text",
             "path": "/body/table[0]/row[1]/cell[0]",
@@ -651,7 +655,7 @@ public class TableModificationTests : IDisposable
     public void AddRowToExistingTable()
     {
         // Add a new row after the last row
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "add",
             "path": "/body/table[0]",
@@ -676,7 +680,7 @@ public class TableModificationTests : IDisposable
     public void AddStyledCellToRow()
     {
         // Add a new cell to the first data row
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "add",
             "path": "/body/table[0]/row[1]",
@@ -770,7 +774,7 @@ public class TableModificationTests : IDisposable
     [Fact]
     public void ReplaceTableProperties()
     {
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "replace",
             "path": "/body/table[0]/style",
@@ -799,7 +803,7 @@ public class TableModificationTests : IDisposable
         // 1. Replace header cell text
         // 2. Remove a column
         // 3. Add a new row
-        var result = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [
             {
                 "op": "replace_text",

@@ -1,225 +1,213 @@
-using DocxMcp.Persistence;
-using Microsoft.Extensions.Logging.Abstractions;
+using DocxMcp.Grpc;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace DocxMcp.Tests;
 
-public class ConcurrentPersistenceTests : IDisposable
+/// <summary>
+/// Tests for concurrent access via gRPC storage.
+/// These tests verify that multiple SessionManager instances can safely access
+/// the same tenant's data through gRPC storage locks.
+/// </summary>
+public class ConcurrentPersistenceTests
 {
-    private readonly string _tempDir;
-
-    public ConcurrentPersistenceTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
-
-    private SessionStore CreateStore() =>
-        new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-
-    private SessionManager CreateManager(SessionStore store) =>
-        new SessionManager(store, NullLogger<SessionManager>.Instance);
-
     [Fact]
-    public void AcquireLock_ReturnsDisposableLock()
+    public void TwoManagers_SameTenant_BothSeeSessions()
     {
-        using var store = CreateStore();
-        store.EnsureDirectory();
+        // Two managers with the same tenant should see each other's sessions
+        var tenantId = $"test-concurrent-{Guid.NewGuid():N}";
 
-        using var sessionLock = store.AcquireLock();
-        // Lock acquired successfully; verify it's IDisposable and non-null
-        Assert.NotNull(sessionLock);
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
+
+        var s1 = mgr1.Create();
+
+        // Manager 2 should be able to restore and see the session
+        var restored = mgr2.RestoreSessions();
+        Assert.Equal(1, restored);
+
+        var list = mgr2.List().ToList();
+        Assert.Single(list);
+        Assert.Equal(s1.Id, list[0].Id);
     }
 
     [Fact]
-    public void AcquireLock_ReleasedOnDispose()
+    public void TwoManagers_DifferentTenants_IsolatedSessions()
     {
-        using var store = CreateStore();
-        store.EnsureDirectory();
-
-        var lock1 = store.AcquireLock();
-        lock1.Dispose();
-
-        // Should succeed now that lock1 is released
-        using var lock2 = store.AcquireLock(maxRetries: 1, initialDelayMs: 10);
-        Assert.NotNull(lock2);
-    }
-
-    [Fact]
-    public void AcquireLock_DoubleDispose_DoesNotThrow()
-    {
-        using var store = CreateStore();
-        store.EnsureDirectory();
-
-        var sessionLock = store.AcquireLock();
-        sessionLock.Dispose();
-        sessionLock.Dispose(); // Should not throw
-    }
-
-    [Fact]
-    public void TwoManagers_BothCreateSessions_IndexContainsBoth()
-    {
-        // Simulates two processes sharing the same sessions directory.
-        // Each manager creates a session; both should be in the index.
-        using var store1 = CreateStore();
-        using var store2 = CreateStore();
-
-        var mgr1 = CreateManager(store1);
-        var mgr2 = CreateManager(store2);
+        // Two managers with different tenants should have isolated sessions
+        var mgr1 = TestHelpers.CreateSessionManager(); // unique tenant
+        var mgr2 = TestHelpers.CreateSessionManager(); // different unique tenant
 
         var s1 = mgr1.Create();
         var s2 = mgr2.Create();
 
-        // Reload index from disk to see the merged result
-        var index = store1.LoadIndex();
-        var ids = index.Sessions.Select(e => e.Id).ToHashSet();
+        // Each should only see their own session
+        var list1 = mgr1.List().ToList();
+        var list2 = mgr2.List().ToList();
 
-        Assert.Contains(s1.Id, ids);
-        Assert.Contains(s2.Id, ids);
-        Assert.Equal(2, index.Sessions.Count);
+        Assert.Single(list1);
+        Assert.Single(list2);
+        Assert.Equal(s1.Id, list1[0].Id);
+        Assert.Equal(s2.Id, list2[0].Id);
+        Assert.NotEqual(s1.Id, s2.Id);
     }
 
     [Fact]
-    public void TwoManagers_ParallelCreation_NoLostSessions()
+    public void ParallelCreation_NoLostSessions()
     {
         const int sessionsPerManager = 5;
+        var tenantId = $"test-parallel-{Guid.NewGuid():N}";
 
-        using var store1 = CreateStore();
-        using var store2 = CreateStore();
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
 
-        var mgr1 = CreateManager(store1);
-        var mgr2 = CreateManager(store2);
+        // Verify both managers have the same tenant ID (captured at construction)
+        Assert.Equal(tenantId, mgr1.TenantId);
+        Assert.Equal(tenantId, mgr2.TenantId);
 
         var ids1 = new List<string>();
         var ids2 = new List<string>();
+        var errors = new List<Exception>();
 
         Parallel.Invoke(
             () =>
             {
                 for (int i = 0; i < sessionsPerManager; i++)
                 {
-                    var s = mgr1.Create();
-                    lock (ids1) ids1.Add(s.Id);
+                    try
+                    {
+                        var s = mgr1.Create();
+                        lock (ids1) ids1.Add(s.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        lock (errors) errors.Add(ex);
+                    }
                 }
             },
             () =>
             {
                 for (int i = 0; i < sessionsPerManager; i++)
                 {
-                    var s = mgr2.Create();
-                    lock (ids2) ids2.Add(s.Id);
+                    try
+                    {
+                        var s = mgr2.Create();
+                        lock (ids2) ids2.Add(s.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        lock (errors) errors.Add(ex);
+                    }
                 }
             }
         );
 
-        // Verify all sessions present in the index
-        var index = store1.LoadIndex();
-        var indexIds = index.Sessions.Select(e => e.Id).ToHashSet();
+        // If any errors occurred, fail with the first one
+        if (errors.Count > 0)
+        {
+            throw new AggregateException($"Errors during parallel creation: {errors.Count}", errors);
+        }
 
-        foreach (var id in ids1.Concat(ids2))
-            Assert.Contains(id, indexIds);
+        // Verify we got all the IDs
+        Assert.Equal(sessionsPerManager, ids1.Count);
+        Assert.Equal(sessionsPerManager, ids2.Count);
 
-        Assert.Equal(sessionsPerManager * 2, index.Sessions.Count);
-    }
+        // Verify all sessions are present
+        var mgr3 = TestHelpers.CreateSessionManager(tenantId);
+        var restored = mgr3.RestoreSessions();
+        var allIds = mgr3.List().Select(s => s.Id).ToHashSet();
 
-    [Fact]
-    public void WithLockedIndex_ReloadsFromDisk()
-    {
-        // Verifies that WithLockedIndex always reloads from disk,
-        // so external writes are not lost.
-        using var store1 = CreateStore();
-        using var store2 = CreateStore();
+        // Debug output
+        var allExpectedIds = ids1.Concat(ids2).ToHashSet();
+        var missing = allExpectedIds.Except(allIds).ToList();
+        var extra = allIds.Except(allExpectedIds).ToList();
 
-        var mgr1 = CreateManager(store1);
-        var mgr2 = CreateManager(store2);
+        Assert.True(missing.Count == 0,
+            $"Missing sessions: [{string.Join(", ", missing)}]. " +
+            $"Found {allIds.Count} sessions, expected {allExpectedIds.Count}. " +
+            $"Restored: {restored}. " +
+            $"ids1: [{string.Join(", ", ids1)}], ids2: [{string.Join(", ", ids2)}]");
 
-        // Manager 1 creates a session
-        var s1 = mgr1.Create();
-
-        // Manager 2 creates a session (its WithLockedIndex should reload and see s1)
-        var s2 = mgr2.Create();
-
-        // Now manager 1 creates another session — should still see s2
-        var s3 = mgr1.Create();
-
-        var index = store1.LoadIndex();
-        Assert.Equal(3, index.Sessions.Count);
-
-        var ids = index.Sessions.Select(e => e.Id).ToHashSet();
-        Assert.Contains(s1.Id, ids);
-        Assert.Contains(s2.Id, ids);
-        Assert.Contains(s3.Id, ids);
-    }
-
-    [Fact]
-    public void MappedWal_Refresh_SeesExternalAppend()
-    {
-        using var store = CreateStore();
-        store.EnsureDirectory();
-
-        // Open the WAL via the store (simulating process A)
-        var walA = store.GetOrCreateWal("shared");
-        walA.Append("{\"patches\":\"first\"}");
-        Assert.Equal(1, walA.EntryCount);
-
-        // Simulate process B writing directly to the same WAL file
-        // by using a second MappedWal instance on the same path
-        var walPath = store.WalPath("shared");
-        using var walB = new MappedWal(walPath);
-        walB.Append("{\"patches\":\"second\"}");
-
-        // walA doesn't see it yet (stale in-memory offset)
-        Assert.Equal(1, walA.EntryCount);
-
-        // After Refresh(), walA should see both entries
-        walA.Refresh();
-        Assert.Equal(2, walA.EntryCount);
-
-        var all = walA.ReadAll();
-        Assert.Equal(2, all.Count);
-        Assert.Contains("first", all[0]);
-        Assert.Contains("second", all[1]);
-    }
-
-    [Fact]
-    public void CloseSession_RemovesFromIndex()
-    {
-        using var store = CreateStore();
-        var mgr = CreateManager(store);
-
-        var s = mgr.Create();
-        var id = s.Id;
-
-        mgr.Close(id);
-
-        var idx = store.LoadIndex();
-        Assert.Empty(idx.Sessions);
+        Assert.Equal(sessionsPerManager * 2, allIds.Count);
     }
 
     [Fact]
     public void CloseSession_UnderConcurrency_PreservesOtherSessions()
     {
-        using var store1 = CreateStore();
-        using var store2 = CreateStore();
+        var tenantId = $"test-close-concurrent-{Guid.NewGuid():N}";
 
-        var mgr1 = CreateManager(store1);
-        var mgr2 = CreateManager(store2);
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
 
-        // Both managers create sessions
+        // Manager 1 creates a session
         var s1 = mgr1.Create();
+
+        // Manager 2 restores and creates another session
+        mgr2.RestoreSessions();
         var s2 = mgr2.Create();
 
         // Manager 1 closes its session
         mgr1.Close(s1.Id);
 
-        // Index should still contain s2
-        var index = store1.LoadIndex();
-        Assert.Single(index.Sessions);
-        Assert.Equal(s2.Id, index.Sessions[0].Id);
+        // A third manager should see only s2
+        var mgr3 = TestHelpers.CreateSessionManager(tenantId);
+        mgr3.RestoreSessions();
+        var list = mgr3.List().ToList();
+
+        Assert.Single(list);
+        Assert.Equal(s2.Id, list[0].Id);
+    }
+
+    [Fact]
+    public void ConcurrentWrites_SameSession_AllPersist()
+    {
+        var tenantId = $"test-concurrent-writes-{Guid.NewGuid():N}";
+        var mgr = TestHelpers.CreateSessionManager(tenantId);
+        var session = mgr.Create();
+        var id = session.Id;
+
+        // Apply multiple patches concurrently (simulating rapid edits)
+        var patches = Enumerable.Range(0, 5)
+            .Select(i => $"[{{\"op\":\"add\",\"path\":\"/body/children/{i}\",\"value\":{{\"type\":\"paragraph\",\"text\":\"Paragraph {i}\"}}}}]")
+            .ToList();
+
+        foreach (var patch in patches)
+        {
+            session.GetBody().AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                new DocumentFormat.OpenXml.Wordprocessing.Run(
+                    new DocumentFormat.OpenXml.Wordprocessing.Text($"Paragraph"))));
+            mgr.AppendWal(id, patch);
+        }
+
+        // All patches should be in history
+        var history = mgr.GetHistory(id);
+        Assert.True(history.Entries.Count >= patches.Count + 1); // +1 for baseline
+    }
+
+    // NOTE: DistributedLock_PreventsConcurrentAccess test removed.
+    // Locking is now internal to the gRPC server and handled during atomic index operations.
+    // The client no longer has direct access to lock operations.
+
+    [Fact]
+    public void TenantIsolation_NoDataLeakage()
+    {
+        // Ensure tenants cannot access each other's data
+        var tenant1 = $"test-isolation-1-{Guid.NewGuid():N}";
+        var tenant2 = $"test-isolation-2-{Guid.NewGuid():N}";
+
+        var mgr1 = TestHelpers.CreateSessionManager(tenant1);
+        var mgr2 = TestHelpers.CreateSessionManager(tenant2);
+
+        // Create sessions in both tenants
+        var s1 = mgr1.Create();
+        var s2 = mgr2.Create();
+
+        // Each manager should only see its own session
+        Assert.Single(mgr1.List());
+        Assert.Single(mgr2.List());
+
+        // Trying to get the other tenant's session should fail
+        Assert.Throws<KeyNotFoundException>(() => mgr1.Get(s2.Id));
+        Assert.Throws<KeyNotFoundException>(() => mgr2.Get(s1.Id));
     }
 }

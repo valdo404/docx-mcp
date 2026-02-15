@@ -303,33 +303,34 @@ const t = translations[lang];
     font-size: var(--font-size-300);
   }
 
-  .pat-item {
+  /* Dynamic content injected via JS — needs :global() for scoped styles */
+  .pat-list :global(.pat-item) {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--spacing-l);
+    padding: var(--spacing-l) var(--spacing-xl);
     background: var(--bg-layer-3);
     border-radius: var(--radius-m);
-    gap: var(--spacing-l);
+    gap: var(--spacing-xl);
   }
 
-  .pat-info {
+  .pat-list :global(.pat-info) {
     flex: 1;
     min-width: 0;
   }
 
-  .pat-name {
+  .pat-list :global(.pat-name) {
     display: flex;
     align-items: center;
     gap: var(--spacing-m);
-    margin-bottom: var(--spacing-xs);
+    margin-bottom: var(--spacing-s);
   }
 
-  .pat-name span {
+  .pat-list :global(.pat-name span) {
     font-weight: var(--font-weight-medium);
   }
 
-  .pat-prefix {
+  .pat-list :global(.pat-prefix) {
     font-size: var(--font-size-200);
     background: var(--bg-layer-4);
     padding: var(--spacing-xxs) var(--spacing-s);
@@ -337,7 +338,7 @@ const t = translations[lang];
     color: var(--text-secondary);
   }
 
-  .pat-meta {
+  .pat-list :global(.pat-meta) {
     display: flex;
     gap: var(--spacing-xl);
     font-size: var(--font-size-200);
@@ -378,17 +379,18 @@ const t = translations[lang];
     background: var(--bg-layer-3);
   }
 
-  .btn-danger {
+  .pat-list :global(.btn-danger) {
     background: transparent;
     color: var(--text-error, #dc2626);
-    border: 1px solid var(--border-error, #dc2626);
+    border: 1px solid var(--border-error, rgba(220, 38, 38, 0.3));
   }
 
-  .btn-danger:hover {
+  .pat-list :global(.btn-danger:hover) {
     background: rgba(220, 38, 38, 0.1);
+    border-color: var(--border-error, #dc2626);
   }
 
-  .btn-small {
+  .pat-list :global(.btn-small) {
     padding: var(--spacing-s) var(--spacing-m);
     font-size: var(--font-size-200);
   }

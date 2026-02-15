@@ -1,0 +1,25 @@
+[package]
+name = "docx-storage-core"
+description = "Core traits and types for docx-mcp storage backends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Async
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_bytes = "0.11"
+
+# Time
+chrono.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+[lints]
+workspace = true
