@@ -1,4 +1,4 @@
-//! Error types for the SSE proxy.
+//! Error types for the HTTP reverse proxy.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -16,11 +16,8 @@ pub enum ProxyError {
     #[error("D1 API error: {0}")]
     D1Error(String),
 
-    #[error("Failed to spawn MCP process: {0}")]
-    McpSpawnError(String),
-
-    #[error("MCP process error: {0}")]
-    McpProcessError(String),
+    #[error("Backend error: {0}")]
+    BackendError(String),
 
     #[error("Invalid JSON: {0}")]
     JsonError(#[from] serde_json::Error),
@@ -41,10 +38,7 @@ impl IntoResponse for ProxyError {
             ProxyError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ProxyError::InvalidToken => (StatusCode::UNAUTHORIZED, "INVALID_TOKEN"),
             ProxyError::D1Error(_) => (StatusCode::BAD_GATEWAY, "D1_ERROR"),
-            ProxyError::McpSpawnError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "MCP_SPAWN_ERROR"),
-            ProxyError::McpProcessError(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "MCP_PROCESS_ERROR")
-            }
+            ProxyError::BackendError(_) => (StatusCode::BAD_GATEWAY, "BACKEND_ERROR"),
             ProxyError::JsonError(_) => (StatusCode::BAD_REQUEST, "INVALID_JSON"),
             ProxyError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };

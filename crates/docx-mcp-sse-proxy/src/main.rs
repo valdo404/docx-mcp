@@ -1,15 +1,15 @@
-//! SSE/HTTP proxy for docx-mcp multi-tenant architecture.
+//! HTTP reverse proxy for docx-mcp multi-tenant architecture.
 //!
 //! This proxy:
-//! - Receives HTTP Streamable MCP requests
+//! - Receives MCP Streamable HTTP requests (POST/GET/DELETE /mcp)
 //! - Validates PAT tokens via Cloudflare D1
 //! - Extracts tenant_id from validated tokens
-//! - Forwards requests to MCP .NET process via stdio
-//! - Streams responses back to clients via SSE
+//! - Forwards requests to the .NET MCP HTTP backend with X-Tenant-Id header
+//! - Streams responses (SSE or JSON) back to clients
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{any, get};
 use axum::Router;
 use clap::Parser;
 use tokio::net::TcpListener;
@@ -23,12 +23,10 @@ mod auth;
 mod config;
 mod error;
 mod handlers;
-mod mcp;
 
 use auth::{PatValidator, SharedPatValidator};
 use config::Config;
-use handlers::{health_handler, mcp_handler, mcp_message_handler, AppState};
-use mcp::{McpSessionManager, SharedMcpSessionManager};
+use handlers::{health_handler, mcp_forward_handler, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,9 +39,13 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::parse();
 
-    info!("Starting docx-mcp-sse-proxy v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Starting docx-mcp-sse-proxy v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     info!("  Host: {}", config.host);
     info!("  Port: {}", config.port);
+    info!("  Backend: {}", config.mcp_backend_url);
 
     // Create PAT validator if D1 credentials are configured
     let validator: Option<SharedPatValidator> = if config.cloudflare_account_id.is_some()
@@ -69,42 +71,20 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Determine MCP binary path
-    let binary_path = config.docx_mcp_binary.clone().unwrap_or_else(|| {
-        // Try to find the binary in common locations
-        let candidates = [
-            "docx-mcp",
-            "./docx-mcp",
-            "../dist/docx-mcp",
-            "/usr/local/bin/docx-mcp",
-        ];
+    // Create HTTP client for forwarding
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .expect("Failed to create HTTP client");
 
-        for candidate in candidates {
-            if std::path::Path::new(candidate).exists() {
-                return candidate.to_string();
-            }
-        }
-
-        // Default to PATH lookup
-        "docx-mcp".to_string()
-    });
-
-    info!("  MCP binary: {}", binary_path);
-
-    if let Some(ref url) = config.storage_grpc_url {
-        info!("  Storage gRPC: {}", url);
-    }
-
-    // Create session manager
-    let session_manager: SharedMcpSessionManager = Arc::new(McpSessionManager::new(
-        binary_path,
-        config.storage_grpc_url.clone(),
-    ));
+    // Normalize backend URL (strip trailing slash)
+    let backend_url = config.mcp_backend_url.trim_end_matches('/').to_string();
 
     // Build application state
     let state = AppState {
         validator,
-        session_manager,
+        backend_url,
+        http_client,
     };
 
     // Configure CORS
@@ -116,8 +96,8 @@ async fn main() -> anyhow::Result<()> {
     // Build router
     let app = Router::new()
         .route("/health", get(health_handler))
-        .route("/mcp", post(mcp_handler))
-        .route("/mcp/message", post(mcp_message_handler))
+        .route("/mcp", any(mcp_forward_handler))
+        .route("/mcp/{*rest}", any(mcp_forward_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);

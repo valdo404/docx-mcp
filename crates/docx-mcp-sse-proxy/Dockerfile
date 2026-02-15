@@ -4,7 +4,7 @@
 # =============================================================================
 
 # Stage 1: Build
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1.93-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -40,20 +40,16 @@ WORKDIR /app
 # Copy the binary from builder
 COPY --from=builder /build/target/release/docx-mcp-sse-proxy /app/docx-mcp-sse-proxy
 
-# Copy the MCP binary (built separately or mounted)
-# Note: In production, docx-mcp binary should be copied here
-# COPY --from=mcp-builder /app/docx-mcp /app/docx-mcp
-
 # Environment defaults
 ENV RUST_LOG=info
 ENV PROXY_HOST=0.0.0.0
 ENV PROXY_PORT=8080
 
 # Required environment variables (must be set at runtime):
+# MCP_BACKEND_URL (e.g., http://mcp-http:3000)
 # CLOUDFLARE_ACCOUNT_ID
 # CLOUDFLARE_API_TOKEN
 # D1_DATABASE_ID
-# STORAGE_GRPC_URL (e.g., http://storage:50051)
 
 # Expose HTTP port
 EXPOSE 8080

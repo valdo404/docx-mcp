@@ -3,7 +3,7 @@ use clap::Parser;
 /// Configuration for the docx-mcp-proxy server.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "docx-mcp-proxy")]
-#[command(about = "SSE/HTTP proxy for docx-mcp multi-tenant architecture")]
+#[command(about = "HTTP reverse proxy with D1 auth for docx-mcp multi-tenant architecture")]
 pub struct Config {
     /// Host to bind to
     #[arg(long, default_value = "0.0.0.0", env = "PROXY_HOST")]
@@ -13,9 +13,9 @@ pub struct Config {
     #[arg(long, default_value = "8080", env = "PROXY_PORT")]
     pub port: u16,
 
-    /// Path to docx-mcp binary
-    #[arg(long, env = "DOCX_MCP_BINARY")]
-    pub docx_mcp_binary: Option<String>,
+    /// URL of the .NET MCP backend (HTTP mode)
+    #[arg(long, env = "MCP_BACKEND_URL")]
+    pub mcp_backend_url: String,
 
     /// Cloudflare Account ID
     #[arg(long, env = "CLOUDFLARE_ACCOUNT_ID")]
@@ -36,8 +36,4 @@ pub struct Config {
     /// Negative cache TTL for invalid PATs
     #[arg(long, default_value = "60", env = "PAT_NEGATIVE_CACHE_TTL_SECS")]
     pub pat_negative_cache_ttl_secs: u64,
-
-    /// gRPC storage server URL
-    #[arg(long, env = "STORAGE_GRPC_URL")]
-    pub storage_grpc_url: Option<String>,
 }

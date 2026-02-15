@@ -1,6 +1,6 @@
 [package]
 name = "docx-mcp-sse-proxy"
-description = "SSE/HTTP proxy with D1 auth for docx-mcp multi-tenant architecture"
+description = "HTTP reverse proxy with D1 auth for docx-mcp multi-tenant architecture"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,10 +11,9 @@ license.workspace = true
 axum.workspace = true
 tower-http.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 
-# HTTP client (D1 API)
-reqwest.workspace = true
+# HTTP client (D1 API + backend forwarding)
+reqwest = { workspace = true, features = ["stream"] }
 
 # Cache
 moka.workspace = true
@@ -37,10 +36,6 @@ tracing-subscriber.workspace = true
 # Error handling
 thiserror.workspace = true
 anyhow.workspace = true
-
-# Async utilities
-async-trait.workspace = true
-futures.workspace = true
 
 # CLI
 clap.workspace = true
