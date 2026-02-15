@@ -6,10 +6,17 @@ namespace DocxMcp.Grpc;
 public sealed class StorageClientOptions
 {
     /// <summary>
-    /// gRPC server URL (e.g., "http://localhost:50051").
+    /// gRPC server URL for history storage (e.g., "http://localhost:50051").
     /// If null, auto-launch mode uses Unix socket.
     /// </summary>
     public string? ServerUrl { get; set; }
+
+    /// <summary>
+    /// gRPC server URL for sync/watch storage (e.g., "http://localhost:50052").
+    /// If null, uses local embedded sync via InMemoryPipeStream.
+    /// Used for remote sync backends like Google Drive.
+    /// </summary>
+    public string? SyncServerUrl { get; set; }
 
     /// <summary>
     /// Path to Unix socket (e.g., "/tmp/docx-storage-local.sock").
@@ -103,6 +110,10 @@ public sealed class StorageClientOptions
         var serverUrl = Environment.GetEnvironmentVariable("STORAGE_GRPC_URL");
         if (!string.IsNullOrEmpty(serverUrl))
             options.ServerUrl = serverUrl;
+
+        var syncServerUrl = Environment.GetEnvironmentVariable("SYNC_GRPC_URL");
+        if (!string.IsNullOrEmpty(syncServerUrl))
+            options.SyncServerUrl = syncServerUrl;
 
         var socketPath = Environment.GetEnvironmentVariable("STORAGE_GRPC_SOCKET");
         if (!string.IsNullOrEmpty(socketPath))

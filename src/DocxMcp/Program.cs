@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -25,8 +26,10 @@ if (transport == "http")
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<TenantScope>();
 
-    // No ExternalChangeTracker in HTTP mode (no local files to watch)
-    // No SessionRestoreService (tenants are lazy-created on first request)
+    // Register ExternalChangeTracker in DI so the MCP SDK recognizes it as a
+    // service parameter (not a JSON-bound user parameter). Returns null at runtime
+    // since HTTP mode has no local files to watch — tool methods handle null gracefully.
+    builder.Services.Add(ServiceDescriptor.Singleton<ExternalChangeTracker>(sp => null!));
 
     builder.Services
         .AddMcpServer(ConfigureMcpServer)
@@ -47,7 +50,17 @@ if (transport == "http")
         .WithTools<ExternalChangeTools>();
 
     var app = builder.Build();
-    app.MapMcp();
+    app.MapMcp("/mcp");
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path == "/health" && context.Request.Method == "GET")
+        {
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("""{"healthy":true,"version":"1.7.0"}""");
+            return;
+        }
+        await next();
+    });
     await app.RunAsync();
 }
 else
@@ -108,9 +121,10 @@ static void RegisterStorageServices(IServiceCollection services)
 {
     var storageOptions = StorageClientOptions.FromEnvironment();
 
+    // ── IHistoryStorage ──
     if (!string.IsNullOrEmpty(storageOptions.ServerUrl))
     {
-        // Dual mode — remote for history, local embedded for sync/watch
+        // Remote history storage (Cloudflare R2, etc.)
         services.AddSingleton<IHistoryStorage>(sp =>
         {
             var logger = sp.GetService<ILogger<HistoryStorageClient>>();
@@ -118,8 +132,47 @@ static void RegisterStorageServices(IServiceCollection services)
             var launcher = new GrpcLauncher(storageOptions, launcherLogger);
             return HistoryStorageClient.CreateAsync(storageOptions, launcher, logger).GetAwaiter().GetResult();
         });
+    }
+    else
+    {
+        // Local embedded history storage
+        NativeStorage.Init(storageOptions.GetEffectiveLocalStorageDir());
 
-        // Local embedded for sync/watch
+        var handler = new System.Net.Http.SocketsHttpHandler
+        {
+            ConnectCallback = (_, _) =>
+                new ValueTask<Stream>(new InMemoryPipeStream())
+        };
+        var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
+        {
+            HttpHandler = handler
+        });
+
+        services.AddSingleton<IHistoryStorage>(sp =>
+            new HistoryStorageClient(channel, sp.GetService<ILogger<HistoryStorageClient>>()));
+
+        // If no remote sync either, use same embedded channel
+        if (string.IsNullOrEmpty(storageOptions.SyncServerUrl))
+        {
+            services.AddSingleton<ISyncStorage>(sp =>
+                new SyncStorageClient(channel, sp.GetService<ILogger<SyncStorageClient>>()));
+        }
+    }
+
+    // ── ISyncStorage ──
+    if (!string.IsNullOrEmpty(storageOptions.SyncServerUrl))
+    {
+        // Remote sync/watch (Google Drive, etc.)
+        services.AddSingleton<ISyncStorage>(sp =>
+        {
+            var logger = sp.GetService<ILogger<SyncStorageClient>>();
+            var syncChannel = Grpc.Net.Client.GrpcChannel.ForAddress(storageOptions.SyncServerUrl);
+            return new SyncStorageClient(syncChannel, logger);
+        });
+    }
+    else if (!string.IsNullOrEmpty(storageOptions.ServerUrl))
+    {
+        // Remote history but local embedded sync/watch
         NativeStorage.Init(storageOptions.GetEffectiveLocalStorageDir());
         services.AddSingleton<ISyncStorage>(sp =>
         {
@@ -136,25 +189,5 @@ static void RegisterStorageServices(IServiceCollection services)
             return new SyncStorageClient(channel, logger);
         });
     }
-    else
-    {
-        // Embedded mode — single in-memory channel for both history and sync
-        NativeStorage.Init(storageOptions.GetEffectiveLocalStorageDir());
-
-        var handler = new System.Net.Http.SocketsHttpHandler
-        {
-            ConnectCallback = (_, _) =>
-                new ValueTask<Stream>(new InMemoryPipeStream())
-        };
-
-        var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
-        {
-            HttpHandler = handler
-        });
-
-        services.AddSingleton<IHistoryStorage>(sp =>
-            new HistoryStorageClient(channel, sp.GetService<ILogger<HistoryStorageClient>>()));
-        services.AddSingleton<ISyncStorage>(sp =>
-            new SyncStorageClient(channel, sp.GetService<ILogger<SyncStorageClient>>()));
-    }
+    // else: already registered above in the embedded block
 }
