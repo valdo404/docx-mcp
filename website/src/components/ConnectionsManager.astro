@@ -482,14 +482,27 @@ const connectBasePath = '/api/oauth/connect';
   }
 
   @media (max-width: 640px) {
-    .conn-item {
+    .conn-header {
       flex-direction: column;
-      align-items: flex-start;
+      gap: var(--spacing-l);
     }
 
-    .conn-meta {
+    .conn-list :global(.conn-item) {
       flex-direction: column;
-      gap: var(--spacing-xs);
+      align-items: flex-start;
+      gap: var(--spacing-l);
+    }
+
+    .conn-list :global(.conn-name) {
+      flex-wrap: wrap;
+    }
+
+    .conn-list :global(.conn-meta) {
+      flex-wrap: wrap;
+    }
+
+    .conn-list :global(.conn-delete) {
+      align-self: flex-end;
     }
   }
 </style>
