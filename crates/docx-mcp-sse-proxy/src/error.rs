@@ -22,6 +22,9 @@ pub enum ProxyError {
     #[error("Invalid JSON: {0}")]
     JsonError(#[from] serde_json::Error),
 
+    #[error("Session recovery failed: {0}")]
+    SessionRecoveryFailed(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -39,6 +42,9 @@ impl IntoResponse for ProxyError {
             ProxyError::InvalidToken => (StatusCode::UNAUTHORIZED, "INVALID_TOKEN"),
             ProxyError::D1Error(_) => (StatusCode::BAD_GATEWAY, "D1_ERROR"),
             ProxyError::BackendError(_) => (StatusCode::BAD_GATEWAY, "BACKEND_ERROR"),
+            ProxyError::SessionRecoveryFailed(_) => {
+                (StatusCode::BAD_GATEWAY, "SESSION_RECOVERY_FAILED")
+            }
             ProxyError::JsonError(_) => (StatusCode::BAD_REQUEST, "INVALID_JSON"),
             ProxyError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };

@@ -23,10 +23,12 @@ mod auth;
 mod config;
 mod error;
 mod handlers;
+mod session;
 
 use auth::{PatValidator, SharedPatValidator};
 use config::Config;
 use handlers::{health_handler, mcp_forward_handler, AppState};
+use session::SessionRegistry;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -85,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
         validator,
         backend_url,
         http_client,
+        sessions: Arc::new(SessionRegistry::new()),
     };
 
     // Configure CORS
