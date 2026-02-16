@@ -150,6 +150,82 @@ impl GDriveClient {
         Ok(())
     }
 
+    /// Create a new file on Google Drive.
+    /// Returns the new file's ID.
+    #[instrument(skip(self, token, data), level = "debug", fields(data_len = data.len()))]
+    pub async fn create_file(
+        &self,
+        token: &str,
+        name: &str,
+        parent_id: Option<&str>,
+        data: &[u8],
+    ) -> anyhow::Result<String> {
+        // Build multipart/related body manually:
+        // Google Drive v3 uploadType=multipart expects a multipart/related body
+        // with a JSON metadata part and a file content part.
+        let boundary = "docx_mcp_boundary";
+        let mime_type =
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+        let parents_json = match parent_id {
+            Some(pid) => format!(r#","parents":["{}"]"#, pid),
+            None => String::new(),
+        };
+
+        let metadata = format!(
+            r#"{{"name":"{}","mimeType":"{}"{}}}"#,
+            name, mime_type, parents_json
+        );
+
+        let mut body = Vec::new();
+        // Metadata part
+        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+        body.extend_from_slice(metadata.as_bytes());
+        body.extend_from_slice(b"\r\n");
+        // File content part
+        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", mime_type).as_bytes());
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+        // Closing boundary
+        body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+        let url =
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id";
+
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(token)
+            .header(
+                "Content-Type",
+                format!("multipart/related; boundary={}", boundary),
+            )
+            .body(body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Google Drive create error {}: {}", status, body);
+        }
+
+        #[derive(Deserialize)]
+        struct CreateResponse {
+            id: String,
+        }
+        let created: CreateResponse = resp.json().await?;
+        debug!(
+            "Created file '{}' with ID {} ({} bytes)",
+            name,
+            created.id,
+            data.len()
+        );
+        Ok(created.id)
+    }
+
     /// List files in a folder on Google Drive.
     /// Only returns .docx files and folders.
     #[instrument(skip(self, token), level = "debug")]

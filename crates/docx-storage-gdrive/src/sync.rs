@@ -148,7 +148,7 @@ impl SyncBackend for GDriveSyncBackend {
     ) -> Result<i64, StorageError> {
         let key = Self::key(tenant_id, session_id);
 
-        let (connection_id, file_id) = {
+        let (connection_id, has_real_file_id, file_id_or_path, display_path) = {
             let entry = self.state.get(&key).ok_or_else(|| {
                 StorageError::Sync(format!(
                     "No source registered for tenant {} session {}",
@@ -166,8 +166,16 @@ impl SyncBackend for GDriveSyncBackend {
             let conn_id = source.connection_id.clone().ok_or_else(|| {
                 StorageError::Sync("Google Drive source requires a connection_id".to_string())
             })?;
-            let fid = source.effective_id().to_string();
-            (conn_id, fid)
+
+            let has_fid = source
+                .file_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .is_some();
+            let fid_or_path = source.effective_id().to_string();
+            let path = source.path.clone();
+
+            (conn_id, has_fid, fid_or_path, path)
         };
 
         // Get a valid token for this connection (tenant-scoped)
@@ -177,10 +185,44 @@ impl SyncBackend for GDriveSyncBackend {
             .await
             .map_err(|e| StorageError::Sync(format!("Token error: {}", e)))?;
 
-        self.client
-            .update_file(&token, &file_id, data)
-            .await
-            .map_err(|e| StorageError::Sync(format!("Google Drive upload failed: {}", e)))?;
+        let effective_file_id = if has_real_file_id {
+            // Existing file → update in place
+            debug!(
+                "Updating existing file {} on Google Drive",
+                file_id_or_path
+            );
+            self.client
+                .update_file(&token, &file_id_or_path, data)
+                .await
+                .map_err(|e| {
+                    StorageError::Sync(format!("Google Drive upload failed: {}", e))
+                })?;
+            file_id_or_path
+        } else {
+            // New file → create on Google Drive, then remember the new file_id
+            let name = std::path::Path::new(&display_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or(display_path.clone());
+
+            debug!("Creating new file '{}' on Google Drive", name);
+            let new_file_id =
+                self.client
+                    .create_file(&token, &name, None, data)
+                    .await
+                    .map_err(|e| {
+                        StorageError::Sync(format!("Google Drive create failed: {}", e))
+                    })?;
+
+            // Update transient state with the newly assigned file_id
+            if let Some(mut entry) = self.state.get_mut(&key) {
+                if let Some(ref mut src) = entry.source {
+                    src.file_id = Some(new_file_id.clone());
+                }
+            }
+
+            new_file_id
+        };
 
         let synced_at = chrono::Utc::now().timestamp();
 
@@ -194,7 +236,7 @@ impl SyncBackend for GDriveSyncBackend {
         debug!(
             "Synced {} bytes to {} for tenant {} session {}",
             data.len(),
-            file_id,
+            effective_file_id,
             tenant_id,
             session_id
         );
