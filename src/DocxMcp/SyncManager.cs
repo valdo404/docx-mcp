@@ -13,6 +13,11 @@ public sealed class SyncManager
     private readonly ILogger<SyncManager> _logger;
     private readonly bool _autoSaveEnabled;
 
+    /// <summary>
+    /// True when sync goes through a remote backend (GDrive, etc.) — local is not available.
+    /// </summary>
+    public bool IsRemoteSync { get; }
+
     public SyncManager(ISyncStorage sync, ILogger<SyncManager> logger)
     {
         _sync = sync;
@@ -20,6 +25,8 @@ public sealed class SyncManager
 
         var autoSaveEnv = Environment.GetEnvironmentVariable("DOCX_AUTO_SAVE");
         _autoSaveEnabled = autoSaveEnv is null || !string.Equals(autoSaveEnv, "false", StringComparison.OrdinalIgnoreCase);
+
+        IsRemoteSync = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SYNC_GRPC_URL"));
     }
 
     /// <summary>
@@ -92,9 +99,13 @@ public sealed class SyncManager
 
     /// <summary>
     /// Set or update the source path for a session (local files only, backward compat).
+    /// Throws in cloud mode — use the full overload with explicit source type.
     /// </summary>
     public void SetSource(string tenantId, string sessionId, string path, bool autoSync)
     {
+        if (IsRemoteSync)
+            throw new InvalidOperationException(
+                "Cannot set local source in cloud mode. Use SetSource with explicit source type.");
         SetSource(tenantId, sessionId, SourceType.LocalFile, null, path, null, autoSync);
     }
 
@@ -253,5 +264,22 @@ public sealed class SyncManager
         string path, string? fileId = null)
     {
         return _sync.DownloadFromSourceAsync(tenantId, sourceType, connectionId, path, fileId).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Read the current source file bytes — downloads from cloud or reads from local disk.
+    /// Returns null if no source is available.
+    /// </summary>
+    public byte[]? ReadSourceBytes(string tenantId, string sessionId, string? localSourcePath)
+    {
+        var status = GetSyncStatus(tenantId, sessionId);
+        if (status != null && status.SourceType != SourceType.LocalFile)
+            return DownloadFile(tenantId, status.SourceType,
+                status.ConnectionId, status.Path, status.FileId);
+
+        if (localSourcePath != null && File.Exists(localSourcePath))
+            return File.ReadAllBytes(localSourcePath);
+
+        return null;
     }
 }

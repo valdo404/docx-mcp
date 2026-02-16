@@ -29,20 +29,22 @@ public sealed class ExternalChangeGate
     /// If changed, sets the pending flag in the index (blocking edits).
     /// Returns change details if changes were detected.
     /// </summary>
-    public PendingExternalChange? CheckForChanges(string tenantId, SessionManager sessions, string sessionId)
+    public PendingExternalChange? CheckForChanges(string tenantId, SessionManager sessions, string sessionId, SyncManager? sync = null)
     {
         // If already pending, compute fresh diff details but don't re-flag
         if (HasPendingChanges(tenantId, sessionId))
         {
-            return ComputeChangeDetails(sessions, sessionId);
+            return ComputeChangeDetails(tenantId, sessions, sessionId, sync);
         }
 
         var session = sessions.Get(sessionId);
-        if (session.SourcePath is null || !File.Exists(session.SourcePath))
+        var fileBytes = sync != null
+            ? sync.ReadSourceBytes(tenantId, sessionId, session.SourcePath)
+            : (session.SourcePath != null && File.Exists(session.SourcePath) ? File.ReadAllBytes(session.SourcePath) : null);
+        if (fileBytes is null)
             return null;
 
         var sessionBytes = session.ToBytes();
-        var fileBytes = File.ReadAllBytes(session.SourcePath);
         var sessionHash = ContentHasher.ComputeContentHash(sessionBytes);
         var fileHash = ContentHasher.ComputeContentHash(fileBytes);
 
@@ -63,7 +65,7 @@ public sealed class ExternalChangeGate
             Id = $"ext_{sessionId}_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid().ToString("N")[..8]}",
             SessionId = sessionId,
             DetectedAt = DateTime.UtcNow,
-            SourcePath = session.SourcePath,
+            SourcePath = session.SourcePath ?? "(cloud)",
             Summary = diff.Summary,
             Changes = diff.Changes.Select(ExternalElementChange.FromElementChange).ToList()
         };
@@ -105,9 +107,9 @@ public sealed class ExternalChangeGate
     /// Notify that an external change was detected.
     /// Called by the gRPC WatchChanges stream consumer.
     /// </summary>
-    public void NotifyExternalChange(string tenantId, SessionManager sessions, string sessionId)
+    public void NotifyExternalChange(string tenantId, SessionManager sessions, string sessionId, SyncManager? sync = null)
     {
-        CheckForChanges(tenantId, sessions, sessionId);
+        CheckForChanges(tenantId, sessions, sessionId, sync);
     }
 
     /// <summary>
@@ -123,14 +125,16 @@ public sealed class ExternalChangeGate
     /// Compute change details without modifying state.
     /// Used when pending flag is already set to return fresh diff info.
     /// </summary>
-    private static PendingExternalChange? ComputeChangeDetails(SessionManager sessions, string sessionId)
+    private static PendingExternalChange? ComputeChangeDetails(string tenantId, SessionManager sessions, string sessionId, SyncManager? sync = null)
     {
         var session = sessions.Get(sessionId);
-        if (session.SourcePath is null || !File.Exists(session.SourcePath))
+        var fileBytes = sync != null
+            ? sync.ReadSourceBytes(tenantId, sessionId, session.SourcePath)
+            : (session.SourcePath != null && File.Exists(session.SourcePath) ? File.ReadAllBytes(session.SourcePath) : null);
+        if (fileBytes is null)
             return null;
 
         var sessionBytes = session.ToBytes();
-        var fileBytes = File.ReadAllBytes(session.SourcePath);
         var diff = DiffEngine.Compare(sessionBytes, fileBytes);
 
         return new PendingExternalChange
@@ -138,7 +142,7 @@ public sealed class ExternalChangeGate
             Id = $"ext_{sessionId}_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid().ToString("N")[..8]}",
             SessionId = sessionId,
             DetectedAt = DateTime.UtcNow,
-            SourcePath = session.SourcePath,
+            SourcePath = session.SourcePath ?? "(cloud)",
             Summary = diff.Summary,
             Changes = diff.Changes.Select(ExternalElementChange.FromElementChange).ToList()
         };

@@ -22,20 +22,21 @@ public sealed class ExternalChangeTools
 
     [McpServerTool(Name = "get_external_changes"), Description(
         "Check if the source file has been modified externally and get change details.\n\n" +
-        "Compares the current in-memory session with the source file on disk.\n" +
+        "Compares the current in-memory session with the source file (local or cloud).\n" +
         "Returns a diff summary showing what was added, removed, modified, or moved.\n\n" +
         "IMPORTANT: If external changes are detected, you MUST acknowledge them " +
         "(set acknowledge=true) before you can continue editing this document.\n\n" +
-        "Use sync_external_changes to reload the document from disk if changes are detected.")]
+        "Use sync_external_changes to reload the document from the source if changes are detected.")]
     public static string GetExternalChanges(
         TenantScope tenant,
+        SyncManager sync,
         ExternalChangeGate gate,
         [Description("Session ID to check for external changes.")]
         string doc_id,
         [Description("Set to true to acknowledge the changes and allow editing to continue.")]
         bool acknowledge = false)
     {
-        var pending = gate.CheckForChanges(tenant.TenantId, tenant.Sessions, doc_id);
+        var pending = gate.CheckForChanges(tenant.TenantId, tenant.Sessions, doc_id, sync);
 
         // No changes detected
         if (pending is null)
@@ -91,7 +92,7 @@ public sealed class ExternalChangeTools
 
     [McpServerTool(Name = "sync_external_changes"), Description(
         "Synchronize session with external file changes. This:\n\n" +
-        "1. Reloads the document from disk\n" +
+        "1. Reloads the document from the source (local file or cloud)\n" +
         "2. Re-assigns all element IDs for consistency\n" +
         "3. Detects uncovered changes (headers, footers, images, styles, etc.)\n" +
         "4. Records the sync in the edit history (supports undo)\n\n" +
@@ -104,7 +105,8 @@ public sealed class ExternalChangeTools
         [Description("Session ID to sync.")]
         string doc_id)
     {
-        var syncResult = PerformSync(tenant.Sessions, doc_id, isImport: false);
+        var syncResult = PerformSync(tenant.Sessions, doc_id, isImport: false,
+            tenantId: tenant.TenantId, sync: sync);
 
         // Clear pending state after sync (whether successful or not for "no changes")
         if (syncResult.Success)
@@ -154,21 +156,27 @@ public sealed class ExternalChangeTools
     }
 
     /// <summary>
-    /// Core sync logic: reload from disk, diff, re-assign IDs, create WAL entry.
+    /// Core sync logic: reload from source (local or cloud), diff, re-assign IDs, create WAL entry.
     /// </summary>
-    internal static SyncResult PerformSync(SessionManager sessions, string sessionId, bool isImport)
+    internal static SyncResult PerformSync(SessionManager sessions, string sessionId, bool isImport,
+        string? tenantId = null, SyncManager? sync = null)
     {
         try
         {
             var session = sessions.Get(sessionId);
-            if (session.SourcePath is null)
-                return SyncResult.Failure("Session has no source path. Cannot sync.");
 
-            if (!File.Exists(session.SourcePath))
-                return SyncResult.Failure($"Source file not found: {session.SourcePath}");
+            // 1. Read external file — cloud or local
+            byte[]? newBytes = null;
+            if (sync != null && tenantId != null)
+                newBytes = sync.ReadSourceBytes(tenantId, sessionId, session.SourcePath);
+            else if (session.SourcePath != null && File.Exists(session.SourcePath))
+                newBytes = File.ReadAllBytes(session.SourcePath);
 
-            // 1. Read external file
-            var newBytes = File.ReadAllBytes(session.SourcePath);
+            if (newBytes is null)
+                return SyncResult.Failure(session.SourcePath is null
+                    ? "Session has no source path. Cannot sync."
+                    : $"Source file not found: {session.SourcePath}");
+
             var previousBytes = session.ToBytes();
 
             // 2. Compute content hashes (ignoring IDs) for change detection
@@ -209,7 +217,7 @@ public sealed class ExternalChangeTools
                 Description = BuildSyncDescription(diff.Summary, uncoveredChanges),
                 SyncMeta = new ExternalSyncMeta
                 {
-                    SourcePath = session.SourcePath,
+                    SourcePath = session.SourcePath ?? "(cloud)",
                     PreviousHash = previousHash,
                     NewHash = newHash,
                     Summary = diff.Summary,

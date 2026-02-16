@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Grpc;
@@ -18,6 +19,7 @@ public sealed class DocumentTools
         "For local files, provide path only. " +
         "For cloud files (Google Drive), provide source_type, connection_id, file_id, and path.")]
     public static string DocumentOpen(
+        ILogger<DocumentTools> logger,
         TenantScope tenant,
         SyncManager sync,
         [Description("Absolute path for local files, or display path for cloud files.")]
@@ -29,50 +31,56 @@ public sealed class DocumentTools
         [Description("Provider file ID from list_connection_files (required for cloud sources).")]
         string? file_id = null)
     {
-        var sessions = tenant.Sessions;
+        logger.LogDebug("document_open: path={Path}, source_type={SourceType}, connection_id={ConnId}, file_id={FileId}",
+            path, source_type, connection_id, file_id);
 
-        // Determine source type
-        var type = source_type switch
-        {
-            "google_drive" => SourceType.GoogleDrive,
-            "onedrive" => SourceType.Onedrive,
-            "local" => SourceType.LocalFile,
-            null => SourceType.LocalFile,
-            _ => throw new ArgumentException($"Unknown source_type: {source_type}")
-        };
+        var sessions = tenant.Sessions;
 
         DocxSession session;
         string sourceDescription;
 
-        if (type != SourceType.LocalFile && file_id is not null)
+        if (path is null && source_type is null && connection_id is null && file_id is null)
         {
-            // Cloud source: download bytes, create session, register source
-            var data = sync.DownloadFile(tenant.TenantId, type, connection_id, path ?? file_id, file_id);
-            session = sessions.OpenFromBytes(data, path ?? file_id);
-
-            // Register typed source for sync-back
-            sync.SetSource(tenant.TenantId, session.Id, type, connection_id, path ?? file_id, file_id, autoSync: true);
-            sessions.SetSourcePath(session.Id, path ?? file_id);
-
-            sourceDescription = $" from {source_type}://{path ?? file_id}";
-        }
-        else if (path is not null)
-        {
-            // Local file
-            session = sessions.Open(path);
-
-            if (session.SourcePath is not null)
-                sync.RegisterAndWatch(tenant.TenantId, session.Id, session.SourcePath, autoSync: true);
-
-            sourceDescription = $" from '{session.SourcePath}'";
-        }
-        else
-        {
-            // New empty document
+            // New empty document — no sync needed, always allowed
             session = sessions.Create();
             sourceDescription = " (new document)";
         }
+        else
+        {
+            // Resolve source type (infer from params, block local in cloud mode)
+            var type = ResolveSourceType(source_type, connection_id, sync);
 
+            if (type != SourceType.LocalFile && file_id is not null)
+            {
+                // Cloud source: download bytes, create session, register source
+                var data = sync.DownloadFile(tenant.TenantId, type, connection_id, path ?? file_id, file_id);
+                session = sessions.OpenFromBytes(data, path ?? file_id);
+
+                // Register typed source for sync-back
+                sync.SetSource(tenant.TenantId, session.Id, type, connection_id, path ?? file_id, file_id, autoSync: true);
+                sessions.SetSourcePath(session.Id, path ?? file_id);
+
+                sourceDescription = $" from {source_type}://{path ?? file_id}";
+            }
+            else if (path is not null)
+            {
+                // Local file
+                session = sessions.Open(path);
+
+                if (session.SourcePath is not null)
+                    sync.RegisterAndWatch(tenant.TenantId, session.Id, session.SourcePath, autoSync: true);
+
+                sourceDescription = $" from '{session.SourcePath}'";
+            }
+            else
+            {
+                throw new ArgumentException(
+                    "Invalid parameters. To open a cloud file, provide source_type + connection_id + file_id. " +
+                    "To create a new empty document, omit all parameters.");
+            }
+        }
+
+        logger.LogDebug("document_open result: session={SessionId}, source={Source}", session.Id, sourceDescription);
         return $"Opened document{sourceDescription}. Session ID: {session.Id}";
     }
 
@@ -82,6 +90,7 @@ public sealed class DocumentTools
         "Use list_connections to discover available storage targets. " +
         "If auto_sync is true (default), the document will be auto-saved after each edit.")]
     public static string DocumentSetSource(
+        ILogger<DocumentTools> logger,
         TenantScope tenant,
         SyncManager sync,
         [Description("Session ID of the document.")]
@@ -97,14 +106,10 @@ public sealed class DocumentTools
         [Description("Enable auto-save after each edit. Default true.")]
         bool auto_sync = true)
     {
-        var type = source_type switch
-        {
-            "google_drive" => SourceType.GoogleDrive,
-            "onedrive" => SourceType.Onedrive,
-            "local" => SourceType.LocalFile,
-            null => SourceType.LocalFile,
-            _ => throw new ArgumentException($"Unknown source_type: {source_type}")
-        };
+        logger.LogDebug("document_set_source: doc_id={DocId}, path={Path}, source_type={SourceType}, connection_id={ConnId}, file_id={FileId}",
+            doc_id, path, source_type, connection_id, file_id);
+
+        var type = ResolveSourceType(source_type, connection_id, sync);
 
         sync.SetSource(tenant.TenantId, doc_id, type, connection_id, path, file_id, auto_sync);
         tenant.Sessions.SetSourcePath(doc_id, path);
@@ -118,6 +123,7 @@ public sealed class DocumentTools
         "Use this tool for 'Save As' (providing output_path) or to save new documents that have no source path. " +
         "Updates the external change tracker snapshot after saving.")]
     public static string DocumentSave(
+        ILogger<DocumentTools> logger,
         TenantScope tenant,
         SyncManager sync,
         [Description("Session ID of the document to save.")]
@@ -125,11 +131,26 @@ public sealed class DocumentTools
         [Description("Path to save the file to. If omitted, saves to the original path.")]
         string? output_path = null)
     {
+        logger.LogDebug("document_save: doc_id={DocId}, output_path={OutputPath}", doc_id, output_path);
+
         var sessions = tenant.Sessions;
         // If output_path is provided, update/register the source first
         if (output_path is not null)
         {
-            sync.SetSource(tenant.TenantId, doc_id, output_path, autoSync: true);
+            // Preserve existing source type if registered (don't force LocalFile)
+            var existing = sync.GetSyncStatus(tenant.TenantId, doc_id);
+            if (existing is not null)
+            {
+                logger.LogDebug("document_save: preserving existing source type {SourceType} for session {DocId}",
+                    existing.SourceType, doc_id);
+                sync.SetSource(tenant.TenantId, doc_id,
+                    existing.SourceType, existing.ConnectionId, output_path,
+                    existing.FileId, autoSync: true);
+            }
+            else
+            {
+                sync.SetSource(tenant.TenantId, doc_id, output_path, autoSync: true);
+            }
             sessions.SetSourcePath(doc_id, output_path);
         }
 
@@ -137,13 +158,15 @@ public sealed class DocumentTools
         sync.Save(tenant.TenantId, doc_id, session.ToBytes());
 
         var target = output_path ?? session.SourcePath ?? "(unknown)";
+        logger.LogDebug("document_save: saved to {Target}", target);
         return $"Document saved to '{target}'.";
     }
 
     [McpServerTool(Name = "document_list"), Description(
         "List all currently open document sessions with track changes status.")]
-    public static string DocumentList(TenantScope tenant)
+    public static string DocumentList(ILogger<DocumentTools> logger, TenantScope tenant)
     {
+        logger.LogDebug("document_list: tenant={TenantId}", tenant.TenantId);
         var sessions = tenant.Sessions;
         var list = sessions.List();
         if (list.Count == 0)
@@ -206,5 +229,41 @@ public sealed class DocumentTools
     {
         tenant.Sessions.Compact(doc_id, discard_redo);
         return $"Snapshot created for session '{doc_id}'. WAL compacted.";
+    }
+
+    /// <summary>
+    /// Resolve source_type from explicit param or infer from connection_id.
+    /// Blocks local sources in cloud mode (SYNC_GRPC_URL set).
+    /// </summary>
+    private static SourceType ResolveSourceType(string? source_type, string? connection_id, SyncManager sync)
+    {
+        if (source_type is not null)
+        {
+            var resolved = source_type switch
+            {
+                "google_drive" => SourceType.GoogleDrive,
+                "onedrive" => SourceType.Onedrive,
+                "local" => SourceType.LocalFile,
+                _ => throw new ArgumentException($"Unknown source_type: {source_type}")
+            };
+
+            // Block local in cloud mode
+            if (resolved == SourceType.LocalFile && sync.IsRemoteSync)
+                throw new ArgumentException(
+                    "Local file storage is not available in this deployment. Use a cloud source (google_drive, onedrive).");
+
+            return resolved;
+        }
+
+        // Infer: connection_id provided → cloud source (google_drive by default)
+        if (connection_id is not null)
+            return SourceType.GoogleDrive;
+
+        // No connection_id, no source_type → local only if local is available
+        if (sync.IsRemoteSync)
+            throw new ArgumentException(
+                "source_type is required. This deployment uses cloud storage. Call list_connections to discover available sources.");
+
+        return SourceType.LocalFile;
     }
 }

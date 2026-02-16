@@ -83,6 +83,7 @@ var sessions = new SessionManager(historyStorage, NullLogger<SessionManager>.Ins
 var tenant = new TenantScope(sessions);
 var syncManager = new SyncManager(syncStorage, NullLogger<SyncManager>.Instance);
 var gate = new ExternalChangeGate(historyStorage);
+var docToolsLogger = NullLogger<DocumentTools>.Instance;
 if (isDebug) Console.Error.WriteLine("[cli] Calling RestoreSessions...");
 sessions.RestoreSessions();
 // Re-register watches for restored sessions
@@ -113,10 +114,10 @@ try
     var result = command switch
     {
         "open" => CmdOpen(args),
-        "list" => DocumentTools.DocumentList(tenant),
+        "list" => DocumentTools.DocumentList(docToolsLogger, tenant),
         "close" => DocumentTools.DocumentClose(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path"))),
-        "save" => DocumentTools.DocumentSave(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
-        "set-source" => DocumentTools.DocumentSetSource(tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
+        "save" => DocumentTools.DocumentSave(docToolsLogger, tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")), GetNonFlagArg(args, 2)),
+        "set-source" => DocumentTools.DocumentSetSource(docToolsLogger, tenant, syncManager, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             Require(args, 2, "path"), auto_sync: !HasFlag(args, "--no-auto-sync")),
         "snapshot" => DocumentTools.DocumentSnapshot(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
             HasFlag(args, "--discard-redo")),
@@ -210,7 +211,7 @@ catch (Exception ex)
 string CmdOpen(string[] a)
 {
     var path = GetNonFlagArg(a, 1);
-    return DocumentTools.DocumentOpen(tenant, syncManager, path);
+    return DocumentTools.DocumentOpen(docToolsLogger, tenant, syncManager, path);
 }
 
 string CmdPatch(string[] a)
@@ -499,7 +500,7 @@ string CmdCheckExternal(string[] a)
 {
     var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
     var acknowledge = HasFlag(a, "--acknowledge");
-    return ExternalChangeTools.GetExternalChanges(tenant, gate, docId, acknowledge);
+    return ExternalChangeTools.GetExternalChanges(tenant, syncManager, gate, docId, acknowledge);
 }
 
 string CmdSyncExternal(string[] a)

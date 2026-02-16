@@ -25,7 +25,10 @@ public sealed class SessionManagerPool
     {
         return _pool.GetOrAdd(tenantId, tid =>
             new Lazy<SessionManager>(() =>
-                new SessionManager(_history, _loggerFactory.CreateLogger<SessionManager>(), tid)
-            )).Value;
+            {
+                var sm = new SessionManager(_history, _loggerFactory.CreateLogger<SessionManager>(), tid);
+                sm.RestoreSessions();
+                return sm;
+            })).Value;
     }
 }
