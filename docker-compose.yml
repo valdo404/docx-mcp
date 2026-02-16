@@ -22,7 +22,7 @@ services:
   storage:
     build: { context: ., dockerfile: Dockerfile.storage-cloudflare }
     environment:
-      RUST_LOG: info
+      RUST_LOG: "info,docx_storage_cloudflare=debug"
       GRPC_HOST: "0.0.0.0"
       GRPC_PORT: "50051"
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
@@ -84,7 +84,7 @@ services:
     depends_on:
       mcp-http: { condition: service_healthy }
     environment:
-      RUST_LOG: info
+      RUST_LOG: "info,docx_mcp_sse_proxy=debug"
       MCP_BACKEND_URL: http://mcp-http:3000
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}

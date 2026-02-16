@@ -17,6 +17,7 @@ if (transport == "http")
     var builder = WebApplication.CreateBuilder(args);
 
     builder.Logging.AddConsole();
+    builder.Logging.SetMinimumLevel(LogLevel.Debug);
 
     RegisterStorageServices(builder.Services);
 

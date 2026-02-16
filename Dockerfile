@@ -20,7 +20,8 @@ COPY proto/ ./proto/
 COPY crates/ ./crates/
 
 # Build the staticlib for embedding
-RUN cargo build --release --package docx-storage-local --lib
+RUN --mount=type=cache,id=cargo-mcp,target=/usr/local/cargo/registry \
+    cargo build --release --package docx-storage-local --lib
 
 # Stage 2: Build .NET MCP server and CLI with embedded Rust storage
 FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS dotnet-builder
@@ -42,13 +43,15 @@ COPY src/ ./src/
 COPY tests/ ./tests/
 
 # Build MCP server with embedded storage
-RUN dotnet publish src/DocxMcp/DocxMcp.csproj \
+RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
+    dotnet publish src/DocxMcp/DocxMcp.csproj \
     --configuration Release \
     -p:RustStaticLibPath=/rust-lib/libdocx_storage_local.a \
     -o /app
 
 # Build CLI with embedded storage
-RUN dotnet publish src/DocxMcp.Cli/DocxMcp.Cli.csproj \
+RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
+    dotnet publish src/DocxMcp.Cli/DocxMcp.Cli.csproj \
     --configuration Release \
     -p:RustStaticLibPath=/rust-lib/libdocx_storage_local.a \
     -o /app/cli

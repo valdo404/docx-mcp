@@ -11,7 +11,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY proto/ ./proto/
 COPY crates/ ./crates/
 
-RUN cargo build --release --package docx-mcp-sse-proxy
+RUN --mount=type=cache,id=cargo-proxy,target=/usr/local/cargo/registry \
+    cargo build --release --package docx-mcp-sse-proxy
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*

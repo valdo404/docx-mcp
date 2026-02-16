@@ -11,7 +11,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY proto/ ./proto/
 COPY crates/ ./crates/
 
-RUN cargo build --release --package docx-storage-cloudflare
+RUN --mount=type=cache,id=cargo-storage,target=/usr/local/cargo/registry \
+    cargo build --release --package docx-storage-cloudflare
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*

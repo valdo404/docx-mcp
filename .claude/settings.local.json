@@ -54,7 +54,8 @@
       "Bash(wrangler:*)",
       "Bash(gcloud services list:*)",
       "Bash(gcloud alpha iap oauth-clients list:*)",
-      "Bash(gcloud auth application-default print-access-token:*)"
+      "Bash(gcloud auth application-default print-access-token:*)",
+      "Bash(source:*)"
     ],
     "deny": []
   },
