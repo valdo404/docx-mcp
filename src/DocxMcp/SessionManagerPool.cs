@@ -7,8 +7,7 @@ namespace DocxMcp;
 /// <summary>
 /// Thread-safe pool of SessionManagers, one per tenant.
 /// Used only in HTTP mode for multi-tenant isolation.
-/// Each SessionManager is created on first access with session restore.
-/// If restoration fails, the entry is cleared so the next request can retry.
+/// Each SessionManager is created on first access (stateless — no session restore needed).
 /// </summary>
 public sealed class SessionManagerPool
 {
@@ -38,7 +37,6 @@ public sealed class SessionManagerPool
                 return existing;
 
             var sm = new SessionManager(_history, _loggerFactory.CreateLogger<SessionManager>(), tenantId);
-            sm.RestoreSessions();
             _pool[tenantId] = sm;
             return sm;
         }

@@ -84,15 +84,6 @@ var tenant = new TenantScope(sessions);
 var syncManager = new SyncManager(syncStorage, NullLogger<SyncManager>.Instance);
 var gate = new ExternalChangeGate(historyStorage);
 var docToolsLogger = NullLogger<DocumentTools>.Instance;
-if (isDebug) Console.Error.WriteLine("[cli] Calling RestoreSessions...");
-sessions.RestoreSessions();
-// Re-register watches for restored sessions
-foreach (var (sessionId, sourcePath) in sessions.List())
-{
-    if (sourcePath is not null)
-        syncManager.RegisterAndWatch(sessions.TenantId, sessionId, sourcePath, autoSync: true);
-}
-if (isDebug) Console.Error.WriteLine("[cli] RestoreSessions done");
 
 if (args.Length == 0)
 {
@@ -399,7 +390,7 @@ string CmdDiff(string[] a)
     var threshold = ParseDouble(OptNamed(a, "--threshold"), DiffEngine.DefaultSimilarityThreshold);
     var format = OptNamed(a, "--format") ?? "text";
 
-    var session = sessions.Get(docId);
+    using var session = sessions.Get(docId);
     var targetPath = filePath ?? session.SourcePath
         ?? throw new ArgumentException("No file path specified and session has no source file.");
 
@@ -534,7 +525,7 @@ string CmdWatch(string[] _)
 string CmdInspect(string[] a)
 {
     var idOrPath = Require(a, 1, "doc_id_or_path");
-    var session = sessions.ResolveSession(idOrPath);
+    using var session = sessions.ResolveSession(idOrPath);
     var history = sessions.GetHistory(session.Id);
 
     var sb = new System.Text.StringBuilder();

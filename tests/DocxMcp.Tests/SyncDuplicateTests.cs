@@ -257,9 +257,8 @@ public class SyncDuplicateTests : IDisposable
         var historyBefore = _sessionManager.GetHistory(sessionId);
         var syncEntriesBefore = historyBefore.Entries.Count(e => e.IsExternalSync);
 
-        // Simulate server restart with same tenant
+        // Simulate server restart with same tenant (stateless, no restore needed)
         var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
-        newSessionManager.RestoreSessions();
 
         // Act - sync multiple times after restart
         ExternalChangeTools.PerformSync(newSessionManager, sessionId, isImport: false);

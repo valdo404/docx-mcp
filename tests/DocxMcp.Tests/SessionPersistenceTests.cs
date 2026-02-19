@@ -184,9 +184,8 @@ public class SessionPersistenceTests
         PatchTool.ApplyPatch(mgr1, TestHelpers.CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id,
             "[{\"op\":\"add\",\"path\":\"/body/children/1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Second\"}}]");
 
-        // Restart
+        // Restart — stateless, no RestoreSessions needed
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        mgr2.RestoreSessions();
 
         // Undo should work
         var undoResult = mgr2.Undo(id);

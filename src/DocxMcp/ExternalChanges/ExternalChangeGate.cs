@@ -37,7 +37,7 @@ public sealed class ExternalChangeGate
             return ComputeChangeDetails(tenantId, sessions, sessionId, sync);
         }
 
-        var session = sessions.Get(sessionId);
+        using var session = sessions.Get(sessionId);
         var fileBytes = sync != null
             ? sync.ReadSourceBytes(tenantId, sessionId, session.SourcePath)
             : (session.SourcePath != null && File.Exists(session.SourcePath) ? File.ReadAllBytes(session.SourcePath) : null);
@@ -127,7 +127,7 @@ public sealed class ExternalChangeGate
     /// </summary>
     private static PendingExternalChange? ComputeChangeDetails(string tenantId, SessionManager sessions, string sessionId, SyncManager? sync = null)
     {
-        var session = sessions.Get(sessionId);
+        using var session = sessions.Get(sessionId);
         var fileBytes = sync != null
             ? sync.ReadSourceBytes(tenantId, sessionId, session.SourcePath)
             : (session.SourcePath != null && File.Exists(session.SourcePath) ? File.ReadAllBytes(session.SourcePath) : null);

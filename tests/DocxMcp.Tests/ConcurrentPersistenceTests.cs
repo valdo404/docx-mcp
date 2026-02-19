@@ -111,7 +111,6 @@ public class ConcurrentPersistenceTests
 
         // Verify all sessions are present
         var mgr3 = TestHelpers.CreateSessionManager(tenantId);
-        var restored = mgr3.RestoreSessions();
         var allIds = mgr3.List().Select(s => s.Id).ToHashSet();
 
         // Debug output
@@ -122,7 +121,6 @@ public class ConcurrentPersistenceTests
         Assert.True(missing.Count == 0,
             $"Missing sessions: [{string.Join(", ", missing)}]. " +
             $"Found {allIds.Count} sessions, expected {allExpectedIds.Count}. " +
-            $"Restored: {restored}. " +
             $"ids1: [{string.Join(", ", ids1)}], ids2: [{string.Join(", ", ids2)}]");
 
         Assert.Equal(sessionsPerManager * 2, allIds.Count);
@@ -139,16 +137,14 @@ public class ConcurrentPersistenceTests
         // Manager 1 creates a session
         var s1 = mgr1.Create();
 
-        // Manager 2 restores and creates another session
-        mgr2.RestoreSessions();
+        // Manager 2 creates another session (stateless, no restore needed)
         var s2 = mgr2.Create();
 
         // Manager 1 closes its session
         mgr1.Close(s1.Id);
 
-        // A third manager should see only s2
+        // A third manager should see only s2 (stateless)
         var mgr3 = TestHelpers.CreateSessionManager(tenantId);
-        mgr3.RestoreSessions();
         var list = mgr3.List().ToList();
 
         Assert.Single(list);

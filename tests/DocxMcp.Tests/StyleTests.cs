@@ -516,11 +516,11 @@ public class StyleTests
         PatchTool.ApplyPatch(mgr1, CreateSyncManager(), CreateGate(), id, AddParagraphPatch("persist"));
         StyleTools.StyleElement(mgr1, CreateSyncManager(), id, "{\"bold\":true,\"color\":\"00FF00\"}");
 
-        // Simulate restart: create new manager with same tenant, restore
+        // Simulate restart: create new manager with same tenant (stateless)
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        mgr2.RestoreSessions();
 
-        var run = mgr2.Get(id).GetBody().Descendants<Run>().First();
+        using var restored = mgr2.Get(id);
+        var run = restored.GetBody().Descendants<Run>().First();
         Assert.NotNull(run.RunProperties?.Bold);
         Assert.Equal("00FF00", run.RunProperties?.Color?.Val?.Value);
     }
@@ -537,9 +537,9 @@ public class StyleTests
         StyleTools.StyleParagraph(mgr1, CreateSyncManager(), id, "{\"alignment\":\"center\"}");
 
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        mgr2.RestoreSessions();
 
-        var para = mgr2.Get(id).GetBody().Descendants<Paragraph>().First();
+        using var restored = mgr2.Get(id);
+        var para = restored.GetBody().Descendants<Paragraph>().First();
         Assert.Equal(JustificationValues.Center, para.ParagraphProperties?.Justification?.Val?.Value);
     }
 
@@ -555,9 +555,9 @@ public class StyleTests
         StyleTools.StyleTable(mgr1, CreateSyncManager(), id, cell_style: "{\"shading\":\"AABBCC\"}");
 
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        mgr2.RestoreSessions();
 
-        var cell = mgr2.Get(id).GetBody().Descendants<TableCell>().First();
+        using var restored = mgr2.Get(id);
+        var cell = restored.GetBody().Descendants<TableCell>().First();
         Assert.Equal("AABBCC", cell.GetFirstChild<TableCellProperties>()?.Shading?.Fill?.Value);
     }
 

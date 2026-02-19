@@ -79,7 +79,6 @@ else
     builder.Services.AddSingleton<ExternalChangeGate>();
     builder.Services.AddSingleton<SessionManager>();
     builder.Services.AddScoped<TenantScope>();
-    builder.Services.AddHostedService<SessionRestoreService>();
 
     builder.Services
         .AddMcpServer(ConfigureMcpServer)
