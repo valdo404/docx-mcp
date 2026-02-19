@@ -42,6 +42,9 @@ public sealed class ReadHeadingContentTool
             var doc = session.Document;
             var body = session.GetBody();
 
+            if (heading_level.HasValue && (heading_level.Value < 1 || heading_level.Value > 9))
+                throw new ArgumentException("heading_level must be between 1 and 9.");
+
             var allChildren = body.ChildElements.Cast<OpenXmlElement>().ToList();
 
             // List mode: return heading hierarchy

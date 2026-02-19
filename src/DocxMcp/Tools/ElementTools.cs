@@ -325,7 +325,7 @@ public sealed class ElementTools
         return PatchTool.ApplyPatch(tenant, sync, gate, doc_id, patchJson, dry_run);
     }
 
-    private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    internal static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 }
 
 [McpServerToolType]
@@ -447,7 +447,7 @@ public sealed class TableTools
         [Description("Column index to remove (0-based).")] int column,
         [Description("If true, simulates the operation without applying changes.")] bool dry_run = false)
     {
-        var patchJson = $$"""[{"op": "remove_column", "path": "{{path.Replace("\\", "\\\\").Replace("\"", "\\\"")}}", "column": {{column}}}]""";
+        var patchJson = $$"""[{"op": "remove_column", "path": "{{ElementTools.EscapeJson(path)}}", "column": {{column}}}]""";
         return PatchTool.ApplyPatch(tenant, sync, gate, doc_id, patchJson, dry_run);
     }
 }

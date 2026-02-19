@@ -155,10 +155,17 @@ public sealed class DocumentTools
             // If output_path is provided, update/register the source first
             if (output_path is not null)
             {
-                // Preserve existing source type if registered (don't force LocalFile)
+                // Local path (no "://") → always use LocalFile source type
+                var isLocalPath = !output_path.Contains("://");
                 var existing = sync.GetSyncStatus(tenant.TenantId, doc_id);
-                if (existing is not null)
+
+                if (isLocalPath)
                 {
+                    sync.SetSource(tenant.TenantId, doc_id, output_path, autoSync: true);
+                }
+                else if (existing is not null)
+                {
+                    // Cloud path: preserve existing source type
                     logger.LogDebug("document_save: preserving existing source type {SourceType} for session {DocId}",
                         existing.SourceType, doc_id);
                     sync.SetSource(tenant.TenantId, doc_id,

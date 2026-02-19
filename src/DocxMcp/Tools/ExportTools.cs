@@ -102,6 +102,7 @@ public sealed class ExportTools
     {
         var tempDocx = Path.Combine(Path.GetTempPath(), $"docx-mcp-{session.Id}.docx");
         var tempDir = Path.GetTempPath();
+        string? generatedPdf = null;
         try
         {
             session.Save(tempDocx);
@@ -132,14 +133,13 @@ public sealed class ExportTools
                 throw new McpException($"LibreOffice failed (exit {process.ExitCode}): {stderr}");
             }
 
-            var generatedPdf = Path.Combine(tempDir,
+            generatedPdf = Path.Combine(tempDir,
                 Path.GetFileNameWithoutExtension(tempDocx) + ".pdf");
 
             if (!File.Exists(generatedPdf))
                 throw new McpException("LibreOffice did not produce a PDF file.");
 
             var pdfBytes = await File.ReadAllBytesAsync(generatedPdf);
-            File.Delete(generatedPdf);
 
             return Convert.ToBase64String(pdfBytes);
         }
@@ -147,6 +147,8 @@ public sealed class ExportTools
         {
             if (File.Exists(tempDocx))
                 File.Delete(tempDocx);
+            if (generatedPdf is not null && File.Exists(generatedPdf))
+                File.Delete(generatedPdf);
         }
     }
 
