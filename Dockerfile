@@ -63,7 +63,7 @@ FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-preview AS runtime
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates && \
     ARCH=$(dpkg --print-architecture) && \
-    case "$ARCH" in amd64) GRPC_ARCH=amd64 ;; arm64) GRPC_ARCH=arm64 ;; *) GRPC_ARCH=amd64 ;; esac && \
+    case "$ARCH" in amd64) GRPC_ARCH=x86_64 ;; arm64) GRPC_ARCH=arm64 ;; *) GRPC_ARCH=x86_64 ;; esac && \
     curl -sL "https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_${GRPC_ARCH}.tar.gz" | tar xz -C /usr/local/bin grpcurl && \
     rm -rf /var/lib/apt/lists/*
 
