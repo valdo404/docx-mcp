@@ -59,9 +59,12 @@ RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
 # Stage 3: Runtime (single binary, no separate storage process)
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-preview AS runtime
 
-# Install curl for health checks
+# Install curl (health checks) and grpcurl (gRPC debugging)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in amd64) GRPC_ARCH=amd64 ;; arm64) GRPC_ARCH=arm64 ;; *) GRPC_ARCH=amd64 ;; esac && \
+    curl -sL "https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_${GRPC_ARCH}.tar.gz" | tar xz -C /usr/local/bin grpcurl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

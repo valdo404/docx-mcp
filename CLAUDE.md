@@ -162,6 +162,145 @@ Google Drive sync uses per-tenant OAuth tokens stored in D1 (`oauth_connection` 
 - OAuth connections lib: `website/src/lib/oauth-connections.ts`
 - D1 migration: `website/migrations/0005_oauth_connections.sql`
 
+### Koyeb Deployment (Production)
+
+Four services on Koyeb app `docx-mcp`, managed via Pulumi (`infra/__main__.py`):
+
+| Service | Dockerfile | Port | Public | Instance | scale-to-zero |
+|---------|-----------|------|--------|----------|---------------|
+| `storage` | `Dockerfile.storage-cloudflare` | 50051 | No (mesh) | nano | Yes (via CLI) |
+| `gdrive` | `Dockerfile.gdrive` | 50052 | No (mesh) | nano | Yes (via CLI) |
+| `mcp-http` | `Dockerfile` | 3000 | No (mesh) | small | No |
+| `proxy` | `Dockerfile.proxy` | 8080 | Yes | nano | No |
+
+**Custom domain:** `mcp.docx.lapoule.dev` → Koyeb CNAME (DNS-only, no Cloudflare proxy)
+
+#### Koyeb CLI cheat sheet
+
+```bash
+# Always source credentials first
+source infra/env-setup.sh
+
+# List services
+koyeb services list --app docx-mcp
+
+# Describe a service (routing, scaling, git sha)
+koyeb services describe docx-mcp/<name>
+koyeb services describe docx-mcp/<name> -o json
+
+# List deployments for a service
+koyeb deployments list --service docx-mcp/<name>
+
+# Describe a deployment (definition, build status)
+koyeb deployments describe <deployment-id>
+koyeb deployments describe <deployment-id> -o json
+
+# List running instances
+koyeb instances list --app docx-mcp
+
+# Instance logs (historical range)
+koyeb instances logs <instance-id> --start-time "2026-02-19T18:00:00Z" --end-time "2026-02-19T19:30:00Z"
+
+# Instance logs (tail, blocks until Ctrl-C)
+koyeb instances logs <instance-id> --tail
+
+# Update a service (e.g. scale-to-zero)
+koyeb services update docx-mcp/<name> --min-scale 0
+koyeb services update docx-mcp/<name> --min-scale 1
+
+# Redeploy with latest commit
+koyeb services update docx-mcp/<name> --git-sha ''
+
+# Redeploy specific commit
+koyeb services update docx-mcp/<name> --git-sha <sha>
+```
+
+**Koyeb CLI gotchas:**
+- `-o json` outputs one JSON object per line (not a JSON array) — use `head -1 | python3 -c "import json,sys; d=json.loads(sys.stdin.readline())"` to parse
+- `--tail` flag blocks forever (no `--lines` limit) — use `timeout 10 koyeb instances logs <id> --tail` or Ctrl-C
+- No `--type build/runtime` flag on logs — all logs are mixed
+- `koyeb logs` does NOT exist — use `koyeb instances logs <instance-id>`
+- `koyeb services logs` exists but is unreliable (empty output) — prefer `koyeb instances logs`
+- `koyeb domains list` has no `--app` flag — lists all domains across all apps
+
+**Debugging 502 errors:** A `502` from `mcp.docx.lapoule.dev` means the proxy cannot reach `mcp-http:3000`. Check mcp-http logs first (`koyeb instances logs <mcp-http-instance-id> --tail`), not the proxy.
+
+**Testing the proxy:** Always use a real PAT token (e.g. `dxs_539de...`). Never use fake tokens like `dxs_test` — the proxy validates against D1 and will reject them before even forwarding.
+
+**Pulumi provider bug:** `scale_to_zero=True` on mesh-only services (no public route) fails with Pulumi provider validation error `"at least one route is required for services scaling to zero"`. The Koyeb API/CLI accepts it fine. Workaround: apply via CLI `koyeb services update --min-scale 0`, then set `scale_to_zero=True` in Pulumi to keep state aligned (Pulumi won't try to re-apply if already matching).
+
+#### Testing Dockerfiles locally
+
+Always test Dockerfile changes locally before pushing:
+
+```bash
+# Build and verify (use --target to stop at a specific stage)
+docker build -f Dockerfile --target runtime -t docx-mcp-test .
+docker build -f Dockerfile.proxy -t proxy-test .
+docker build -f Dockerfile.storage-cloudflare -t storage-test .
+docker build -f Dockerfile.gdrive -t gdrive-test .
+
+# Full stack local test
+source infra/env-setup.sh && docker compose --profile proxy up -d --build
+```
+
+#### Testing the MCP proxy with mcptools
+
+mcptools (`brew install mcptools`) speaks MCP protocol via stdio. For HTTP/SSE servers (proxy), use `npx mcp-remote` as a stdio-to-HTTP bridge.
+
+**Local proxy (docker compose):**
+
+```bash
+# 1. Start the local stack
+source infra/env-setup.sh && docker compose --profile proxy up -d
+
+# 2. List all MCP tools via local proxy
+mcptools tools npx mcp-remote http://localhost:8080/mcp --header "Authorization: Bearer dxs_<real-pat>"
+
+# 3. Call a specific tool
+mcptools call document_list npx mcp-remote http://localhost:8080/mcp --header "Authorization: Bearer dxs_<real-pat>"
+
+# 4. Interactive shell (call tools one by one)
+mcptools shell npx mcp-remote http://localhost:8080/mcp --header "Authorization: Bearer dxs_<real-pat>"
+```
+
+**Koyeb proxy (production):**
+
+```bash
+# Same commands, just change the URL to the Koyeb public endpoint
+mcptools tools npx mcp-remote https://mcp.docx.lapoule.dev/mcp --header "Authorization: Bearer dxs_<real-pat>"
+mcptools call document_list npx mcp-remote https://mcp.docx.lapoule.dev/mcp --header "Authorization: Bearer dxs_<real-pat>"
+mcptools shell npx mcp-remote https://mcp.docx.lapoule.dev/mcp --header "Authorization: Bearer dxs_<real-pat>"
+```
+
+**Direct stdio testing (no proxy, no docker):**
+
+```bash
+# Test MCP server directly via stdio (embedded storage, local only)
+mcptools tools dotnet run --project src/DocxMcp/
+mcptools call document_list dotnet run --project src/DocxMcp/
+mcptools shell dotnet run --project src/DocxMcp/
+```
+
+**mcptools gotchas:**
+- mcptools only speaks **stdio** natively — for HTTP/SSE servers always use `npx mcp-remote <url>` as the command
+- `mcptools tools <url>` does NOT work — it tries to exec the URL as a command
+- The `--header` flag is passed through to `mcp-remote`, not to mcptools itself
+- `mcptools configs ls` shows servers from Claude Desktop/Code configs but you can't use them directly as aliases
+
+#### Debugging services inside Koyeb
+
+`koyeb instances exec` requires a TTY — use `script -q /dev/null` wrapper:
+
+```bash
+# Test connectivity from inside a container
+script -q /dev/null koyeb instances exec <instance-id> -- curl -s http://mcp-http:3000/health
+
+# Test gRPC service (grpcurl is installed in mcp-http image)
+script -q /dev/null koyeb instances exec <mcp-http-instance-id> -- grpcurl -plaintext storage:50051 list
+script -q /dev/null koyeb instances exec <mcp-http-instance-id> -- grpcurl -plaintext storage:50051 storage.StorageService/HealthCheck
+```
+
 ## Key Conventions
 
 - **NativeAOT**: All code must be AOT-compatible. Tool types are registered explicitly (no reflection-based discovery). `InvariantGlobalization` is `false`.
