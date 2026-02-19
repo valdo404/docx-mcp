@@ -75,7 +75,22 @@
       "Bash(gh api:*)",
       "Bash(gh search code:*)",
       "Bash(gh pr view:*)",
-      "Bash(gh release list:*)"
+      "Bash(gh release list:*)",
+      "Bash(curl:*)",
+      "Bash(koyeb services list:*)",
+      "Bash(mcptools configs set:*)",
+      "Bash(script -q /dev/null koyeb instances exec:*)",
+      "Bash(koyeb services describe:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:community.koyeb.com)",
+      "Bash(koyeb instances list:*)",
+      "Bash(koyeb deployments describe:*)",
+      "Bash(for svc in proxy mcp-http storage gdrive)",
+      "Bash(do echo \"=== $svc ===\" koyeb deployments list --service \"docx-mcp/$svc\" -o json)",
+      "Bash(1 echo done)",
+      "Bash(koyeb version:*)",
+      "Bash(koyeb services get:*)",
+      "Bash(koyeb deployments get:*)"
     ],
     "deny": []
   },
