@@ -256,7 +256,6 @@ koyeb_storage = koyeb.Service(
         dockerfile="Dockerfile.storage-cloudflare",
         port=50051,
         instance_type="nano",
-        scale_to_zero=True,  # Rust boots in ~2-5s, covered by 25s gRPC retry
         envs=[
             koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info,docx_storage_cloudflare=debug"),
             koyeb.ServiceDefinitionEnvArgs(key="GRPC_HOST", value="0.0.0.0"),
@@ -278,7 +277,6 @@ koyeb_gdrive = koyeb.Service(
         dockerfile="Dockerfile.gdrive",
         port=50052,
         instance_type="nano",
-        scale_to_zero=True,  # Rust boots in ~2-5s, covered by 25s gRPC retry
         envs=[
             koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info"),
             koyeb.ServiceDefinitionEnvArgs(key="GRPC_HOST", value="0.0.0.0"),
