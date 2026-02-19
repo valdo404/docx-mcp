@@ -314,6 +314,8 @@ koyeb_proxy = koyeb.Service(
             koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_ACCOUNT_ID", value=account_id),
             koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_API_TOKEN", value=cloudflare_api_token),
             koyeb.ServiceDefinitionEnvArgs(key="D1_DATABASE_ID", value=auth_db.id),
+            koyeb.ServiceDefinitionEnvArgs(key="RESOURCE_URL", value="https://mcp.docx.lapoule.dev"),
+            koyeb.ServiceDefinitionEnvArgs(key="AUTH_SERVER_URL", value="https://docx.lapoule.dev"),
         ],
     ),
 )
