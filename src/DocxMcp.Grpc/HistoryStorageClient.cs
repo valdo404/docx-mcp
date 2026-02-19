@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Grpc.Core;
 using Grpc.Net.Client;
+using Grpc.Net.Client.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace DocxMcp.Grpc;
@@ -42,6 +43,36 @@ public sealed class HistoryStorageClient : IHistoryStorage
         return new HistoryStorageClient(channel, logger);
     }
 
+    /// <summary>
+    /// Create GrpcChannelOptions with a retry policy for transient failures.
+    /// Retries Unavailable status codes with exponential backoff (budget ~25s).
+    /// </summary>
+    public static GrpcChannelOptions CreateRetryChannelOptions(GrpcChannelOptions? baseOptions = null)
+    {
+        var retryPolicy = new RetryPolicy
+        {
+            MaxAttempts = 5,
+            InitialBackoff = TimeSpan.FromSeconds(1),
+            MaxBackoff = TimeSpan.FromSeconds(10),
+            BackoffMultiplier = 2,
+            RetryableStatusCodes = { StatusCode.Unavailable }
+        };
+
+        var options = baseOptions ?? new GrpcChannelOptions();
+        options.ServiceConfig = new ServiceConfig
+        {
+            MethodConfigs =
+            {
+                new MethodConfig
+                {
+                    Names = { MethodName.Default },
+                    RetryPolicy = retryPolicy
+                }
+            }
+        };
+        return options;
+    }
+
     internal static async Task<GrpcChannel> CreateChannelAsync(
         StorageClientOptions options,
         GrpcLauncher? launcher = null,
@@ -72,13 +103,11 @@ public sealed class HistoryStorageClient : IHistoryStorage
                 ConnectCallback = connectionFactory.ConnectAsync
             };
 
-            return GrpcChannel.ForAddress("http://localhost", new GrpcChannelOptions
-            {
-                HttpHandler = socketsHandler
-            });
+            return GrpcChannel.ForAddress("http://localhost", CreateRetryChannelOptions(
+                new GrpcChannelOptions { HttpHandler = socketsHandler }));
         }
 
-        return GrpcChannel.ForAddress(address);
+        return GrpcChannel.ForAddress(address, CreateRetryChannelOptions());
     }
 
     /// <summary>

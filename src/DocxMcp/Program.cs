@@ -139,10 +139,9 @@ static void RegisterStorageServices(IServiceCollection services)
             ConnectCallback = (_, _) =>
                 new ValueTask<Stream>(new InMemoryPipeStream())
         };
-        var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
-        {
-            HttpHandler = handler
-        });
+        var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory",
+            HistoryStorageClient.CreateRetryChannelOptions(
+                new Grpc.Net.Client.GrpcChannelOptions { HttpHandler = handler }));
 
         services.AddSingleton<IHistoryStorage>(sp =>
             new HistoryStorageClient(channel, sp.GetService<ILogger<HistoryStorageClient>>()));
@@ -162,7 +161,8 @@ static void RegisterStorageServices(IServiceCollection services)
         services.AddSingleton<ISyncStorage>(sp =>
         {
             var logger = sp.GetService<ILogger<SyncStorageClient>>();
-            var syncChannel = Grpc.Net.Client.GrpcChannel.ForAddress(storageOptions.SyncServerUrl);
+            var syncChannel = Grpc.Net.Client.GrpcChannel.ForAddress(storageOptions.SyncServerUrl,
+                HistoryStorageClient.CreateRetryChannelOptions());
             return new SyncStorageClient(syncChannel, logger);
         });
     }
@@ -178,10 +178,9 @@ static void RegisterStorageServices(IServiceCollection services)
                 ConnectCallback = (_, _) =>
                     new ValueTask<Stream>(new InMemoryPipeStream())
             };
-            var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory", new Grpc.Net.Client.GrpcChannelOptions
-            {
-                HttpHandler = handler
-            });
+            var channel = Grpc.Net.Client.GrpcChannel.ForAddress("http://in-memory",
+                HistoryStorageClient.CreateRetryChannelOptions(
+                    new Grpc.Net.Client.GrpcChannelOptions { HttpHandler = handler }));
             return new SyncStorageClient(channel, logger);
         });
     }

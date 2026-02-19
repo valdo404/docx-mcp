@@ -106,9 +106,14 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// Maximum number of retry attempts for transient backend errors.
-const MAX_RETRIES: u32 = 3;
+/// Budget: 500+1000+2000+4000+5000×4 = ~27.5s (covers .NET cold start).
+const MAX_RETRIES: u32 = 8;
 /// Initial backoff delay in milliseconds.
-const INITIAL_BACKOFF_MS: u64 = 200;
+const INITIAL_BACKOFF_MS: u64 = 500;
+/// Maximum backoff delay in milliseconds (cap for exponential backoff).
+const MAX_BACKOFF_MS: u64 = 5_000;
+/// Timeout for each individual backend request.
+const FORWARD_TIMEOUT_SECS: u64 = 30;
 
 /// Headers to forward from the client to the backend.
 const FORWARD_HEADERS: &[header::HeaderName] = &[header::CONTENT_TYPE, header::ACCEPT];
@@ -180,10 +185,11 @@ async fn send_to_backend_with_retry(
     session_id_override: Option<&str>,
     body: Bytes,
 ) -> Result<BackendResponse, ProxyError> {
+    let started = std::time::Instant::now();
     let mut last_error = None;
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
-            let delay = INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1);
+            let delay = (INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1)).min(MAX_BACKOFF_MS);
             warn!(
                 "Retrying backend request ({}/{}) after {}ms",
                 attempt, MAX_RETRIES, delay
@@ -215,7 +221,16 @@ async fn send_to_backend_with_retry(
                     attempt + 1,
                 ));
             }
-            Ok(resp) => return Ok(resp),
+            Ok(resp) => {
+                if attempt > 0 {
+                    info!(
+                        "Backend request succeeded after {} attempts in {:.1}s",
+                        attempt + 1,
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+                return Ok(resp);
+            }
             Err(e) if is_retryable_error(&e) && attempt < MAX_RETRIES => {
                 warn!(
                     "Backend error: {}, will retry ({}/{})",
@@ -235,6 +250,11 @@ async fn send_to_backend_with_retry(
             Err(e) => return Err(e),
         }
     }
+    warn!(
+        "All {} retries exhausted after {:.1}s",
+        MAX_RETRIES,
+        started.elapsed().as_secs_f64()
+    );
     Err(last_error.map_or_else(
         || ProxyError::BackendUnavailable("All retries exhausted".into(), MAX_RETRIES),
         |e| ProxyError::BackendUnavailable(e.to_string(), MAX_RETRIES),
@@ -302,8 +322,9 @@ async fn send_to_backend(
         req = req.body(body);
     }
 
-    // Send
+    // Send with timeout
     let resp = req
+        .timeout(Duration::from_secs(FORWARD_TIMEOUT_SECS))
         .send()
         .await
         .map_err(|e| ProxyError::BackendError(format!("Failed to reach backend: {}", e)))?;

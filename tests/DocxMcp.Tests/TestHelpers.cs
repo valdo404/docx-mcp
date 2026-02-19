@@ -107,6 +107,7 @@ internal static class TestHelpers
         if (!string.IsNullOrEmpty(options.ServerUrl))
         {
             // Dual-server mode: history → remote STORAGE_GRPC_URL, sync → local embedded
+            // CreateChannelAsync already applies retry policy internally
             var remoteChannel = HistoryStorageClient.CreateChannelAsync(options, launcher: null)
                 .GetAwaiter().GetResult();
             _sharedHistoryStorage = new HistoryStorageClient(remoteChannel, NullLogger<HistoryStorageClient>.Instance);
@@ -121,6 +122,7 @@ internal static class TestHelpers
         else
         {
             // Embedded mode: single local server for both
+            // CreateChannelAsync already applies retry policy internally
             var launcher = new GrpcLauncher(options, NullLogger<GrpcLauncher>.Instance);
             var channel = HistoryStorageClient.CreateChannelAsync(options, launcher)
                 .GetAwaiter().GetResult();
