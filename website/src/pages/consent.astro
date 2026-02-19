@@ -1,0 +1,217 @@
+---
+export const prerender = false;
+import Layout from '../layouts/Layout.astro';
+import { useTranslations } from '../i18n/utils';
+
+const t = useTranslations('fr');
+
+const url = new URL(Astro.request.url);
+const clientName = url.searchParams.get('client_name') ?? 'Application';
+const clientId = url.searchParams.get('client_id') ?? '';
+const redirectUri = url.searchParams.get('redirect_uri') ?? '';
+const scope = url.searchParams.get('scope') ?? 'mcp:tools';
+const codeChallenge = url.searchParams.get('code_challenge') ?? '';
+const codeChallengeMethod = url.searchParams.get('code_challenge_method') ?? 'S256';
+const resource = url.searchParams.get('resource') ?? '';
+const state = url.searchParams.get('state') ?? '';
+
+const userName = Astro.locals.user?.name ?? '';
+
+// Map scope codes to human-readable descriptions
+const scopeDescriptions: Record<string, { fr: string; en: string }> = {
+  'mcp:tools': {
+    fr: 'Utiliser les outils MCP (lire, modifier et formater vos documents Word)',
+    en: 'Use MCP tools (read, edit and format your Word documents)',
+  },
+};
+
+const scopes = scope.split(' ').filter(Boolean);
+---
+
+<Layout title={`${t('consent.title')} — Docx System`}>
+  <div class="consent-page">
+    <div class="consent-card">
+      <div class="consent-logo">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="48" height="48">
+          <rect x="3" y="2" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M7 7h6M7 11h6M7 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="18" cy="18" r="5" fill="#0078d4"/>
+          <path d="M16 18h4M18 16v4" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>Docx System</span>
+      </div>
+
+      <h1>{t('consent.title')}</h1>
+
+      <p class="consent-description">
+        <strong>{clientName}</strong> {t('consent.wants_access')}
+      </p>
+
+      {userName && (
+        <p class="consent-user">
+          {t('consent.logged_in_as')} <strong>{userName}</strong>
+        </p>
+      )}
+
+      <div class="consent-scopes">
+        <h2>{t('consent.permissions')}</h2>
+        <ul>
+          {scopes.map((s) => (
+            <li>
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clip-rule="evenodd" />
+              </svg>
+              {scopeDescriptions[s]?.fr ?? s}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <form method="POST" action="/api/oauth/authorize" class="consent-buttons">
+        <input type="hidden" name="client_id" value={clientId} />
+        <input type="hidden" name="redirect_uri" value={redirectUri} />
+        <input type="hidden" name="scope" value={scope} />
+        <input type="hidden" name="code_challenge" value={codeChallenge} />
+        <input type="hidden" name="code_challenge_method" value={codeChallengeMethod} />
+        <input type="hidden" name="resource" value={resource} />
+        <input type="hidden" name="state" value={state} />
+
+        <button type="submit" name="action" value="approve" class="btn-approve">
+          {t('consent.authorize')}
+        </button>
+        <button type="submit" name="action" value="deny" class="btn-deny">
+          {t('consent.deny')}
+        </button>
+      </form>
+    </div>
+  </div>
+</Layout>
+
+<style>
+  .consent-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xxl);
+  }
+
+  .consent-card {
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: 48px;
+    width: 100%;
+    max-width: 480px;
+    text-align: center;
+  }
+
+  .consent-logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-m);
+    margin-bottom: var(--spacing-xxxl);
+    color: var(--text-primary);
+    font-size: var(--font-size-500);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  h1 {
+    font-size: var(--font-size-700);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .consent-description {
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-m);
+    font-size: var(--font-size-300);
+    line-height: 1.6;
+  }
+
+  .consent-user {
+    color: var(--text-tertiary);
+    margin-bottom: var(--spacing-xl);
+    font-size: var(--font-size-200);
+  }
+
+  .consent-scopes {
+    text-align: left;
+    margin-bottom: var(--spacing-xxxl);
+    padding: var(--spacing-l);
+    background: var(--bg-layer-1);
+    border-radius: var(--radius-s);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .consent-scopes h2 {
+    font-size: var(--font-size-200);
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--spacing-m);
+  }
+
+  .consent-scopes ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .consent-scopes li {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    padding: var(--spacing-s) 0;
+    color: var(--text-primary);
+    font-size: var(--font-size-300);
+  }
+
+  .consent-scopes li svg {
+    color: #0078d4;
+    flex-shrink: 0;
+  }
+
+  .consent-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-m);
+  }
+
+  .btn-approve {
+    width: 100%;
+    padding: var(--spacing-l) var(--spacing-xl);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    background: #0078d4;
+    color: white;
+    border: none;
+    transition: background 0.15s ease;
+  }
+
+  .btn-approve:hover {
+    background: #106ebe;
+  }
+
+  .btn-deny {
+    width: 100%;
+    padding: var(--spacing-l) var(--spacing-xl);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-300);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-default);
+    transition: all 0.15s ease;
+  }
+
+  .btn-deny:hover {
+    background: var(--bg-layer-3);
+    color: var(--text-primary);
+  }
+</style>

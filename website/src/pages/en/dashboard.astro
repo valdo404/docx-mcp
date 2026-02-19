@@ -5,6 +5,7 @@ import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
 import PatManager from '../../components/PatManager.astro';
 import ConnectionsManager from '../../components/ConnectionsManager.astro';
+import OAuthAppsManager from '../../components/OAuthAppsManager.astro';
 import Doccy from '../../components/Doccy.astro';
 import { useTranslations } from '../../i18n/utils';
 
@@ -26,6 +27,8 @@ const tenant = Astro.locals.tenant!;
         <h3>{t('dashboard.documents')}</h3>
         <p class="coming-soon">{t('dashboard.comingSoon')}</p>
       </div>
+
+      <OAuthAppsManager lang="en" />
 
       <PatManager lang="en" />
 

@@ -25,7 +25,7 @@ declare namespace App {
       id: string;
       name: string;
       email: string;
-      image?: string;
+      image?: string | null;
     };
     session?: {
       id: string;
@@ -39,6 +39,7 @@ declare namespace App {
       gcsPrefix: string;
       storageQuotaBytes: number;
       storageUsedBytes: number;
+      preferences: string | null;
       createdAt: string;
       updatedAt: string;
     };

@@ -22,7 +22,7 @@ const translations = {
     deleteConfirm: 'Êtes-vous sûr de vouloir supprimer cette connexion ?',
     empty: 'Aucune connexion configurée',
     connected: 'Connecté',
-    expired: 'Expiré',
+    expired: 'À rafraîchir',
     added: 'Ajouté le',
   },
   en: {
@@ -41,7 +41,7 @@ const translations = {
     deleteConfirm: 'Are you sure you want to remove this connection?',
     empty: 'No connections configured',
     connected: 'Connected',
-    expired: 'Expired',
+    expired: 'Needs refresh',
     added: 'Added',
   },
 };
@@ -353,7 +353,7 @@ const connectBasePath = '/api/oauth/connect';
   }
 
   .conn-list :global(.status-expired) {
-    color: var(--text-error, #dc2626);
+    color: var(--text-warning, #d97706);
     font-weight: var(--font-weight-medium);
   }
 
