@@ -21,16 +21,20 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use crate::auth::SharedPatValidator;
-use crate::error::ProxyError;
+use crate::error::{set_resource_metadata_url, ProxyError};
+use crate::oauth::{OAuthValidator, SharedOAuthValidator};
 use crate::session::SessionRegistry;
 
 /// Application state shared across handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub validator: Option<SharedPatValidator>,
+    pub oauth_validator: Option<SharedOAuthValidator>,
     pub backend_url: String,
     pub http_client: HttpClient,
     pub sessions: Arc<SessionRegistry>,
+    pub resource_url: Option<String>,
+    pub auth_server_url: Option<String>,
 }
 
 /// Health check response.
@@ -48,6 +52,39 @@ pub async fn health_handler(State(state): State<AppState>) -> Json<HealthRespons
         version: env!("CARGO_PKG_VERSION"),
         auth_enabled: state.validator.is_some(),
     })
+}
+
+/// GET /.well-known/oauth-protected-resource - OAuth 2.0 Protected Resource Metadata.
+pub async fn oauth_metadata_handler(
+    State(state): State<AppState>,
+) -> std::result::Result<Response, ProxyError> {
+    let resource = state
+        .resource_url
+        .as_deref()
+        .unwrap_or("https://mcp.docx.lapoule.dev");
+    let auth_server = state
+        .auth_server_url
+        .as_deref()
+        .unwrap_or("https://docx.lapoule.dev");
+
+    let metadata = serde_json::json!({
+        "resource": resource,
+        "authorization_servers": [auth_server],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["mcp:tools"]
+    });
+
+    let body = serde_json::to_string(&metadata)
+        .map_err(|e| ProxyError::Internal(format!("Failed to serialize metadata: {}", e)))?;
+
+    let response = Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, "public, max-age=3600")
+        .body(Body::from(body))
+        .map_err(|e| ProxyError::Internal(format!("Failed to build response: {}", e)))?;
+
+    Ok(response)
 }
 
 /// Extract Bearer token from Authorization header.
@@ -371,16 +408,37 @@ pub async fn mcp_forward_handler(
     State(state): State<AppState>,
     req: Request,
 ) -> std::result::Result<Response, ProxyError> {
-    // --- 1. Authenticate ---
-    let tenant_id = if let Some(ref validator) = state.validator {
+    // --- 1. Authenticate (PAT or OAuth) ---
+    // Set resource metadata URL for WWW-Authenticate header on 401
+    set_resource_metadata_url(state.resource_url.clone());
+
+    let tenant_id = if state.validator.is_some() || state.oauth_validator.is_some() {
         let token = extract_bearer_token(req.headers()).ok_or(ProxyError::Unauthorized)?;
-        let validation = validator.validate(token).await?;
-        info!(
-            "Authenticated request for tenant {} (PAT: {}...)",
-            validation.tenant_id,
-            &validation.pat_id[..8.min(validation.pat_id.len())]
-        );
-        validation.tenant_id
+
+        if OAuthValidator::is_oauth_token(token) {
+            // Try OAuth token (oat_...)
+            let oauth_validator = state
+                .oauth_validator
+                .as_ref()
+                .ok_or(ProxyError::InvalidToken)?;
+            let validation = oauth_validator.validate(token).await?;
+            info!(
+                "Authenticated request for tenant {} (OAuth: {}...)",
+                validation.tenant_id,
+                &token[..12.min(token.len())]
+            );
+            validation.tenant_id
+        } else {
+            // Try PAT token (dxs_...)
+            let pat_validator = state.validator.as_ref().ok_or(ProxyError::InvalidToken)?;
+            let validation = pat_validator.validate(token).await?;
+            info!(
+                "Authenticated request for tenant {} (PAT: {}...)",
+                validation.tenant_id,
+                &validation.pat_id[..8.min(validation.pat_id.len())]
+            );
+            validation.tenant_id
+        }
     } else {
         debug!("Auth not configured, using default tenant");
         String::new()

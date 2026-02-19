@@ -29,6 +29,19 @@ pub enum ProxyError {
     Internal(String),
 }
 
+// Thread-local context for resource metadata URL (used in WWW-Authenticate header).
+// Set by the handler before returning auth errors.
+std::thread_local! {
+    static RESOURCE_METADATA_URL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set the resource metadata URL for WWW-Authenticate headers in 401 responses.
+pub fn set_resource_metadata_url(url: Option<String>) {
+    RESOURCE_METADATA_URL.with(|cell| {
+        *cell.borrow_mut() = url;
+    });
+}
+
 impl IntoResponse for ProxyError {
     fn into_response(self) -> Response {
         #[derive(Serialize)]
@@ -54,7 +67,27 @@ impl IntoResponse for ProxyError {
             code,
         };
 
-        (status, axum::Json(body)).into_response()
+        let mut response = (status, axum::Json(body)).into_response();
+
+        // Add WWW-Authenticate header on 401 responses
+        if status == StatusCode::UNAUTHORIZED {
+            RESOURCE_METADATA_URL.with(|cell| {
+                if let Some(ref url) = *cell.borrow() {
+                    let header_value = format!(
+                        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
+                        url
+                    );
+                    if let Ok(val) = axum::http::HeaderValue::from_str(&header_value) {
+                        response.headers_mut().insert(
+                            axum::http::header::WWW_AUTHENTICATE,
+                            val,
+                        );
+                    }
+                }
+            });
+        }
+
+        response
     }
 }
 

@@ -36,4 +36,12 @@ pub struct Config {
     /// Negative cache TTL for invalid PATs
     #[arg(long, default_value = "60", env = "PAT_NEGATIVE_CACHE_TTL_SECS")]
     pub pat_negative_cache_ttl_secs: u64,
+
+    /// Resource server URL (for OAuth protected resource metadata)
+    #[arg(long, env = "RESOURCE_URL")]
+    pub resource_url: Option<String>,
+
+    /// Authorization server URL (for OAuth discovery)
+    #[arg(long, env = "AUTH_SERVER_URL")]
+    pub auth_server_url: Option<String>,
 }

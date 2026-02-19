@@ -23,11 +23,13 @@ mod auth;
 mod config;
 mod error;
 mod handlers;
+mod oauth;
 mod session;
 
 use auth::{PatValidator, SharedPatValidator};
 use config::Config;
-use handlers::{health_handler, mcp_forward_handler, AppState};
+use handlers::{health_handler, mcp_forward_handler, oauth_metadata_handler, AppState};
+use oauth::{OAuthValidator, SharedOAuthValidator};
 use session::SessionRegistry;
 
 #[tokio::main]
@@ -49,29 +51,44 @@ async fn main() -> anyhow::Result<()> {
     info!("  Port: {}", config.port);
     info!("  Backend: {}", config.mcp_backend_url);
 
-    // Create PAT validator if D1 credentials are configured
-    let validator: Option<SharedPatValidator> = if config.cloudflare_account_id.is_some()
-        && config.cloudflare_api_token.is_some()
-        && config.d1_database_id.is_some()
-    {
-        info!("  Auth: D1 PAT validation enabled");
-        info!(
-            "  PAT cache TTL: {}s (negative: {}s)",
-            config.pat_cache_ttl_secs, config.pat_negative_cache_ttl_secs
-        );
+    // Create PAT and OAuth validators if D1 credentials are configured
+    let (validator, oauth_validator): (Option<SharedPatValidator>, Option<SharedOAuthValidator>) =
+        if config.cloudflare_account_id.is_some()
+            && config.cloudflare_api_token.is_some()
+            && config.d1_database_id.is_some()
+        {
+            let account_id = config.cloudflare_account_id.clone().unwrap();
+            let api_token = config.cloudflare_api_token.clone().unwrap();
+            let database_id = config.d1_database_id.clone().unwrap();
 
-        Some(Arc::new(PatValidator::new(
-            config.cloudflare_account_id.clone().unwrap(),
-            config.cloudflare_api_token.clone().unwrap(),
-            config.d1_database_id.clone().unwrap(),
-            config.pat_cache_ttl_secs,
-            config.pat_negative_cache_ttl_secs,
-        )))
-    } else {
-        warn!("  Auth: DISABLED (no D1 credentials configured)");
-        warn!("  Set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and D1_DATABASE_ID to enable auth");
-        None
-    };
+            info!("  Auth: D1 PAT + OAuth validation enabled");
+            info!(
+                "  Cache TTL: {}s (negative: {}s)",
+                config.pat_cache_ttl_secs, config.pat_negative_cache_ttl_secs
+            );
+
+            let pat = Arc::new(PatValidator::new(
+                account_id.clone(),
+                api_token.clone(),
+                database_id.clone(),
+                config.pat_cache_ttl_secs,
+                config.pat_negative_cache_ttl_secs,
+            ));
+
+            let oauth = Arc::new(OAuthValidator::new(
+                account_id,
+                api_token,
+                database_id,
+                config.pat_cache_ttl_secs,
+                config.pat_negative_cache_ttl_secs,
+            ));
+
+            (Some(pat), Some(oauth))
+        } else {
+            warn!("  Auth: DISABLED (no D1 credentials configured)");
+            warn!("  Set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and D1_DATABASE_ID to enable auth");
+            (None, None)
+        };
 
     // Create HTTP client for forwarding
     let http_client = reqwest::Client::builder()
@@ -82,12 +99,25 @@ async fn main() -> anyhow::Result<()> {
     // Normalize backend URL (strip trailing slash)
     let backend_url = config.mcp_backend_url.trim_end_matches('/').to_string();
 
+    // OAuth resource metadata config
+    let resource_url = config.resource_url.clone();
+    let auth_server_url = config.auth_server_url.clone();
+    if let Some(ref url) = resource_url {
+        info!("  Resource URL: {}", url);
+    }
+    if let Some(ref url) = auth_server_url {
+        info!("  Auth Server URL: {}", url);
+    }
+
     // Build application state
     let state = AppState {
         validator,
+        oauth_validator,
         backend_url,
         http_client,
         sessions: Arc::new(SessionRegistry::new()),
+        resource_url,
+        auth_server_url,
     };
 
     // Configure CORS
@@ -99,6 +129,10 @@ async fn main() -> anyhow::Result<()> {
     // Build router
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth_metadata_handler),
+        )
         .route("/mcp", any(mcp_forward_handler))
         .route("/mcp/{*rest}", any(mcp_forward_handler))
         .layer(cors)
