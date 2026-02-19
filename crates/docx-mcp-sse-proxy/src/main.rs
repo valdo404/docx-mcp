@@ -28,7 +28,7 @@ mod session;
 
 use auth::{PatValidator, SharedPatValidator};
 use config::Config;
-use handlers::{health_handler, mcp_forward_handler, oauth_metadata_handler, AppState};
+use handlers::{health_handler, mcp_forward_handler, oauth_metadata_handler, upstream_health_handler, AppState};
 use oauth::{OAuthValidator, SharedOAuthValidator};
 use session::SessionRegistry;
 
@@ -129,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
     // Build router
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/upstream-health", get(upstream_health_handler))
         .route(
             "/.well-known/oauth-protected-resource",
             get(oauth_metadata_handler),

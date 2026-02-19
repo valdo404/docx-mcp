@@ -44,10 +44,22 @@ pub struct HealthResponse {
     pub healthy: bool,
     pub version: &'static str,
     pub auth_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_healthy: Option<bool>,
 }
 
-/// GET /health - Health check endpoint.
+/// GET /health - Liveness check (proxy only, no upstream dependency).
 pub async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
+    Json(HealthResponse {
+        healthy: true,
+        version: env!("CARGO_PKG_VERSION"),
+        auth_enabled: state.validator.is_some(),
+        backend_healthy: None,
+    })
+}
+
+/// GET /upstream-health - Deep health check (proxy + upstream mcp-http).
+pub async fn upstream_health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
     let backend_ok = state
         .http_client
         .get(format!("{}/health", state.backend_url))
@@ -61,6 +73,7 @@ pub async fn health_handler(State(state): State<AppState>) -> Json<HealthRespons
         healthy: backend_ok,
         version: env!("CARGO_PKG_VERSION"),
         auth_enabled: state.validator.is_some(),
+        backend_healthy: Some(backend_ok),
     })
 }
 
