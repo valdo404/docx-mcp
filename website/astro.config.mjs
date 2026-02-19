@@ -3,6 +3,9 @@ import cloudflare from '@astrojs/cloudflare';
 
 export default defineConfig({
   site: 'https://docx.lapoule.dev',
+  security: {
+    checkOrigin: false,
+  },
   adapter: cloudflare({
     imageService: 'compile',
   }),

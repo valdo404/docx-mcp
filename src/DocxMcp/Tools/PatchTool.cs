@@ -3,11 +3,13 @@ using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Helpers;
 using DocxMcp.Models;
 using DocxMcp.Paths;
-using DocxMcp.ExternalChanges;
 using static DocxMcp.Helpers.ElementIdManager;
 
 namespace DocxMcp.Tools;
@@ -22,29 +24,28 @@ public sealed class PatchTool
     /// Apply JSON patches to a document. Used internally by element tools and CLI.
     /// </summary>
     public static string ApplyPatch(
-        SessionManager sessions,
-        ExternalChangeTracker? externalChangeTracker,
+        TenantScope tenant,
+        SyncManager sync,
+        ExternalChangeGate gate,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON array of patch operations (max 10 per call).")] string patches,
         [Description("If true, simulates operations without applying changes.")] bool dry_run = false)
     {
-        // Check for pending external changes that must be acknowledged first
-        if (externalChangeTracker is not null)
+        try
         {
-            var pendingChange = externalChangeTracker.GetLatestUnacknowledgedChange(doc_id);
-            if (pendingChange is not null)
+        // Check for pending external changes — block edits until acknowledged
+        if (!dry_run && gate.HasPendingChanges(tenant.TenantId, doc_id))
+        {
+            return new PatchResult
             {
-                return new PatchResult
-                {
-                    Success = false,
-                    Error = $"External changes detected. {pendingChange.Summary.TotalChanges} change(s) " +
-                            $"(+{pendingChange.Summary.Added} -{pendingChange.Summary.Removed} " +
-                            $"~{pendingChange.Summary.Modified} ↔{pendingChange.Summary.Moved}). " +
-                            $"Call get_external_changes with acknowledge=true to proceed."
-                }.ToJson();
-            }
+                Success = false,
+                Error = "External changes detected. " +
+                        "Call get_external_changes to review and acknowledge before editing, " +
+                        "or use sync_external_changes to reload the document."
+            }.ToJson();
         }
 
+        var sessions = tenant.Sessions;
         var session = sessions.Get(doc_id);
         var wpDoc = session.Document;
         var mainPart = wpDoc.MainDocumentPart
@@ -155,7 +156,9 @@ public sealed class PatchTool
             try
             {
                 var walPatches = $"[{string.Join(",", succeededPatches)}]";
-                sessions.AppendWal(doc_id, walPatches);
+                var bytes = session.ToBytes();
+                sessions.AppendWal(doc_id, walPatches, null, bytes);
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
             }
             catch { /* persistence is best-effort */ }
         }
@@ -165,6 +168,11 @@ public sealed class PatchTool
             : result.Applied == result.Total;
 
         return result.ToJson();
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"applying patch to '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     private static string GetOpString(PatchOperation? operation, JsonElement element)

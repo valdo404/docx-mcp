@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Helpers;
 using DocxMcp.Tools;
 using System.Text.Json;
@@ -16,10 +17,13 @@ public class QueryRoundTripTests : IDisposable
 {
     private readonly DocxSession _session;
     private readonly SessionManager _sessions;
+    private readonly SyncManager _sync;
+    private readonly ExternalChangeGate _gate = TestHelpers.CreateExternalChangeGate();
 
     public QueryRoundTripTests()
     {
         _sessions = TestHelpers.CreateSessionManager();
+        _sync = TestHelpers.CreateSyncManager();
         _session = _sessions.Create();
     }
 
@@ -28,6 +32,7 @@ public class QueryRoundTripTests : IDisposable
     {
         var body = _session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Single run"))));
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -48,6 +53,7 @@ public class QueryRoundTripTests : IDisposable
             new Run(new TabChar()),
             new Run(new Text("After") { Space = SpaceProcessingModeValues.Preserve }));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -73,6 +79,7 @@ public class QueryRoundTripTests : IDisposable
             new Run(new Break { Type = BreakValues.Page }),
             new Run(new Text("After")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -93,6 +100,7 @@ public class QueryRoundTripTests : IDisposable
                 new Indentation { Left = "720", Right = "360" }),
             new Run(new Text("Formatted")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -122,6 +130,7 @@ public class QueryRoundTripTests : IDisposable
             new Run(new TabChar()),
             new Run(new Text("Right")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -152,6 +161,7 @@ public class QueryRoundTripTests : IDisposable
                     new Color { Val = "FF0000" }),
                 new Text("Styled run")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -168,7 +178,7 @@ public class QueryRoundTripTests : IDisposable
     public void RoundTripCreateThenQueryParagraph()
     {
         // Create a paragraph with runs via patch
-        var patchResult = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var patchResult = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "add",
             "path": "/body/children/0",
@@ -220,7 +230,7 @@ public class QueryRoundTripTests : IDisposable
     [Fact]
     public void RoundTripCreateThenQueryHeading()
     {
-        var patchResult = PatchTool.ApplyPatch(_sessions, null, _session.Id, """
+        var patchResult = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id, """
         [{
             "op": "add",
             "path": "/body/children/0",

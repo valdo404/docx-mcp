@@ -5,6 +5,8 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
@@ -35,69 +37,76 @@ public sealed class QueryTool
         "  /styles — style definitions\n\n" +
         "Every element has a stable 'id' field in JSON output. Use [id='...'] selectors for precise targeting.")]
     public static string Query(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path to query (e.g. /body/paragraph[0], /body/table[0]). Prefer direct indexed access.")] string path,
         [Description("Output format: json, text, or summary. Default: json.")] string? format = "json",
         [Description("Number of elements to skip. Negative values count from the end (e.g. -10 = last 10 elements). Default: 0.")] int? offset = null,
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-
-        // Handle special paths
-        if (path is "/metadata" or "metadata")
-            return QueryMetadata(doc);
-        if (path is "/styles" or "styles")
-            return QueryStyles(doc);
-        if (path is "/body" or "body" or "/")
-            return QueryBodySummary(doc);
-
-        var parsed = DocxPath.Parse(path);
-        var elements = PathResolver.Resolve(parsed, doc);
-
-        // Apply pagination when multiple elements are returned
-        var totalCount = elements.Count;
-        if (totalCount > 1)
+        try
         {
-            var rawOffset = offset ?? 0;
-            // Negative offset counts from the end: -10 means start at (total - 10)
-            var effectiveOffset = rawOffset < 0 ? Math.Max(0, totalCount + rawOffset) : rawOffset;
-            var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
 
-            if (effectiveOffset >= totalCount)
-                return $"{{\"total\": {totalCount}, \"offset\": {effectiveOffset}, \"limit\": {effectiveLimit}, \"items\": []}}";
+            // Handle special paths
+            if (path is "/metadata" or "metadata")
+                return QueryMetadata(doc);
+            if (path is "/styles" or "styles")
+                return QueryStyles(doc);
+            if (path is "/body" or "body" or "/")
+                return QueryBodySummary(doc);
 
-            elements = elements
-                .Skip(effectiveOffset)
-                .Take(effectiveLimit)
-                .ToList();
+            var parsed = DocxPath.Parse(path);
+            var elements = PathResolver.Resolve(parsed, doc);
 
-            // Wrap result with pagination metadata
-            var formatted = (format?.ToLowerInvariant() ?? "json") switch
+            // Apply pagination when multiple elements are returned
+            var totalCount = elements.Count;
+            if (totalCount > 1)
             {
-                "json" => FormatJsonArray(elements, doc),
-                "text" => FormatText(elements),
-                "summary" => FormatSummary(elements),
-                _ => FormatJsonArray(elements, doc)
-            };
+                var rawOffset = offset ?? 0;
+                // Negative offset counts from the end: -10 means start at (total - 10)
+                var effectiveOffset = rawOffset < 0 ? Math.Max(0, totalCount + rawOffset) : rawOffset;
+                var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
 
-            if ((format?.ToLowerInvariant() ?? "json") == "json")
-            {
-                return $"{{\"total\": {totalCount}, \"offset\": {effectiveOffset}, \"limit\": {effectiveLimit}, " +
-                       $"\"count\": {elements.Count}, \"items\": {formatted}}}";
+                if (effectiveOffset >= totalCount)
+                    return $"{{\"total\": {totalCount}, \"offset\": {effectiveOffset}, \"limit\": {effectiveLimit}, \"items\": []}}";
+
+                elements = elements
+                    .Skip(effectiveOffset)
+                    .Take(effectiveLimit)
+                    .ToList();
+
+                // Wrap result with pagination metadata
+                var formatted = (format?.ToLowerInvariant() ?? "json") switch
+                {
+                    "json" => FormatJsonArray(elements, doc),
+                    "text" => FormatText(elements),
+                    "summary" => FormatSummary(elements),
+                    _ => FormatJsonArray(elements, doc)
+                };
+
+                if ((format?.ToLowerInvariant() ?? "json") == "json")
+                {
+                    return $"{{\"total\": {totalCount}, \"offset\": {effectiveOffset}, \"limit\": {effectiveLimit}, " +
+                           $"\"count\": {elements.Count}, \"items\": {formatted}}}";
+                }
+
+                return $"[{elements.Count}/{totalCount} elements, offset {effectiveOffset}]\n{formatted}";
             }
 
-            return $"[{elements.Count}/{totalCount} elements, offset {effectiveOffset}]\n{formatted}";
+            return (format?.ToLowerInvariant() ?? "json") switch
+            {
+                "json" => FormatJson(elements, doc),
+                "text" => FormatText(elements),
+                "summary" => FormatSummary(elements),
+                _ => FormatJson(elements, doc)
+            };
         }
-
-        return (format?.ToLowerInvariant() ?? "json") switch
-        {
-            "json" => FormatJson(elements, doc),
-            "text" => FormatText(elements),
-            "summary" => FormatSummary(elements),
-            _ => FormatJson(elements, doc)
-        };
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"querying document '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     private static string QueryMetadata(WordprocessingDocument doc)

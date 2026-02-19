@@ -1,0 +1,576 @@
+syntax = "proto3";
+
+option csharp_namespace = "DocxMcp.Grpc";
+
+package docx.storage;
+
+// StorageService provides tenant-aware storage operations for docx-mcp.
+// All operations are scoped by tenant_id for multi-tenant isolation.
+// Large file operations use streaming to handle documents > 4MB.
+service StorageService {
+  // Session lifecycle (streaming for large files)
+  rpc LoadSession(LoadSessionRequest) returns (stream DataChunk);
+  rpc SaveSession(stream SaveSessionChunk) returns (SaveSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  rpc SessionExists(SessionExistsRequest) returns (SessionExistsResponse);
+
+  // Index operations (atomic, server handles locking internally)
+  rpc LoadIndex(LoadIndexRequest) returns (LoadIndexResponse);
+  rpc AddSessionToIndex(AddSessionToIndexRequest) returns (AddSessionToIndexResponse);
+  rpc UpdateSessionInIndex(UpdateSessionInIndexRequest) returns (UpdateSessionInIndexResponse);
+  rpc RemoveSessionFromIndex(RemoveSessionFromIndexRequest) returns (RemoveSessionFromIndexResponse);
+
+  // WAL operations
+  rpc AppendWal(AppendWalRequest) returns (AppendWalResponse);
+  rpc ReadWal(ReadWalRequest) returns (ReadWalResponse);
+  rpc TruncateWal(TruncateWalRequest) returns (TruncateWalResponse);
+
+  // Checkpoint operations (streaming for large files)
+  rpc SaveCheckpoint(stream SaveCheckpointChunk) returns (SaveCheckpointResponse);
+  rpc LoadCheckpoint(LoadCheckpointRequest) returns (stream LoadCheckpointChunk);
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Common context for all tenant-scoped operations
+message TenantContext {
+  string tenant_id = 1;
+}
+
+// =============================================================================
+// Streaming Chunk Messages
+// =============================================================================
+
+// Generic data chunk for streaming large binary payloads.
+// Recommended chunk size: 64KB - 1MB
+message DataChunk {
+  bytes data = 1;
+  bool is_last = 2;           // True for the final chunk
+  // Metadata only in first chunk
+  bool found = 3;             // For load operations: whether the resource exists
+  uint64 total_size = 4;      // Total size in bytes (optional, for progress)
+}
+
+// Chunk for SaveSession streaming upload
+message SaveSessionChunk {
+  // First chunk must include metadata
+  TenantContext context = 1;
+  string session_id = 2;
+  // All chunks include data
+  bytes data = 3;
+  bool is_last = 4;
+}
+
+// Chunk for SaveCheckpoint streaming upload
+message SaveCheckpointChunk {
+  // First chunk must include metadata
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 position = 3;        // WAL position this checkpoint represents
+  // All chunks include data
+  bytes data = 4;
+  bool is_last = 5;
+}
+
+// Chunk for LoadCheckpoint streaming download (includes position metadata)
+message LoadCheckpointChunk {
+  bytes data = 1;
+  bool is_last = 2;
+  bool found = 3;             // Only meaningful in first chunk
+  uint64 position = 4;        // Actual checkpoint position (only in first chunk)
+  uint64 total_size = 5;      // Total size in bytes (only in first chunk)
+}
+
+// =============================================================================
+// Session Messages
+// =============================================================================
+
+message LoadSessionRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+// Response is stream of DataChunk
+
+message SaveSessionResponse {
+  bool success = 1;
+}
+
+message ListSessionsRequest {
+  TenantContext context = 1;
+}
+
+message SessionInfo {
+  string session_id = 1;
+  string source_path = 2;
+  int64 created_at_unix = 3;
+  int64 modified_at_unix = 4;
+  int64 size_bytes = 5;
+}
+
+message ListSessionsResponse {
+  repeated SessionInfo sessions = 1;
+}
+
+message DeleteSessionRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message DeleteSessionResponse {
+  bool success = 1;
+  bool existed = 2;
+}
+
+message SessionExistsRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message SessionExistsResponse {
+  bool exists = 1;
+  bool pending_external_change = 2;
+}
+
+// =============================================================================
+// Index Messages (Atomic operations - server handles locking internally)
+// =============================================================================
+
+message LoadIndexRequest {
+  TenantContext context = 1;
+}
+
+message LoadIndexResponse {
+  bytes index_json = 1;
+  bool found = 2;
+}
+
+// Atomic operation to add a session to the index
+message SessionIndexEntry {
+  string source_path = 1;
+  int64 created_at_unix = 2;
+  int64 modified_at_unix = 3;
+  uint64 wal_position = 4;
+  repeated uint64 checkpoint_positions = 5;
+  bool pending_external_change = 6;
+}
+
+message AddSessionToIndexRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  SessionIndexEntry entry = 3;
+}
+
+message AddSessionToIndexResponse {
+  bool success = 1;
+  bool already_exists = 2;
+}
+
+// Atomic operation to update a session in the index
+message UpdateSessionInIndexRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  // Optional fields - only non-null values are updated
+  optional int64 modified_at_unix = 3;
+  optional uint64 wal_position = 4;
+  repeated uint64 add_checkpoint_positions = 5;      // Positions to add
+  repeated uint64 remove_checkpoint_positions = 6;   // Positions to remove
+  optional uint64 cursor_position = 7;               // Current undo/redo cursor
+  optional bool pending_external_change = 8;          // External change pending flag
+  optional string source_path = 9;                     // Update source path
+}
+
+message UpdateSessionInIndexResponse {
+  bool success = 1;
+  bool not_found = 2;
+}
+
+// Atomic operation to remove a session from the index
+message RemoveSessionFromIndexRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message RemoveSessionFromIndexResponse {
+  bool success = 1;
+  bool existed = 2;
+}
+
+// =============================================================================
+// WAL Messages
+// =============================================================================
+
+message WalEntry {
+  uint64 position = 1;
+  string operation = 2;       // "add", "replace", "remove", etc.
+  string path = 3;            // Document path affected
+  bytes patch_json = 4;       // The patch data as JSON
+  int64 timestamp_unix = 5;
+}
+
+message AppendWalRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  repeated WalEntry entries = 3;
+}
+
+message AppendWalResponse {
+  bool success = 1;
+  uint64 new_position = 2;    // Position after append
+}
+
+message ReadWalRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 from_position = 3;   // 0 = from beginning
+  uint64 limit = 4;           // 0 = no limit
+}
+
+message ReadWalResponse {
+  repeated WalEntry entries = 1;
+  bool has_more = 2;
+}
+
+message TruncateWalRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 keep_from_position = 3;  // Keep entries >= this position
+}
+
+message TruncateWalResponse {
+  bool success = 1;
+  uint64 entries_removed = 2;
+}
+
+// =============================================================================
+// Checkpoint Messages
+// =============================================================================
+
+message SaveCheckpointResponse {
+  bool success = 1;
+}
+
+message LoadCheckpointRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  uint64 position = 3;        // 0 = latest checkpoint
+}
+
+// Response is stream of LoadCheckpointChunk
+
+message ListCheckpointsRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message CheckpointInfo {
+  uint64 position = 1;
+  int64 created_at_unix = 2;
+  int64 size_bytes = 3;
+}
+
+message ListCheckpointsResponse {
+  repeated CheckpointInfo checkpoints = 1;
+}
+
+// =============================================================================
+// Health Check
+// =============================================================================
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  string backend = 2;         // "local" or "r2"
+  string version = 3;
+}
+
+// =============================================================================
+// SourceSyncService - Sync changes back to external sources
+// =============================================================================
+// Handles auto-save functionality for various source types:
+// - Local files (current behavior)
+// - SharePoint documents
+// - OneDrive files
+// - Google Drive files
+
+service SourceSyncService {
+  // Register a session's source for sync tracking
+  rpc RegisterSource(RegisterSourceRequest) returns (RegisterSourceResponse);
+
+  // Unregister a source (on session close)
+  rpc UnregisterSource(UnregisterSourceRequest) returns (UnregisterSourceResponse);
+
+  // Update source configuration (change target file, toggle auto-sync)
+  rpc UpdateSource(UpdateSourceRequest) returns (UpdateSourceResponse);
+
+  // Sync current session state to external source (streaming for large files)
+  rpc SyncToSource(stream SyncToSourceChunk) returns (SyncToSourceResponse);
+
+  // Get sync status for a session
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);
+
+  // List all registered sources for a tenant
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+
+  // List available connections for a tenant
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+
+  // List files in a folder of a connection
+  rpc ListConnectionFiles(ListConnectionFilesRequest) returns (ListConnectionFilesResponse);
+
+  // Download a file from a source (streaming)
+  rpc DownloadFromSource(DownloadFromSourceRequest) returns (stream DataChunk);
+}
+
+// Source types supported by the sync service
+enum SourceType {
+  SOURCE_TYPE_UNSPECIFIED = 0;
+  SOURCE_TYPE_LOCAL_FILE = 1;
+  SOURCE_TYPE_SHAREPOINT = 2;
+  SOURCE_TYPE_ONEDRIVE = 3;
+  reserved 4, 5;                    // Formerly S3, R2 (never activated)
+  SOURCE_TYPE_GOOGLE_DRIVE = 6;
+}
+
+message SourceDescriptor {
+  SourceType type = 1;
+  string connection_id = 2;    // OAuth connection ID (empty for local)
+  string path = 3;             // Human-readable path (local: absolute path, cloud: display path)
+  string file_id = 4;          // Provider-specific file ID (GDrive file ID, OneDrive item ID)
+                                // Empty for local (path is the identifier)
+}
+
+message RegisterSourceRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  SourceDescriptor source = 3;
+  bool auto_sync = 4;          // Enable auto-sync on WAL append
+}
+
+message RegisterSourceResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UnregisterSourceRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message UnregisterSourceResponse {
+  bool success = 1;
+}
+
+message UpdateSourceRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  // New source descriptor (optional - if not set, keeps existing source)
+  SourceDescriptor source = 3;
+  // New auto-sync setting (optional - use update_auto_sync to indicate if set)
+  bool auto_sync = 4;
+  bool update_auto_sync = 5;  // True if auto_sync field should be applied
+}
+
+message UpdateSourceResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// Chunk for SyncToSource streaming upload (supports large files > 4MB)
+message SyncToSourceChunk {
+  // First chunk must include metadata
+  TenantContext context = 1;
+  string session_id = 2;
+  // All chunks include data
+  bytes data = 3;
+  bool is_last = 4;
+}
+
+message SyncToSourceResponse {
+  bool success = 1;
+  string error = 2;
+  int64 synced_at_unix = 3;
+}
+
+message GetSyncStatusRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message SyncStatus {
+  string session_id = 1;
+  SourceDescriptor source = 2;
+  bool auto_sync_enabled = 3;
+  int64 last_synced_at_unix = 4;
+  bool has_pending_changes = 5;
+  string last_error = 6;
+}
+
+message GetSyncStatusResponse {
+  bool registered = 1;
+  SyncStatus status = 2;
+}
+
+message ListSourcesRequest {
+  TenantContext context = 1;
+}
+
+message ListSourcesResponse {
+  repeated SyncStatus sources = 1;
+}
+
+// =============================================================================
+// Connection Browsing Messages
+// =============================================================================
+
+message ConnectionInfo {
+  string connection_id = 1;     // "" for local
+  SourceType type = 2;
+  string display_name = 3;      // "My personal Drive" or "Local filesystem"
+  string provider_account_id = 4; // email for GDrive, empty for local
+}
+
+message ListConnectionsRequest {
+  TenantContext context = 1;
+  SourceType filter_type = 2;   // 0 = all types
+}
+
+message ListConnectionsResponse {
+  repeated ConnectionInfo connections = 1;
+}
+
+message FileEntry {
+  string name = 1;              // file/folder name
+  string path = 2;              // human-readable path (local: absolute, cloud: display path)
+  string file_id = 3;           // provider-specific ID (GDrive file ID, empty for local)
+  bool is_folder = 4;
+  int64 size_bytes = 5;
+  int64 modified_at_unix = 6;
+  string mime_type = 7;
+}
+
+message ListConnectionFilesRequest {
+  TenantContext context = 1;
+  SourceType type = 2;
+  string connection_id = 3;     // empty for local
+  string path = 4;              // folder path (empty = root)
+  string page_token = 5;        // pagination
+  int32 page_size = 6;          // 0 = default (50)
+}
+
+message ListConnectionFilesResponse {
+  repeated FileEntry files = 1;
+  string next_page_token = 2;   // empty if no more pages
+}
+
+message DownloadFromSourceRequest {
+  TenantContext context = 1;
+  SourceType type = 2;
+  string connection_id = 3;
+  string path = 4;              // human-readable path
+  string file_id = 5;           // provider-specific ID (takes priority if non-empty)
+}
+
+// Response = stream DataChunk (already defined)
+
+// =============================================================================
+// ExternalWatchService - Monitor external sources for changes
+// =============================================================================
+// Detects when external sources are modified outside of docx-mcp.
+// Used to notify clients of conflicts or trigger re-sync.
+
+service ExternalWatchService {
+  // Start watching a source for external changes
+  rpc StartWatch(StartWatchRequest) returns (StartWatchResponse);
+
+  // Stop watching a source
+  rpc StopWatch(StopWatchRequest) returns (StopWatchResponse);
+
+  // Poll for changes (for backends that don't support push notifications)
+  rpc CheckForChanges(CheckForChangesRequest) returns (CheckForChangesResponse);
+
+  // Stream of external change events (long-poll / server-push)
+  rpc WatchChanges(WatchChangesRequest) returns (stream ExternalChangeEvent);
+
+  // Get current file metadata (for comparison)
+  rpc GetSourceMetadata(GetSourceMetadataRequest) returns (GetSourceMetadataResponse);
+}
+
+message StartWatchRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+  SourceDescriptor source = 3;
+  int32 poll_interval_seconds = 4;  // For polling-based backends (0 = default)
+}
+
+message StartWatchResponse {
+  bool success = 1;
+  string watch_id = 2;         // Unique identifier for this watch
+  string error = 3;
+}
+
+message StopWatchRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message StopWatchResponse {
+  bool success = 1;
+}
+
+message CheckForChangesRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message CheckForChangesResponse {
+  bool has_changes = 1;
+  SourceMetadata current_metadata = 2;
+  SourceMetadata known_metadata = 3;
+}
+
+message WatchChangesRequest {
+  TenantContext context = 1;
+  repeated string session_ids = 2;  // Sessions to watch (empty = all for tenant)
+}
+
+// Event types for external changes
+enum ExternalChangeType {
+  EXTERNAL_CHANGE_TYPE_UNSPECIFIED = 0;
+  EXTERNAL_CHANGE_TYPE_MODIFIED = 1;
+  EXTERNAL_CHANGE_TYPE_DELETED = 2;
+  EXTERNAL_CHANGE_TYPE_RENAMED = 3;
+  EXTERNAL_CHANGE_TYPE_PERMISSION_CHANGED = 4;
+}
+
+message ExternalChangeEvent {
+  string session_id = 1;
+  ExternalChangeType change_type = 2;
+  SourceMetadata old_metadata = 3;
+  SourceMetadata new_metadata = 4;
+  int64 detected_at_unix = 5;
+  string new_uri = 6;          // For rename events
+}
+
+message SourceMetadata {
+  int64 size_bytes = 1;
+  int64 modified_at_unix = 2;
+  string etag = 3;             // For HTTP-based sources
+  string version_id = 4;       // For versioned sources (S3, SharePoint)
+  bytes content_hash = 5;      // SHA-256 of content (if available)
+}
+
+message GetSourceMetadataRequest {
+  TenantContext context = 1;
+  string session_id = 2;
+}
+
+message GetSourceMetadataResponse {
+  bool success = 1;
+  SourceMetadata metadata = 2;
+  string error = 3;
+}

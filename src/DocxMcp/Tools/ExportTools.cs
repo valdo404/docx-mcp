@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Text;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 
@@ -11,77 +13,41 @@ namespace DocxMcp.Tools;
 [McpServerToolType]
 public sealed class ExportTools
 {
-    [McpServerTool(Name = "export_pdf"), Description(
-        "Export a document to PDF using LibreOffice CLI (soffice). " +
-        "LibreOffice must be installed on the system.")]
-    public static async Task<string> ExportPdf(
-        SessionManager sessions,
+    [McpServerTool(Name = "export"), Description(
+        "Export a document to another format. Returns the content as text (html, markdown) " +
+        "or as base64-encoded binary (pdf, docx).\n\n" +
+        "Formats:\n" +
+        "  html — returns HTML string\n" +
+        "  markdown — returns Markdown string\n" +
+        "  pdf — returns base64-encoded PDF (requires LibreOffice on the server)\n" +
+        "  docx — returns base64-encoded DOCX bytes")]
+    public static async Task<string> Export(
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
-        [Description("Output path for the PDF file.")] string output_path)
+        [Description("Export format: html, markdown, pdf, docx.")] string format)
     {
-        var session = sessions.Get(doc_id);
-
-        // Save to a temp .docx first
-        var tempDocx = Path.Combine(Path.GetTempPath(), $"docx-mcp-{session.Id}.docx");
         try
         {
-            session.Save(tempDocx);
+            var session = tenant.Sessions.Get(doc_id);
 
-            // Find LibreOffice
-            var soffice = FindLibreOffice();
-            if (soffice is null)
-                return "Error: LibreOffice not found. Install it for PDF export. " +
-                       "macOS: brew install --cask libreoffice";
-
-            var outputDir = Path.GetDirectoryName(output_path) ?? Path.GetTempPath();
-
-            var psi = new ProcessStartInfo
+            return format.ToLowerInvariant() switch
             {
-                FileName = soffice,
-                Arguments = $"--headless --convert-to pdf --outdir \"{outputDir}\" \"{tempDocx}\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                "html" => ExportHtml(session),
+                "markdown" or "md" => ExportMarkdown(session),
+                "pdf" => await ExportPdf(session),
+                "docx" => ExportDocx(session),
+                _ => throw new McpException(
+                    $"Unknown export format '{format}'. Supported: html, markdown, pdf, docx."),
             };
-
-            using var process = Process.Start(psi)
-                ?? throw new InvalidOperationException("Failed to start LibreOffice.");
-
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-            {
-                var stderr = await process.StandardError.ReadToEndAsync();
-                return $"Error: LibreOffice failed (exit {process.ExitCode}): {stderr}";
-            }
-
-            // LibreOffice outputs to outputDir with the same base name
-            var generatedPdf = Path.Combine(outputDir,
-                Path.GetFileNameWithoutExtension(tempDocx) + ".pdf");
-
-            if (File.Exists(generatedPdf) && generatedPdf != output_path)
-            {
-                File.Move(generatedPdf, output_path, overwrite: true);
-            }
-
-            return $"PDF exported to '{output_path}'.";
         }
-        finally
-        {
-            if (File.Exists(tempDocx))
-                File.Delete(tempDocx);
-        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"exporting '{doc_id}' to {format}"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
-    [McpServerTool(Name = "export_html"), Description(
-        "Export a document to HTML format.")]
-    public static string ExportHtml(
-        SessionManager sessions,
-        [Description("Session ID of the document.")] string doc_id,
-        [Description("Output path for the HTML file.")] string output_path)
+    private static string ExportHtml(DocxSession session)
     {
-        var session = sessions.Get(doc_id);
         var body = session.GetBody();
 
         var sb = new StringBuilder();
@@ -107,19 +73,11 @@ public sealed class ExportTools
         }
 
         sb.AppendLine("</body></html>");
-
-        File.WriteAllText(output_path, sb.ToString(), Encoding.UTF8);
-        return $"HTML exported to '{output_path}'.";
+        return sb.ToString();
     }
 
-    [McpServerTool(Name = "export_markdown"), Description(
-        "Export a document to Markdown format.")]
-    public static string ExportMarkdown(
-        SessionManager sessions,
-        [Description("Session ID of the document.")] string doc_id,
-        [Description("Output path for the Markdown file.")] string output_path)
+    private static string ExportMarkdown(DocxSession session)
     {
-        var session = sessions.Get(doc_id);
         var body = session.GetBody();
 
         var sb = new StringBuilder();
@@ -137,8 +95,65 @@ public sealed class ExportTools
             }
         }
 
-        File.WriteAllText(output_path, sb.ToString(), Encoding.UTF8);
-        return $"Markdown exported to '{output_path}'.";
+        return sb.ToString();
+    }
+
+    private static async Task<string> ExportPdf(DocxSession session)
+    {
+        var tempDocx = Path.Combine(Path.GetTempPath(), $"docx-mcp-{session.Id}.docx");
+        var tempDir = Path.GetTempPath();
+        try
+        {
+            session.Save(tempDocx);
+
+            var soffice = FindLibreOffice()
+                ?? throw new McpException(
+                    "LibreOffice not found. PDF export requires LibreOffice. " +
+                    "macOS: brew install --cask libreoffice");
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = soffice,
+                Arguments = $"--headless --convert-to pdf --outdir \"{tempDir}\" \"{tempDocx}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(psi)
+                ?? throw new McpException("Failed to start LibreOffice.");
+
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                var stderr = await process.StandardError.ReadToEndAsync();
+                throw new McpException($"LibreOffice failed (exit {process.ExitCode}): {stderr}");
+            }
+
+            var generatedPdf = Path.Combine(tempDir,
+                Path.GetFileNameWithoutExtension(tempDocx) + ".pdf");
+
+            if (!File.Exists(generatedPdf))
+                throw new McpException("LibreOffice did not produce a PDF file.");
+
+            var pdfBytes = await File.ReadAllBytesAsync(generatedPdf);
+            File.Delete(generatedPdf);
+
+            return Convert.ToBase64String(pdfBytes);
+        }
+        finally
+        {
+            if (File.Exists(tempDocx))
+                File.Delete(tempDocx);
+        }
+    }
+
+    private static string ExportDocx(DocxSession session)
+    {
+        var bytes = session.ToBytes();
+        return Convert.ToBase64String(bytes);
     }
 
     private static void RenderParagraphHtml(Paragraph p, StringBuilder sb)
@@ -157,7 +172,6 @@ public sealed class ExportTools
             var style = p.GetStyleId();
             if (style is "ListBullet" or "ListNumber")
             {
-                // Simple list rendering
                 sb.AppendLine($"<li>{Escape(text)}</li>");
             }
             else
@@ -248,12 +262,10 @@ public sealed class ExportTools
         var rows = t.Elements<TableRow>().ToList();
         if (rows.Count == 0) return;
 
-        // Header
         var headerCells = rows[0].Elements<TableCell>().Select(c => c.InnerText).ToList();
         sb.AppendLine("| " + string.Join(" | ", headerCells) + " |");
         sb.AppendLine("| " + string.Join(" | ", headerCells.Select(_ => "---")) + " |");
 
-        // Data rows
         foreach (var row in rows.Skip(1))
         {
             var cells = row.Elements<TableCell>().Select(c => c.InnerText).ToList();

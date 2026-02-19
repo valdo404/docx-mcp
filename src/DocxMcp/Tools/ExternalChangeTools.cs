@@ -1,171 +1,261 @@
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DocxMcp.Diff;
 using DocxMcp.ExternalChanges;
+using DocxMcp.Helpers;
+using DocxMcp.Persistence;
+using DocumentFormat.OpenXml.Packaging;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace DocxMcp.Tools;
 
 /// <summary>
-/// MCP tool for handling external document changes.
-/// Single unified tool that detects, displays, and acknowledges external modifications.
+/// MCP tools for detecting and syncing external document changes.
+/// Uses ExternalChangeGate for pending state tracking (blocks edits until acknowledged).
 /// </summary>
 [McpServerToolType]
 public sealed class ExternalChangeTools
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    /// <summary>
-    /// Check for external changes, get details, and optionally acknowledge them.
-    /// This is the single tool for all external change operations.
-    /// </summary>
     [McpServerTool(Name = "get_external_changes"), Description(
         "Check if the source file has been modified externally and get change details.\n\n" +
-        "This tool:\n" +
-        "1. Detects if the source file was modified outside this session\n" +
-        "2. Shows detailed diff (what was added, removed, modified, moved)\n" +
-        "3. Can acknowledge changes to allow continued editing\n\n" +
+        "Compares the current in-memory session with the source file (local or cloud).\n" +
+        "Returns a diff summary showing what was added, removed, modified, or moved.\n\n" +
         "IMPORTANT: If external changes are detected, you MUST acknowledge them " +
-        "(set acknowledge=true) before you can continue editing this document.")]
+        "(set acknowledge=true) before you can continue editing this document.\n\n" +
+        "Use sync_external_changes to reload the document from the source if changes are detected.")]
     public static string GetExternalChanges(
-        ExternalChangeTracker tracker,
-        [Description("Session ID to check for external changes")]
+        TenantScope tenant,
+        SyncManager sync,
+        ExternalChangeGate gate,
+        [Description("Session ID to check for external changes.")]
         string doc_id,
-        [Description("Set to true to acknowledge the changes and allow editing to continue")]
+        [Description("Set to true to acknowledge the changes and allow editing to continue.")]
         bool acknowledge = false)
     {
-        // First check for any already-detected pending changes
-        var pending = tracker.GetLatestUnacknowledgedChange(doc_id);
-
-        // If no pending, check for new changes
-        if (pending is null)
+        try
         {
-            pending = tracker.CheckForChanges(doc_id);
-        }
+            var pending = gate.CheckForChanges(tenant.TenantId, tenant.Sessions, doc_id, sync);
 
-        // No changes detected
-        if (pending is null)
-        {
-            var noChangesResult = new JsonObject
+            // No changes detected
+            if (pending is null)
             {
-                ["has_changes"] = false,
-                ["can_edit"] = true,
-                ["message"] = "No external changes detected. The document is in sync with the source file."
-            };
-            return noChangesResult.ToJsonString(JsonOptions);
-        }
+                return new JsonObject
+                {
+                    ["has_changes"] = false,
+                    ["can_edit"] = true,
+                    ["message"] = "No external changes detected. The document is in sync with the source file."
+                }.ToJsonString(JsonOptions);
+            }
 
-        // Acknowledge if requested
-        if (acknowledge)
-        {
-            tracker.AcknowledgeChange(doc_id, pending.Id);
+            // Acknowledge if requested
+            if (acknowledge)
+            {
+                gate.Acknowledge(tenant.TenantId, doc_id);
 
-            var ackResult = new JsonObject
+                var ackResult = new JsonObject
+                {
+                    ["has_changes"] = true,
+                    ["acknowledged"] = true,
+                    ["can_edit"] = true,
+                    ["change_id"] = pending.Id,
+                    ["detected_at"] = pending.DetectedAt.ToString("o"),
+                    ["source_path"] = pending.SourcePath,
+                    ["summary"] = BuildSummaryJson(pending.Summary),
+                    ["changes"] = BuildChangesJson(pending.Changes),
+                    ["message"] = $"External changes acknowledged. You may now continue editing.\n\n" +
+                                  $"Summary: {pending.Summary.TotalChanges} change(s) were made externally:\n" +
+                                  $"  - {pending.Summary.Added} added\n" +
+                                  $"  - {pending.Summary.Removed} removed\n" +
+                                  $"  - {pending.Summary.Modified} modified\n" +
+                                  $"  - {pending.Summary.Moved} moved"
+                };
+                return ackResult.ToJsonString(JsonOptions);
+            }
+
+            // Return details without acknowledging — editing is blocked
+            var result = new JsonObject
             {
                 ["has_changes"] = true,
-                ["acknowledged"] = true,
-                ["can_edit"] = true,
+                ["acknowledged"] = false,
+                ["can_edit"] = false,
                 ["change_id"] = pending.Id,
                 ["detected_at"] = pending.DetectedAt.ToString("o"),
                 ["source_path"] = pending.SourcePath,
                 ["summary"] = BuildSummaryJson(pending.Summary),
                 ["changes"] = BuildChangesJson(pending.Changes),
-                ["message"] = $"External changes acknowledged. You may now continue editing.\n\n" +
-                              $"Summary: {pending.Summary.TotalChanges} change(s) were made externally:\n" +
-                              $"  • {pending.Summary.Added} added\n" +
-                              $"  • {pending.Summary.Removed} removed\n" +
-                              $"  • {pending.Summary.Modified} modified\n" +
-                              $"  • {pending.Summary.Moved} moved"
+                ["message"] = BuildChangeMessage(pending)
             };
-            return ackResult.ToJsonString(JsonOptions);
+            return result.ToJsonString(JsonOptions);
         }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"checking external changes for '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
+    }
 
-        // Return details without acknowledging
-        var result = new JsonObject
+    [McpServerTool(Name = "sync_external_changes"), Description(
+        "Synchronize session with external file changes. This:\n\n" +
+        "1. Reloads the document from the source (local file or cloud)\n" +
+        "2. Re-assigns all element IDs for consistency\n" +
+        "3. Detects uncovered changes (headers, footers, images, styles, etc.)\n" +
+        "4. Records the sync in the edit history (supports undo)\n\n" +
+        "Use this tool when you want to accept external changes and continue editing.\n" +
+        "This also clears any pending change gate, allowing edits to resume.")]
+    public static string SyncExternalChanges(
+        TenantScope tenant,
+        SyncManager sync,
+        ExternalChangeGate gate,
+        [Description("Session ID to sync.")]
+        string doc_id)
+    {
+        try
         {
-            ["has_changes"] = true,
-            ["acknowledged"] = false,
-            ["can_edit"] = false,
-            ["change_id"] = pending.Id,
-            ["detected_at"] = pending.DetectedAt.ToString("o"),
-            ["source_path"] = pending.SourcePath,
-            ["summary"] = BuildSummaryJson(pending.Summary),
-            ["changes"] = BuildChangesJson(pending.Changes),
-            ["patches"] = new JsonArray(pending.Patches.Select(p => (JsonNode)p.ToJsonString()).ToArray()),
-            ["message"] = BuildChangeMessage(pending)
-        };
-        return result.ToJsonString(JsonOptions);
+            var syncResult = PerformSync(tenant.Sessions, doc_id, isImport: false,
+                tenantId: tenant.TenantId, sync: sync);
+
+            // Clear pending state after sync (whether successful or not for "no changes")
+            if (syncResult.Success)
+                gate.ClearPending(tenant.TenantId, doc_id);
+
+            var result = new JsonObject
+            {
+                ["success"] = syncResult.Success,
+                ["has_changes"] = syncResult.HasChanges,
+                ["message"] = syncResult.Message
+            };
+
+            if (syncResult.Summary is not null)
+            {
+                result["summary"] = BuildSummaryJson(syncResult.Summary);
+            }
+
+            if (syncResult.UncoveredChanges is { Count: > 0 })
+            {
+                var uncoveredArr = new JsonArray();
+                foreach (var u in syncResult.UncoveredChanges)
+                {
+                    var uObj = new JsonObject
+                    {
+                        ["type"] = u.Type.ToString(),
+                        ["description"] = u.Description,
+                        ["change_kind"] = u.ChangeKind
+                    };
+                    if (u.PartUri is not null)
+                        uObj["part_uri"] = u.PartUri;
+                    uncoveredArr.Add((JsonNode?)uObj);
+                }
+                result["uncovered_changes"] = uncoveredArr;
+            }
+
+            if (syncResult.WalPosition.HasValue)
+                result["wal_position"] = syncResult.WalPosition.Value;
+
+            // Auto-save after sync
+            if (syncResult.Success && syncResult.HasChanges)
+            {
+                var session = tenant.Sessions.Get(doc_id);
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
+            }
+
+            return result.ToJsonString(JsonOptions);
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"syncing external changes for '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     /// <summary>
-    /// Synchronize the session with external file changes.
-    /// Reloads the document from disk, re-assigns all element IDs, detects uncovered changes,
-    /// and records the sync in the WAL for undo/redo support.
+    /// Core sync logic: reload from source (local or cloud), diff, re-assign IDs, create WAL entry.
     /// </summary>
-    [McpServerTool(Name = "sync_external_changes"), Description(
-        "Synchronize session with external file changes. This is the recommended way to handle " +
-        "external modifications as it:\n\n" +
-        "1. Reloads the document from disk\n" +
-        "2. Re-assigns all element IDs for consistency\n" +
-        "3. Detects uncovered changes (headers, footers, images, styles, etc.)\n" +
-        "4. Records the sync in the edit history (supports undo)\n" +
-        "5. Optionally acknowledges a pending change\n\n" +
-        "Use this tool when you want to accept external changes and continue editing.")]
-    public static string SyncExternalChanges(
-        ExternalChangeTracker tracker,
-        [Description("Session ID to sync")]
-        string doc_id,
-        [Description("Optional change ID to acknowledge (from get_external_changes)")]
-        string? change_id = null)
+    internal static SyncResult PerformSync(SessionManager sessions, string sessionId, bool isImport,
+        string? tenantId = null, SyncManager? sync = null)
     {
-        var syncResult = tracker.SyncExternalChanges(doc_id, change_id);
-
-        var result = new JsonObject
+        try
         {
-            ["success"] = syncResult.Success,
-            ["has_changes"] = syncResult.HasChanges,
-            ["message"] = syncResult.Message
-        };
+            var session = sessions.Get(sessionId);
 
-        if (syncResult.Summary is not null)
-        {
-            result["summary"] = BuildSummaryJson(syncResult.Summary);
-        }
+            // 1. Read external file — cloud or local
+            byte[]? newBytes = null;
+            if (sync != null && tenantId != null)
+                newBytes = sync.ReadSourceBytes(tenantId, sessionId, session.SourcePath);
+            else if (session.SourcePath != null && File.Exists(session.SourcePath))
+                newBytes = File.ReadAllBytes(session.SourcePath);
 
-        if (syncResult.UncoveredChanges is { Count: > 0 })
-        {
-            var uncoveredArr = new JsonArray();
-            foreach (var u in syncResult.UncoveredChanges)
+            if (newBytes is null)
+                return SyncResult.Failure(session.SourcePath is null
+                    ? "Session has no source path. Cannot sync."
+                    : $"Source file not found: {session.SourcePath}");
+
+            var previousBytes = session.ToBytes();
+
+            // 2. Compute content hashes (ignoring IDs) for change detection
+            var previousContentHash = ContentHasher.ComputeContentHash(previousBytes);
+            var newContentHash = ContentHasher.ComputeContentHash(newBytes);
+
+            if (previousContentHash == newContentHash)
+                return SyncResult.NoChanges();
+
+            // 3. Compute full byte hashes for WAL metadata
+            var previousHash = ComputeBytesHash(previousBytes);
+            var newHash = ComputeBytesHash(newBytes);
+
+            // 4. Open new document and detect changes
+            List<UncoveredChange> uncoveredChanges;
+            DiffResult diff;
+
+            using (var newStream = new MemoryStream(newBytes))
+            using (var newDoc = WordprocessingDocument.Open(newStream, isEditable: false))
             {
-                var uObj = new JsonObject
-                {
-                    ["type"] = u.Type.ToString(),
-                    ["description"] = u.Description,
-                    ["change_kind"] = u.ChangeKind
-                };
-                if (u.PartUri is not null)
-                {
-                    uObj["part_uri"] = u.PartUri;
-                }
-                uncoveredArr.Add((JsonNode?)uObj);
+                uncoveredChanges = DiffEngine.DetectUncoveredChanges(session.Document, newDoc);
+                diff = DiffEngine.Compare(previousBytes, newBytes);
             }
-            result["uncovered_changes"] = uncoveredArr;
-        }
 
-        if (syncResult.WalPosition.HasValue)
+            // 5. Create temporary session to re-assign IDs, then serialize
+            byte[] finalBytes;
+            using (var tempSession = DocxSession.FromBytes(newBytes, session.Id, session.SourcePath))
+            {
+                ElementIdManager.EnsureNamespace(tempSession.Document);
+                ElementIdManager.EnsureAllIds(tempSession.Document);
+                finalBytes = tempSession.ToBytes();
+            }
+
+            // 6. Build WAL entry with full document snapshot
+            var walEntry = new WalEntry
+            {
+                EntryType = isImport ? WalEntryType.Import : WalEntryType.ExternalSync,
+                Timestamp = DateTime.UtcNow,
+                Patches = JsonSerializer.Serialize(diff.ToPatches(), DocxMcp.Models.DocxJsonContext.Default.ListJsonObject),
+                Description = BuildSyncDescription(diff.Summary, uncoveredChanges),
+                SyncMeta = new ExternalSyncMeta
+                {
+                    SourcePath = session.SourcePath ?? "(cloud)",
+                    PreviousHash = previousHash,
+                    NewHash = newHash,
+                    Summary = diff.Summary,
+                    UncoveredChanges = uncoveredChanges,
+                    DocumentSnapshot = finalBytes
+                }
+            };
+
+            // 7. Append to WAL + checkpoint + replace session
+            var walPosition = sessions.AppendExternalSync(sessionId, walEntry, finalBytes);
+
+            return SyncResult.Synced(diff.Summary, uncoveredChanges, diff.ToPatches(), null, walPosition);
+        }
+        catch (Exception ex)
         {
-            result["wal_position"] = syncResult.WalPosition.Value;
+            return SyncResult.Failure($"Sync failed: {ex.Message}");
         }
-
-        if (syncResult.AcknowledgedChangeId is not null)
-        {
-            result["acknowledged_change_id"] = syncResult.AcknowledgedChangeId;
-        }
-
-        return result.ToJsonString(JsonOptions);
     }
 
-    private static JsonObject BuildSummaryJson(Diff.DiffSummary summary)
+    private static JsonObject BuildSummaryJson(DiffSummary summary)
     {
         return new JsonObject
         {
@@ -180,7 +270,7 @@ public sealed class ExternalChangeTools
     private static JsonArray BuildChangesJson(IReadOnlyList<ExternalElementChange> changes)
     {
         var arr = new JsonArray();
-        foreach (var c in changes)
+        foreach (var c in changes.Take(20))
         {
             var obj = new JsonObject
             {
@@ -189,54 +279,48 @@ public sealed class ExternalChangeTools
                 ["description"] = c.Description
             };
             if (c.OldText is not null)
-            {
                 obj["old_text"] = c.OldText;
-            }
             if (c.NewText is not null)
-            {
                 obj["new_text"] = c.NewText;
-            }
             arr.Add((JsonNode?)obj);
         }
         return arr;
     }
 
-    private static string BuildChangeMessage(ExternalChangePatch patch)
+    private static string BuildChangeMessage(PendingExternalChange pending)
     {
-        var lines = new List<string>
-        {
-            "EXTERNAL CHANGES DETECTED",
-            "",
-            $"The file '{Path.GetFileName(patch.SourcePath)}' was modified externally.",
-            $"Detected at: {patch.DetectedAt:yyyy-MM-dd HH:mm:ss UTC}",
-            "",
-            "## Summary",
-            $"  • Added: {patch.Summary.Added}",
-            $"  • Removed: {patch.Summary.Removed}",
-            $"  • Modified: {patch.Summary.Modified}",
-            $"  • Moved: {patch.Summary.Moved}",
-            $"  • Total: {patch.Summary.TotalChanges}",
-            ""
-        };
+        return $"EXTERNAL CHANGES DETECTED\n\n" +
+               $"The file '{Path.GetFileName(pending.SourcePath)}' was modified externally.\n" +
+               $"Detected at: {pending.DetectedAt:yyyy-MM-dd HH:mm:ss UTC}\n\n" +
+               $"Summary: +{pending.Summary.Added} -{pending.Summary.Removed} ~{pending.Summary.Modified}\n\n" +
+               "Call get_external_changes with acknowledge=true to continue editing,\n" +
+               "or use sync_external_changes to reload the document and record in history.";
+    }
 
-        if (patch.Changes.Count > 0)
+    private static string BuildSyncDescription(DiffSummary summary, List<UncoveredChange> uncovered)
+    {
+        var parts = new List<string> { "[EXTERNAL SYNC]" };
+
+        if (summary.TotalChanges > 0)
+            parts.Add($"+{summary.Added} -{summary.Removed} ~{summary.Modified}");
+        else
+            parts.Add("no body changes");
+
+        if (uncovered.Count > 0)
         {
-            lines.Add("## Changes");
-            foreach (var change in patch.Changes.Take(15))
-            {
-                lines.Add($"  • {change.Description}");
-            }
-            if (patch.Changes.Count > 15)
-            {
-                lines.Add($"  • ... and {patch.Changes.Count - 15} more");
-            }
-            lines.Add("");
+            var types = uncovered
+                .Select(u => u.Type.ToString().ToLowerInvariant())
+                .Distinct()
+                .Take(3);
+            parts.Add($"({uncovered.Count} uncovered: {string.Join(", ", types)})");
         }
 
-        lines.Add("## Action Required");
-        lines.Add("Call `get_external_changes` with `acknowledge=true` to continue editing,");
-        lines.Add("or use `sync_external_changes` to reload the document and record in history.");
+        return string.Join(" ", parts);
+    }
 
-        return string.Join("\n", lines);
+    private static string ComputeBytesHash(byte[] bytes)
+    {
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }

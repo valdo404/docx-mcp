@@ -121,6 +121,14 @@ export const ui = {
     'pat.empty': 'Aucun token créé',
     'pat.copyWarning': 'Copiez ce token maintenant. Il ne sera plus affiché.',
     'pat.copied': 'Copié !',
+
+    // Consent
+    'consent.title': 'Autorisation',
+    'consent.wants_access': 'souhaite accéder à votre compte Docx System.',
+    'consent.logged_in_as': 'Connecté en tant que',
+    'consent.permissions': 'Permissions demandées',
+    'consent.authorize': 'Autoriser',
+    'consent.deny': 'Refuser',
   },
   en: {
     // Nav
@@ -235,5 +243,13 @@ export const ui = {
     'pat.empty': 'No tokens created',
     'pat.copyWarning': 'Copy this token now. It won\'t be shown again.',
     'pat.copied': 'Copied!',
+
+    // Consent
+    'consent.title': 'Authorization',
+    'consent.wants_access': 'wants to access your Docx System account.',
+    'consent.logged_in_as': 'Logged in as',
+    'consent.permissions': 'Requested permissions',
+    'consent.authorize': 'Authorize',
+    'consent.deny': 'Deny',
   },
 } as const;

@@ -2,7 +2,6 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.ExternalChanges;
-using DocxMcp.Persistence;
 using DocxMcp.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -13,7 +12,6 @@ public class AutoSaveTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _tempFile;
-    private readonly SessionStore _store;
 
     public AutoSaveTests()
     {
@@ -22,31 +20,26 @@ public class AutoSaveTests : IDisposable
 
         _tempFile = Path.Combine(_tempDir, "test.docx");
         CreateTestDocx(_tempFile, "Original content");
-
-        var sessionsDir = Path.Combine(_tempDir, "sessions");
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, sessionsDir);
     }
 
     public void Dispose()
     {
-        _store.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
 
-    private SessionManager CreateManager()
-    {
-        var mgr = new SessionManager(_store, NullLogger<SessionManager>.Instance);
-        var tracker = new ExternalChangeTracker(mgr, NullLogger<ExternalChangeTracker>.Instance);
-        mgr.SetExternalChangeTracker(tracker);
-        return mgr;
-    }
+    private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
+    private SyncManager CreateSyncManager() => TestHelpers.CreateSyncManager();
 
     [Fact]
-    public void AppendWal_AutoSavesFileOnDisk()
+    public void AppendWal_WithAutoSave_SavesFileOnDisk()
     {
         var mgr = CreateManager();
+        var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);
+
+        // Register source for auto-save (caller-orchestrated)
+        sync.RegisterAndWatch(mgr.TenantId, session.Id, _tempFile, autoSync: true);
 
         // Record original file bytes
         var originalBytes = File.ReadAllBytes(_tempFile);
@@ -55,9 +48,11 @@ public class AutoSaveTests : IDisposable
         var body = session.Document.MainDocumentPart!.Document!.Body!;
         body.AppendChild(new Paragraph(new Run(new Text("Added paragraph"))));
 
-        // Append WAL triggers auto-save
+        // Append WAL then auto-save (caller-orchestrated pattern)
+        var currentBytes = session.ToBytes();
         mgr.AppendWal(session.Id,
-            "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Added paragraph\"}}]");
+            "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Added paragraph\"}}]", null, currentBytes);
+        sync.MaybeAutoSave(mgr.TenantId, session.Id, currentBytes);
 
         // File on disk should have changed
         var newBytes = File.ReadAllBytes(_tempFile);
@@ -75,12 +70,13 @@ public class AutoSaveTests : IDisposable
     public void DryRun_DoesNotTriggerAutoSave()
     {
         var mgr = CreateManager();
+        var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);
 
         var originalBytes = File.ReadAllBytes(_tempFile);
 
         // Apply patch with dry_run — this skips AppendWal entirely
-        PatchTool.ApplyPatch(mgr, null, session.Id,
+        PatchTool.ApplyPatch(mgr, sync, TestHelpers.CreateExternalChangeGate(), session.Id,
             "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Dry run\"}}]",
             dry_run: true);
 
@@ -92,16 +88,21 @@ public class AutoSaveTests : IDisposable
     public void NewDocument_NoSourcePath_NoException()
     {
         var mgr = CreateManager();
+        var sync = CreateSyncManager();
         var session = mgr.Create();
 
         // Mutate in-memory
         var body = session.Document.MainDocumentPart!.Document!.Body!;
         body.AppendChild(new Paragraph(new Run(new Text("New content"))));
 
-        // AppendWal should not throw even though there's no source path
+        // AppendWal + MaybeAutoSave should not throw even though there's no source path
         var ex = Record.Exception(() =>
+        {
+            var currentBytes = session.ToBytes();
             mgr.AppendWal(session.Id,
-                "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"New content\"}}]"));
+                "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"New content\"}}]", null, currentBytes);
+            sync.MaybeAutoSave(mgr.TenantId, session.Id, currentBytes);
+        });
 
         Assert.Null(ex);
     }
@@ -115,25 +116,25 @@ public class AutoSaveTests : IDisposable
         {
             Environment.SetEnvironmentVariable("DOCX_AUTO_SAVE", "false");
 
-            var store2 = new SessionStore(NullLogger<SessionStore>.Instance,
-                Path.Combine(_tempDir, "sessions-disabled"));
-            var mgr = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-            var tracker = new ExternalChangeTracker(mgr, NullLogger<ExternalChangeTracker>.Instance);
-            mgr.SetExternalChangeTracker(tracker);
-
+            var mgr = CreateManager();
+            var sync = CreateSyncManager();
             var session = mgr.Open(_tempFile);
+
+            // Register source
+            sync.RegisterAndWatch(mgr.TenantId, session.Id, _tempFile, autoSync: true);
+
             var originalBytes = File.ReadAllBytes(_tempFile);
 
-            // Mutate and append WAL
+            // Mutate and append WAL + try auto-save
             var body = session.Document.MainDocumentPart!.Document!.Body!;
             body.AppendChild(new Paragraph(new Run(new Text("Should not save"))));
+            var currentBytes = session.ToBytes();
             mgr.AppendWal(session.Id,
-                "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Should not save\"}}]");
+                "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Should not save\"}}]", null, currentBytes);
+            sync.MaybeAutoSave(mgr.TenantId, session.Id, currentBytes);
 
             var afterBytes = File.ReadAllBytes(_tempFile);
             Assert.Equal(originalBytes, afterBytes);
-
-            store2.Dispose();
         }
         finally
         {
@@ -145,12 +146,16 @@ public class AutoSaveTests : IDisposable
     public void StyleOperation_TriggersAutoSave()
     {
         var mgr = CreateManager();
+        var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);
+
+        // Register source for auto-save
+        sync.RegisterAndWatch(mgr.TenantId, session.Id, _tempFile, autoSync: true);
 
         var originalBytes = File.ReadAllBytes(_tempFile);
 
-        // Apply style (this calls AppendWal internally)
-        StyleTools.StyleElement(mgr, session.Id, "{\"bold\": true}", "/body/paragraph[0]");
+        // Apply style (tool calls sync.MaybeAutoSave internally)
+        StyleTools.StyleElement(mgr, sync, session.Id, "{\"bold\": true}", "/body/paragraph[0]");
 
         var afterBytes = File.ReadAllBytes(_tempFile);
         Assert.NotEqual(originalBytes, afterBytes);
@@ -160,12 +165,16 @@ public class AutoSaveTests : IDisposable
     public void CommentAdd_TriggersAutoSave()
     {
         var mgr = CreateManager();
+        var sync = CreateSyncManager();
         var session = mgr.Open(_tempFile);
+
+        // Register source for auto-save
+        sync.RegisterAndWatch(mgr.TenantId, session.Id, _tempFile, autoSync: true);
 
         var originalBytes = File.ReadAllBytes(_tempFile);
 
-        // Add comment (this calls AppendWal internally)
-        CommentTools.CommentAdd(mgr, session.Id, "/body/paragraph[0]", "Test comment");
+        // Add comment (tool calls sync.MaybeAutoSave internally)
+        CommentTools.CommentAdd(mgr, sync, session.Id, "/body/paragraph[0]", "Test comment");
 
         var afterBytes = File.ReadAllBytes(_tempFile);
         Assert.NotEqual(originalBytes, afterBytes);

@@ -1,104 +1,166 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
-using DocxMcp.ExternalChanges;
+using DocxMcp.Grpc;
 using DocxMcp.Persistence;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
+
+using GrpcWalEntry = DocxMcp.Grpc.WalEntryDto;
+using WalEntry = DocxMcp.Persistence.WalEntry;
 
 namespace DocxMcp;
 
 /// <summary>
-/// Thread-safe manager for document sessions with WAL-based persistence.
-/// Sessions survive server restarts via baseline snapshots + write-ahead log replay.
+/// Thread-safe manager for document sessions with gRPC-based persistence.
+/// Sessions are stored via a gRPC history storage service with multi-tenant isolation.
 /// Supports undo/redo via WAL cursor + checkpoint replay.
-/// Uses cross-process file locking to prevent index corruption when multiple
-/// MCP server processes share the same sessions directory.
+/// Sync and watch operations are handled separately by SyncManager.
 /// </summary>
 public sealed class SessionManager
 {
-    private readonly ConcurrentDictionary<string, DocxSession> _sessions = new();
-    private readonly ConcurrentDictionary<string, int> _cursors = new();
-    private readonly SessionStore _store;
+    private readonly IHistoryStorage _history;
     private readonly ILogger<SessionManager> _logger;
-    private SessionIndexFile _index;
-    private readonly object _indexLock = new();
+    private readonly string _tenantId;
     private readonly int _compactThreshold;
-    private readonly int _checkpointInterval;
-    private readonly bool _autoSaveEnabled;
-    private ExternalChangeTracker? _externalChangeTracker;
 
-    public SessionManager(SessionStore store, ILogger<SessionManager> logger)
+    /// <summary>
+    /// The tenant ID for this SessionManager instance.
+    /// Captured at construction time to ensure consistency across threads.
+    /// </summary>
+    public string TenantId => _tenantId;
+
+    /// <summary>
+    /// Create a SessionManager with the specified tenant ID.
+    /// If tenantId is null, uses the current tenant from TenantContextHelper.
+    /// </summary>
+    public SessionManager(IHistoryStorage history, ILogger<SessionManager> logger, string? tenantId = null)
     {
-        _store = store;
+        _history = history;
         _logger = logger;
-        _index = new SessionIndexFile();
+        _tenantId = tenantId ?? TenantContextHelper.CurrentTenantId;
 
         var thresholdEnv = Environment.GetEnvironmentVariable("DOCX_WAL_COMPACT_THRESHOLD");
         _compactThreshold = int.TryParse(thresholdEnv, out var t) && t > 0 ? t : 50;
-
-        var intervalEnv = Environment.GetEnvironmentVariable("DOCX_CHECKPOINT_INTERVAL");
-        _checkpointInterval = int.TryParse(intervalEnv, out var ci) && ci > 0 ? ci : 10;
-
-        var autoSaveEnv = Environment.GetEnvironmentVariable("DOCX_AUTO_SAVE");
-        _autoSaveEnabled = autoSaveEnv is null || !string.Equals(autoSaveEnv, "false", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Set the external change tracker (setter injection to avoid circular dependency).
-    /// </summary>
-    public void SetExternalChangeTracker(ExternalChangeTracker tracker)
-    {
-        _externalChangeTracker = tracker;
     }
 
     public DocxSession Open(string path)
     {
         var session = DocxSession.Open(path);
-        if (!_sessions.TryAdd(session.Id, session))
+        try
+        {
+            PersistNewSessionAsync(session).GetAwaiter().GetResult();
+        }
+        catch
         {
             session.Dispose();
-            throw new InvalidOperationException("Session ID collision — this should not happen.");
+            throw;
         }
+        return session;
+    }
 
-        PersistNewSession(session);
+    public DocxSession OpenFromBytes(byte[] data, string? displayPath = null)
+    {
+        var id = Guid.NewGuid().ToString("N")[..12];
+        var session = DocxSession.FromBytes(data, id, displayPath);
+        try
+        {
+            PersistNewSessionAsync(session).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
         return session;
     }
 
     public DocxSession Create()
     {
         var session = DocxSession.Create();
-        if (!_sessions.TryAdd(session.Id, session))
+        try
+        {
+            PersistNewSessionAsync(session).GetAwaiter().GetResult();
+        }
+        catch
         {
             session.Dispose();
-            throw new InvalidOperationException("Session ID collision — this should not happen.");
+            throw;
         }
-
-        PersistNewSession(session);
         return session;
     }
 
+    /// <summary>
+    /// Load a session from gRPC checkpoint (stateless).
+    /// Fast path: exact checkpoint at cursor position (1 gRPC call).
+    /// Slow path: nearest checkpoint + WAL replay.
+    /// The caller MUST dispose the returned session.
+    /// </summary>
     public DocxSession Get(string id)
     {
-        if (_sessions.TryGetValue(id, out var session))
-            return session;
-        throw new KeyNotFoundException($"No document session with ID '{id}'.");
+        var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+        var cursor = LoadCursorPosition(id, walCount);
+
+        // Try to load checkpoint at or before cursor position
+        var (ckptData, ckptPos, ckptFound) = _history.LoadCheckpointAsync(
+            TenantId, id, (ulong)cursor).GetAwaiter().GetResult();
+
+        byte[] baseBytes;
+        int checkpointPosition;
+
+        if (ckptFound && ckptData is not null && (int)ckptPos <= cursor)
+        {
+            baseBytes = ckptData;
+            checkpointPosition = (int)ckptPos;
+        }
+        else
+        {
+            // Fallback to baseline
+            var (baselineData, baselineFound) = _history.LoadSessionAsync(TenantId, id)
+                .GetAwaiter().GetResult();
+            if (!baselineFound || baselineData is null)
+                throw new KeyNotFoundException($"No document session with ID '{id}'.");
+            baseBytes = baselineData;
+            checkpointPosition = 0;
+        }
+
+        var sourcePath = LoadSourcePath(id);
+        var session = DocxSession.FromBytes(baseBytes, id, sourcePath);
+
+        // Replay WAL entries from checkpoint to cursor if needed
+        if (cursor > checkpointPosition)
+        {
+            var walEntries = ReadWalEntriesAsync(id).GetAwaiter().GetResult();
+            foreach (var patchJson in walEntries
+                .Skip(checkpointPosition)
+                .Take(cursor - checkpointPosition)
+                .Where(e => e.Patches is not null)
+                .Select(e => e.Patches!))
+            {
+                try { ReplayPatch(session, patchJson); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to replay WAL entry for session {SessionId}.", id);
+                    break;
+                }
+            }
+        }
+
+        return session;
     }
 
     /// <summary>
     /// Resolve a session by ID or file path.
-    /// - If the input looks like a session ID and matches, returns that session.
-    /// - If the input is a file path, checks for existing session with that path.
+    /// - If the input matches a session ID in the index, loads that session.
+    /// - If the input is a file path, checks the index for a session with that source_path.
     /// - If no existing session found and file exists, auto-opens a new session.
     /// </summary>
-    /// <param name="idOrPath">Either a session ID (12 hex chars) or a file path.</param>
-    /// <returns>The resolved session.</returns>
-    /// <exception cref="KeyNotFoundException">If no session found and file doesn't exist.</exception>
     public DocxSession ResolveSession(string idOrPath)
     {
-        // First, try as session ID
-        if (_sessions.TryGetValue(idOrPath, out var session))
-            return session;
+        // First, try as session ID via gRPC
+        var (exists, _) = _history.SessionExistsAsync(TenantId, idOrPath).GetAwaiter().GetResult();
+        if (exists)
+            return Get(idOrPath);
 
-        // Check if it looks like a file path (has extension, path separator, or starts with ~ or /)
+        // Check if it looks like a file path
         var isLikelyPath = idOrPath.Contains(Path.DirectorySeparatorChar)
             || idOrPath.Contains(Path.AltDirectorySeparatorChar)
             || idOrPath.StartsWith('~')
@@ -107,7 +169,6 @@ public sealed class SessionManager
 
         if (!isLikelyPath)
         {
-            // Doesn't look like a path, treat as missing session ID
             throw new KeyNotFoundException($"No document session with ID '{idOrPath}'.");
         }
 
@@ -119,16 +180,16 @@ public sealed class SessionManager
             expandedPath = Path.Combine(home, expandedPath[1..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         }
 
-        // Resolve to absolute path
         var absolutePath = Path.GetFullPath(expandedPath);
 
-        // Check if we have an existing session for this path
-        var existing = _sessions.Values.FirstOrDefault(s =>
-            s.SourcePath is not null &&
-            string.Equals(s.SourcePath, absolutePath, StringComparison.OrdinalIgnoreCase));
+        // Search the gRPC index for a session with this source_path
+        var sessionList = List();
+        var existingId = sessionList.FirstOrDefault(s =>
+            s.Path is not null &&
+            string.Equals(s.Path, absolutePath, StringComparison.OrdinalIgnoreCase)).Id;
 
-        if (existing is not null)
-            return existing;
+        if (existingId is not null)
+            return Get(existingId);
 
         // Auto-open if file exists
         if (File.Exists(absolutePath))
@@ -137,34 +198,42 @@ public sealed class SessionManager
         throw new KeyNotFoundException($"No session found for '{idOrPath}' and file does not exist.");
     }
 
-    public void Save(string id, string? path = null)
+    /// <summary>
+    /// Persist source path to the gRPC index and update the in-memory session.
+    /// </summary>
+    public void SetSourcePath(string id, string path)
     {
-        var session = Get(id);
-        session.Save(path);
-        // Note: WAL is intentionally preserved after save.
-        // Compaction should only be triggered explicitly via CLI.
+        var absolutePath = Path.GetFullPath(path);
+
+        // Persist to gRPC index (stateless — no in-memory session to update)
+        _history.UpdateSessionInIndexAsync(TenantId, id, sourcePath: absolutePath)
+            .GetAwaiter().GetResult();
     }
 
     public void Close(string id)
     {
-        if (_sessions.TryRemove(id, out var session))
-        {
-            _cursors.TryRemove(id, out _);
-            session.Dispose();
-            _store.DeleteSession(id);
-
-            WithLockedIndex(index => { index.Sessions.RemoveAll(e => e.Id == id); });
-        }
-        else
-        {
+        // Verify session exists in the index before deleting
+        var (exists, _) = _history.SessionExistsAsync(TenantId, id).GetAwaiter().GetResult();
+        if (!exists)
             throw new KeyNotFoundException($"No document session with ID '{id}'.");
-        }
+
+        _history.DeleteSessionAsync(TenantId, id).GetAwaiter().GetResult();
+        _history.RemoveSessionFromIndexAsync(TenantId, id).GetAwaiter().GetResult();
     }
 
     public IReadOnlyList<(string Id, string? Path)> List()
     {
-        return _sessions.Values
-            .Select(s => (s.Id, s.SourcePath))
+        var (indexData, found) = _history.LoadIndexAsync(TenantId).GetAwaiter().GetResult();
+        if (!found || indexData is null)
+            return Array.Empty<(string, string?)>();
+
+        var json = System.Text.Encoding.UTF8.GetString(indexData);
+        var index = JsonSerializer.Deserialize(json, SessionJsonContext.Default.SessionIndex);
+        if (index is null)
+            return Array.Empty<(string, string?)>();
+
+        return index.Sessions
+            .Select(e => (e.Id, (string?)e.SourcePath))
             .ToList()
             .AsReadOnly();
     }
@@ -174,67 +243,94 @@ public sealed class SessionManager
     /// <summary>
     /// Append a patch to the WAL after a successful mutation.
     /// If the cursor is behind the WAL tip (after undo), truncates future entries first.
-    /// Creates checkpoints at interval boundaries.
-    /// Triggers automatic compaction when WAL exceeds threshold (default 50 entries).
+    /// Always saves a checkpoint at the new position for stateless Get().
+    /// Does NOT auto-save — caller is responsible for orchestrating sync.
     /// </summary>
-    public void AppendWal(string id, string patchesJson, string? description = null)
+    public void AppendWal(string id, string patchesJson, string? description, byte[] currentBytes)
     {
         try
         {
-            var cursor = _cursors.GetOrAdd(id, 0);
-            var walCount = _store.WalEntryCount(id);
+            var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+            var cursor = LoadCursorPosition(id, walCount);
 
             // If cursor < walCount, we're in an undo state — truncate future
             if (cursor < walCount)
             {
-                _store.TruncateWalAt(id, cursor);
+                TruncateWalAtAsync(id, cursor).GetAwaiter().GetResult();
 
-                WithLockedIndex(index =>
+                // Remove checkpoints above cursor position
+                var checkpointsToRemove = GetCheckpointPositionsAboveAsync(id, (ulong)cursor).GetAwaiter().GetResult();
+                if (checkpointsToRemove.Count > 0)
                 {
-                    var entry = index.Sessions.Find(e => e.Id == id);
-                    if (entry is not null)
-                    {
-                        _store.DeleteCheckpointsAfter(id, cursor, entry.CheckpointPositions);
-                        entry.CheckpointPositions.RemoveAll(p => p > cursor);
-                    }
-                });
+                    _history.UpdateSessionInIndexAsync(TenantId, id,
+                        removeCheckpointPositions: checkpointsToRemove).GetAwaiter().GetResult();
+                }
             }
 
             // Auto-generate description from patch ops if not provided
             description ??= GenerateDescription(patchesJson);
 
-            _store.AppendWal(id, patchesJson, description);
-            var newCursor = cursor + 1;
-            _cursors[id] = newCursor;
-
-            // Create checkpoint if crossing an interval boundary
-            MaybeCreateCheckpoint(id, newCursor);
-
-            // Update index and extract compaction decision BEFORE releasing lock
-            // to avoid recursive deadlock (AppendWal -> Compact -> WithLockedIndex)
-            bool shouldCompact = false;
-            WithLockedIndex(index =>
+            // Create WAL entry
+            var walEntry = new WalEntry
             {
-                var entry = index.Sessions.Find(e => e.Id == id);
-                if (entry is not null)
-                {
-                    entry.WalCount = _store.WalEntryCount(id);
-                    entry.CursorPosition = newCursor;
-                    entry.LastModifiedAt = DateTime.UtcNow;
-                    shouldCompact = entry.WalCount >= _compactThreshold;
-                }
-            });
+                Patches = patchesJson,
+                Timestamp = DateTime.UtcNow,
+                Description = description
+            };
 
-            // Compact AFTER releasing the file lock to avoid deadlock
-            if (shouldCompact)
+            AppendWalEntryAsync(id, walEntry).GetAwaiter().GetResult();
+            var newCursor = cursor + 1;
+
+            // Always save checkpoint at the new position (stateless pattern)
+            _history.SaveCheckpointAsync(TenantId, id, (ulong)newCursor, currentBytes)
+                .GetAwaiter().GetResult();
+
+            // Update index with new WAL position, cursor, and checkpoint
+            var newWalCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _history.UpdateSessionInIndexAsync(TenantId, id,
+                modifiedAtUnix: now,
+                walPosition: (ulong)newWalCount,
+                cursorPosition: (ulong)newCursor,
+                addCheckpointPositions: new[] { (ulong)newCursor }).GetAwaiter().GetResult();
+
+            // Check if compaction is needed
+            if ((ulong)newWalCount >= (ulong)_compactThreshold)
                 Compact(id);
-
-            MaybeAutoSave(id);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to append WAL for session {SessionId}.", id);
+            throw new McpException($"Failed to persist edit for session '{id}': {ex.Message}. The in-memory document was modified but the change was not saved to the write-ahead log.", ex);
         }
+    }
+
+    private async Task<List<ulong>> GetCheckpointPositionsAboveAsync(string id, ulong threshold)
+    {
+        var (indexData, found) = await _history.LoadIndexAsync(TenantId);
+        if (!found || indexData is null)
+            return new List<ulong>();
+
+        var json = System.Text.Encoding.UTF8.GetString(indexData);
+        var index = JsonSerializer.Deserialize(json, SessionJsonContext.Default.SessionIndex);
+        if (index is null || !index.TryGetValue(id, out var entry))
+            return new List<ulong>();
+
+        return entry!.CheckpointPositions.Where(p => (ulong)p > threshold).Select(p => (ulong)p).ToList();
+    }
+
+    private async Task<List<int>> GetCheckpointPositionsAsync(string id)
+    {
+        var (indexData, found) = await _history.LoadIndexAsync(TenantId);
+        if (!found || indexData is null)
+            return new List<int>();
+
+        var json = System.Text.Encoding.UTF8.GetString(indexData);
+        var index = JsonSerializer.Deserialize(json, SessionJsonContext.Default.SessionIndex);
+        if (index is null || !index.TryGetValue(id, out var entry))
+            return new List<int>();
+
+        return entry!.CheckpointPositions;
     }
 
     /// <summary>
@@ -245,35 +341,32 @@ public sealed class SessionManager
     {
         try
         {
-            var cursor = _cursors.GetOrAdd(id, _ => _store.WalEntryCount(id));
-            var walCount = _store.WalEntryCount(id);
+            var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+            var cursor = LoadCursorPosition(id, walCount);
 
             if (cursor < walCount && !discardRedoHistory)
             {
                 _logger.LogInformation(
-                    "Skipping compaction for session {SessionId}: {RedoCount} redo entries exist. Use discardRedoHistory=true to force.",
+                    "Skipping compaction for session {SessionId}: {RedoCount} redo entries exist.",
                     id, walCount - cursor);
                 return;
             }
 
-            var session = Get(id);
+            // Load current state from checkpoint
+            using var session = Get(id);
             var bytes = session.ToBytes();
-            _store.PersistBaseline(id, bytes);
-            _store.TruncateWal(id);
-            _store.DeleteCheckpoints(id);
-            _cursors[id] = 0;
 
-            WithLockedIndex(index =>
-            {
-                var entry = index.Sessions.Find(e => e.Id == id);
-                if (entry is not null)
-                {
-                    entry.WalCount = 0;
-                    entry.CursorPosition = 0;
-                    entry.CheckpointPositions.Clear();
-                    entry.LastModifiedAt = DateTime.UtcNow;
-                }
-            });
+            _history.SaveSessionAsync(TenantId, id, bytes).GetAwaiter().GetResult();
+            _history.TruncateWalAsync(TenantId, id, 0).GetAwaiter().GetResult();
+
+            // Remove all checkpoints (baseline is now up-to-date)
+            var checkpointsToRemove = GetCheckpointPositionsAboveAsync(id, 0).GetAwaiter().GetResult();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _history.UpdateSessionInIndexAsync(TenantId, id,
+                modifiedAtUnix: now,
+                walPosition: 0,
+                cursorPosition: 0,
+                removeCheckpointPositions: checkpointsToRemove).GetAwaiter().GetResult();
 
             _logger.LogInformation("Compacted session {SessionId}.", id);
         }
@@ -285,73 +378,45 @@ public sealed class SessionManager
 
     /// <summary>
     /// Append an external sync entry to the WAL.
-    /// Truncates future entries if in undo state, creates checkpoint from the sync's DocumentSnapshot,
-    /// and replaces the in-memory session.
     /// </summary>
-    /// <param name="id">Session ID.</param>
-    /// <param name="syncEntry">The WAL entry with ExternalSync type and SyncMeta.</param>
-    /// <param name="newSession">The new session to replace the current one.</param>
-    /// <returns>The new WAL position after append.</returns>
-    public int AppendExternalSync(string id, WalEntry syncEntry, DocxSession newSession)
+    public int AppendExternalSync(string id, WalEntry syncEntry, byte[] newBytes)
     {
         try
         {
-            var cursor = _cursors.GetOrAdd(id, 0);
-            var walCount = _store.WalEntryCount(id);
+            var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+            var cursor = LoadCursorPosition(id, walCount);
 
             // If cursor < walCount, we're in an undo state — truncate future
             if (cursor < walCount)
             {
-                _store.TruncateWalAt(id, cursor);
+                TruncateWalAtAsync(id, cursor).GetAwaiter().GetResult();
 
-                WithLockedIndex(index =>
+                // Remove checkpoints above cursor position
+                var checkpointsToRemove = GetCheckpointPositionsAboveAsync(id, (ulong)cursor).GetAwaiter().GetResult();
+                if (checkpointsToRemove.Count > 0)
                 {
-                    var entry = index.Sessions.Find(e => e.Id == id);
-                    if (entry is not null)
-                    {
-                        _store.DeleteCheckpointsAfter(id, cursor, entry.CheckpointPositions);
-                        entry.CheckpointPositions.RemoveAll(p => p > cursor);
-                    }
-                });
+                    _history.UpdateSessionInIndexAsync(TenantId, id,
+                        removeCheckpointPositions: checkpointsToRemove).GetAwaiter().GetResult();
+                }
             }
 
-            // Serialize and append WAL entry
-            var walLine = System.Text.Json.JsonSerializer.Serialize(syncEntry, WalJsonContext.Default.WalEntry);
-            _store.GetOrCreateWal(id).Append(walLine);
+            AppendWalEntryAsync(id, syncEntry).GetAwaiter().GetResult();
 
             var newCursor = cursor + 1;
-            _cursors[id] = newCursor;
 
-            // Create checkpoint using the stored DocumentSnapshot (sync always forces a checkpoint)
-            // Use import checkpoint path for Import entries, regular checkpoint path for ExternalSync
-            if (syncEntry.SyncMeta?.DocumentSnapshot is not null)
-            {
-                if (syncEntry.EntryType == WalEntryType.Import)
-                    _store.PersistImportCheckpoint(id, newCursor, syncEntry.SyncMeta.DocumentSnapshot);
-                else
-                    _store.PersistCheckpoint(id, newCursor, syncEntry.SyncMeta.DocumentSnapshot);
-            }
+            // Always save checkpoint with the new document bytes
+            var checkpointBytes = syncEntry.SyncMeta?.DocumentSnapshot ?? newBytes;
+            _history.SaveCheckpointAsync(TenantId, id, (ulong)newCursor, checkpointBytes)
+                .GetAwaiter().GetResult();
 
-            // Replace in-memory session
-            var oldSession = _sessions[id];
-            _sessions[id] = newSession;
-            oldSession.Dispose();
-
-            // Update index
-            WithLockedIndex(index =>
-            {
-                var entry = index.Sessions.Find(e => e.Id == id);
-                if (entry is not null)
-                {
-                    entry.WalCount = _store.WalEntryCount(id);
-                    entry.CursorPosition = newCursor;
-                    entry.LastModifiedAt = DateTime.UtcNow;
-                    if (!entry.CheckpointPositions.Contains(newCursor))
-                    {
-                        entry.CheckpointPositions.Add(newCursor);
-                    }
-                }
-            });
+            // Update index with new WAL position and checkpoint
+            var newWalCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _history.UpdateSessionInIndexAsync(TenantId, id,
+                modifiedAtUnix: now,
+                walPosition: (ulong)newWalCount,
+                cursorPosition: (ulong)newCursor,
+                addCheckpointPositions: new[] { (ulong)newCursor }).GetAwaiter().GetResult();
 
             _logger.LogInformation("Appended external sync entry at position {Position} for session {SessionId}.",
                 newCursor, id);
@@ -367,13 +432,10 @@ public sealed class SessionManager
 
     // --- Undo / Redo / JumpTo / History ---
 
-    /// <summary>
-    /// Undo N steps by decrementing the cursor and rebuilding from the nearest checkpoint.
-    /// </summary>
     public UndoRedoResult Undo(string id, int steps = 1)
     {
-        var session = Get(id); // validate session exists
-        var cursor = _cursors.GetOrAdd(id, _ => _store.WalEntryCount(id));
+        var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+        var cursor = LoadCursorPosition(id, walCount);
 
         if (cursor <= 0)
             return new UndoRedoResult { Position = 0, Steps = 0, Message = "Already at the beginning. Nothing to undo." };
@@ -381,26 +443,21 @@ public sealed class SessionManager
         var actualSteps = Math.Min(steps, cursor);
         var newCursor = cursor - actualSteps;
 
-        RebuildDocumentAtPosition(id, newCursor);
-        MaybeAutoSave(id);
+        var bytes = RebuildAndCheckpoint(id, newCursor);
 
         return new UndoRedoResult
         {
             Position = newCursor,
             Steps = actualSteps,
-            Message = $"Undid {actualSteps} step(s). Now at position {newCursor}."
+            Message = $"Undid {actualSteps} step(s). Now at position {newCursor}.",
+            CurrentBytes = bytes
         };
     }
 
-    /// <summary>
-    /// Redo N steps by incrementing the cursor and replaying patches on the current DOM.
-    /// For ExternalSync entries, uses checkpoint-based rebuild instead of patch replay.
-    /// </summary>
     public UndoRedoResult Redo(string id, int steps = 1)
     {
-        var session = Get(id); // validate session exists
-        var cursor = _cursors.GetOrAdd(id, _ => _store.WalEntryCount(id));
-        var walCount = _store.WalEntryCount(id);
+        var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
+        var cursor = LoadCursorPosition(id, walCount);
 
         if (cursor >= walCount)
             return new UndoRedoResult { Position = cursor, Steps = 0, Message = "Already at the latest state. Nothing to redo." };
@@ -408,97 +465,55 @@ public sealed class SessionManager
         var actualSteps = Math.Min(steps, walCount - cursor);
         var newCursor = cursor + actualSteps;
 
-        // Check if any entries in the redo range are ExternalSync or Import
-        var walEntries = _store.ReadWalEntries(id);
-        var hasExternalSync = false;
-        for (int i = cursor; i < newCursor && i < walEntries.Count; i++)
-        {
-            if (walEntries[i].EntryType is WalEntryType.ExternalSync or WalEntryType.Import)
-            {
-                hasExternalSync = true;
-                break;
-            }
-        }
-
-        if (hasExternalSync)
-        {
-            // ExternalSync entries have checkpoints, so rebuild from checkpoint
-            RebuildDocumentAtPosition(id, newCursor);
-        }
-        else
-        {
-            // Regular patches: replay on current DOM (fast, no rebuild)
-            var patches = _store.ReadWalRange(id, cursor, newCursor);
-            foreach (var patchJson in patches)
-            {
-                ReplayPatch(session, patchJson);
-            }
-
-            _cursors[id] = newCursor;
-
-            WithLockedIndex(index =>
-            {
-                var entry = index.Sessions.Find(e => e.Id == id);
-                if (entry is not null)
-                {
-                    entry.CursorPosition = newCursor;
-                }
-            });
-        }
-
-        MaybeAutoSave(id);
+        var bytes = RebuildAndCheckpoint(id, newCursor);
 
         return new UndoRedoResult
         {
             Position = newCursor,
             Steps = actualSteps,
-            Message = $"Redid {actualSteps} step(s). Now at position {newCursor}."
+            Message = $"Redid {actualSteps} step(s). Now at position {newCursor}.",
+            CurrentBytes = bytes
         };
     }
 
-    /// <summary>
-    /// Jump to an arbitrary WAL position by rebuilding from the nearest checkpoint.
-    /// </summary>
     public UndoRedoResult JumpTo(string id, int position)
     {
-        var session = Get(id); // validate session exists
-        var walCount = _store.WalEntryCount(id);
+        var walCount = GetWalEntryCountAsync(id).GetAwaiter().GetResult();
 
         if (position < 0)
             position = 0;
         if (position > walCount)
+        {
+            var currentCursor = LoadCursorPosition(id, walCount);
             return new UndoRedoResult
             {
-                Position = _cursors.GetOrAdd(id, _ => walCount),
+                Position = currentCursor,
                 Steps = 0,
                 Message = $"Position {position} is beyond the WAL (max {walCount}). No change."
             };
+        }
 
-        var oldCursor = _cursors.GetOrAdd(id, _ => walCount);
+        var oldCursor = LoadCursorPosition(id, walCount);
         if (position == oldCursor)
             return new UndoRedoResult { Position = position, Steps = 0, Message = $"Already at position {position}." };
 
-        RebuildDocumentAtPosition(id, position);
-        MaybeAutoSave(id);
+        var bytes = RebuildAndCheckpoint(id, position);
 
         var stepsFromOld = Math.Abs(position - oldCursor);
         return new UndoRedoResult
         {
             Position = position,
             Steps = stepsFromOld,
-            Message = $"Jumped to position {position}."
+            Message = $"Jumped to position {position}.",
+            CurrentBytes = bytes
         };
     }
 
-    /// <summary>
-    /// Get the hash of the external file from the last ExternalSync WAL entry.
-    /// Used to detect if the external file has changed since the last sync.
-    /// </summary>
     public string? GetLastExternalSyncHash(string id)
     {
         try
         {
-            var walEntries = _store.ReadWalEntries(id);
+            var walEntries = ReadWalEntriesAsync(id).GetAwaiter().GetResult();
             var lastSync = walEntries
                 .Where(e => e.EntryType is WalEntryType.ExternalSync or WalEntryType.Import && e.SyncMeta?.NewHash is not null)
                 .LastOrDefault();
@@ -510,27 +525,17 @@ public sealed class SessionManager
         }
     }
 
-    /// <summary>
-    /// Get the edit history for a session with metadata.
-    /// </summary>
     public HistoryResult GetHistory(string id, int offset = 0, int limit = 20)
     {
-        Get(id); // validate session exists
-        var walEntries = _store.ReadWalEntries(id);
-        var cursor = _cursors.GetOrAdd(id, _ => walEntries.Count);
+        var walEntries = ReadWalEntriesAsync(id).GetAwaiter().GetResult();
         var walCount = walEntries.Count;
+        var cursor = LoadCursorPosition(id, walCount);
 
-        var checkpointPositions = WithLockedIndex(index =>
-        {
-            var entry = index.Sessions.Find(e => e.Id == id);
-            return entry?.CheckpointPositions.ToList() ?? new List<int>();
-        });
+        var checkpointPositions = GetCheckpointPositionsAsync(id).GetAwaiter().GetResult();
 
         var entries = new List<HistoryEntry>();
-
-        // Include position 0 (baseline) as the first entry
         var startIdx = Math.Max(0, offset);
-        var endIdx = Math.Min(walCount + 1, offset + limit); // +1 for baseline
+        var endIdx = Math.Min(walCount + 1, offset + limit);
 
         for (int i = startIdx; i < endIdx; i++)
         {
@@ -561,7 +566,6 @@ public sealed class SessionManager
                         IsExternalSync = we.EntryType is WalEntryType.ExternalSync or WalEntryType.Import
                     };
 
-                    // Populate sync summary for external sync / import entries
                     if (we.EntryType is WalEntryType.ExternalSync or WalEntryType.Import && we.SyncMeta is not null)
                     {
                         historyEntry.SyncSummary = new ExternalSyncSummary
@@ -585,7 +589,7 @@ public sealed class SessionManager
 
         return new HistoryResult
         {
-            TotalEntries = walCount + 1, // +1 for baseline
+            TotalEntries = walCount + 1,
             CursorPosition = cursor,
             CanUndo = cursor > 0,
             CanRedo = cursor < walCount,
@@ -594,199 +598,201 @@ public sealed class SessionManager
     }
 
     /// <summary>
-    /// Restore all persisted sessions from disk on startup.
-    /// Acquires file lock for the entire duration to prevent mutations during startup replay.
-    /// Loads from the nearest checkpoint when available to properly restore ExternalSync state.
-    /// Note: Sessions are never auto-deleted. Use CLI to manually close/clean sessions.
+    /// No-op for backward compatibility. Sessions are now stateless (loaded on demand from gRPC).
     /// </summary>
-    public int RestoreSessions()
+    [Obsolete("Sessions are now stateless. This method is a no-op.")]
+    public int RestoreSessions() => 0;
+
+    // --- gRPC Storage Helpers ---
+
+    private async Task<int> GetWalEntryCountAsync(string sessionId)
     {
-        _store.EnsureDirectory();
-        using var fileLock = _store.AcquireLock();
+        var (entries, _) = await _history.ReadWalAsync(TenantId, sessionId);
+        return entries.Count;
+    }
 
-        lock (_indexLock)
+    /// <summary>
+    /// Load the cursor position from the index, or default to WAL count.
+    /// </summary>
+    private int LoadCursorPosition(string sessionId, int walCount)
+    {
+        try
         {
-            _index = _store.LoadIndex();
+            var (indexData, found) = _history.LoadIndexAsync(TenantId).GetAwaiter().GetResult();
+            if (found && indexData is not null)
+            {
+                var json = System.Text.Encoding.UTF8.GetString(indexData);
+                var index = JsonSerializer.Deserialize(json, SessionJsonContext.Default.SessionIndex);
+                if (index is not null && index.TryGetValue(sessionId, out var entry))
+                {
+                    // Return cursor if valid, otherwise default to walCount
+                    if (entry!.CursorPosition >= 0 && entry.CursorPosition <= walCount)
+                    {
+                        return entry.CursorPosition;
+                    }
+                }
+            }
         }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to load cursor position for session {SessionId}, using default.", sessionId);
+        }
+        return walCount;
+    }
 
-        int restored = 0;
+    /// <summary>
+    /// Load source_path from the gRPC index for a session.
+    /// </summary>
+    private string? LoadSourcePath(string sessionId)
+    {
+        try
+        {
+            var (indexData, found) = _history.LoadIndexAsync(TenantId).GetAwaiter().GetResult();
+            if (found && indexData is not null)
+            {
+                var json = System.Text.Encoding.UTF8.GetString(indexData);
+                var index = JsonSerializer.Deserialize(json, SessionJsonContext.Default.SessionIndex);
+                if (index is not null && index.TryGetValue(sessionId, out var entry))
+                    return entry!.SourcePath;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to load source path for session {SessionId}.", sessionId);
+        }
+        return null;
+    }
 
-        foreach (var entry in _index.Sessions.ToList())
+    private async Task<List<WalEntry>> ReadWalEntriesAsync(string sessionId)
+    {
+        var (grpcEntries, _) = await _history.ReadWalAsync(TenantId, sessionId);
+        var entries = new List<WalEntry>();
+
+        foreach (var grpcEntry in grpcEntries)
         {
             try
             {
-                // Determine how many WAL entries to replay (up to cursor position)
-                var walCount = _store.WalEntryCount(entry.Id);
-                var cursorTarget = entry.CursorPosition;
-
-                // Backward compat: old entries without cursor tracking (sentinel -1)
-                if (cursorTarget < 0)
-                    cursorTarget = walCount;
-
-                var replayCount = Math.Min(cursorTarget, walCount);
-
-                // Load from nearest checkpoint instead of baseline + full replay.
-                // This is critical for ExternalSync entries which store document snapshots
-                // in checkpoints rather than as replayable patches.
-                var (ckptPos, ckptBytes) = _store.LoadNearestCheckpoint(
-                    entry.Id,
-                    replayCount,
-                    entry.CheckpointPositions);
-
-                var session = DocxSession.FromBytes(ckptBytes, entry.Id, entry.SourcePath);
-
-                // Only replay patches AFTER the checkpoint position
-                if (replayCount > ckptPos)
+                // The PatchJson field contains the serialized .NET WalEntry
+                if (grpcEntry.PatchJson.Length > 0)
                 {
-                    var patches = _store.ReadWalRange(entry.Id, ckptPos, replayCount);
-                    foreach (var patchJson in patches)
+                    var json = System.Text.Encoding.UTF8.GetString(grpcEntry.PatchJson);
+                    var entry = JsonSerializer.Deserialize(json, WalJsonContext.Default.WalEntry);
+                    if (entry is not null)
                     {
-                        try
-                        {
-                            ReplayPatch(session, patchJson);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Failed to replay WAL entry for session {SessionId}; stopping replay.",
-                                entry.Id);
-                            break;
-                        }
+                        entries.Add(entry);
                     }
                 }
-
-                if (_sessions.TryAdd(session.Id, session))
-                {
-                    _cursors[session.Id] = replayCount;
-                    restored++;
-                }
-                else
-                    session.Dispose();
             }
             catch (Exception ex)
             {
-                // Log but don't delete — WAL history is preserved.
-                // Use CLI 'close' command to manually remove corrupt sessions.
-                _logger.LogWarning(ex, "Failed to restore session {SessionId}; skipping (WAL preserved).", entry.Id);
+                _logger.LogWarning(ex, "Failed to deserialize WAL entry for session {SessionId}.", sessionId);
             }
         }
 
-        return restored;
+        return entries;
     }
 
-    // --- Cross-process index helpers ---
-
-    /// <summary>
-    /// Acquire cross-process file lock, reload index from disk, mutate, save.
-    /// Ensures no stale reads when multiple processes share the sessions directory.
-    /// </summary>
-    private void WithLockedIndex(Action<SessionIndexFile> mutate)
+    private async Task AppendWalEntryAsync(string sessionId, WalEntry entry)
     {
-        using var fileLock = _store.AcquireLock();
-        lock (_indexLock)
-        {
-            _index = _store.LoadIndex();
-            mutate(_index);
-            _store.SaveIndex(_index);
-        }
+        var json = JsonSerializer.Serialize(entry, WalJsonContext.Default.WalEntry);
+        var jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
+
+        // GrpcWalEntry (WalEntryDto) is a positional record
+        var grpcEntry = new GrpcWalEntry(
+            Position: 0, // Server assigns position
+            Operation: entry.EntryType.ToString(),
+            Path: "",
+            PatchJson: jsonBytes,
+            Timestamp: entry.Timestamp
+        );
+
+        await _history.AppendWalAsync(TenantId, sessionId, new[] { grpcEntry });
     }
 
-    /// <summary>
-    /// Acquire cross-process file lock, reload index from disk, read a value.
-    /// </summary>
-    private T WithLockedIndex<T>(Func<SessionIndexFile, T> read)
+    private async Task TruncateWalAtAsync(string sessionId, int keepCount)
     {
-        using var fileLock = _store.AcquireLock();
-        lock (_indexLock)
-        {
-            _index = _store.LoadIndex();
-            return read(_index);
-        }
+        await _history.TruncateWalAsync(TenantId, sessionId, (ulong)keepCount);
     }
 
     // --- Private helpers ---
 
-    /// <summary>
-    /// Auto-save the document to its source path after a user edit (best-effort).
-    /// Skipped for new documents (no SourcePath) or when auto-save is disabled.
-    /// </summary>
-    private void MaybeAutoSave(string id)
+    private async Task PersistNewSessionAsync(DocxSession session)
     {
-        if (!_autoSaveEnabled)
-            return;
+        var bytes = session.ToBytes();
+        await _history.SaveSessionAsync(TenantId, session.Id, bytes);
 
-        try
-        {
-            var session = Get(id);
-            if (session.SourcePath is null)
-                return;
-
-            session.Save();
-            _externalChangeTracker?.UpdateSessionSnapshot(id);
-            _logger.LogDebug("Auto-saved session {SessionId} to {Path}.", id, session.SourcePath);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Auto-save failed for session {SessionId}.", id);
-        }
-    }
-
-    private void PersistNewSession(DocxSession session)
-    {
-        try
-        {
-            var bytes = session.ToBytes();
-            _store.PersistBaseline(session.Id, bytes);
-            _store.GetOrCreateWal(session.Id); // create empty WAL mapping
-
-            _cursors[session.Id] = 0;
-
-            WithLockedIndex(index =>
-            {
-                index.Sessions.Add(new SessionEntry
-                {
-                    Id = session.Id,
-                    SourcePath = session.SourcePath,
-                    CreatedAt = DateTime.UtcNow,
-                    LastModifiedAt = DateTime.UtcNow,
-                    DocxFile = $"{session.Id}.docx",
-                    WalCount = 0,
-                    CursorPosition = 0
-                });
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to persist new session {SessionId}.", session.Id);
-        }
+        var now = DateTime.UtcNow;
+        await _history.AddSessionToIndexAsync(TenantId, session.Id,
+            new Grpc.SessionIndexEntryDto(
+                session.SourcePath,
+                now,
+                now,
+                0,
+                Array.Empty<ulong>()));
     }
 
     /// <summary>
-    /// Rebuild the in-memory document at a specific WAL position.
-    /// Loads the nearest checkpoint, replays patches to the target position,
-    /// and replaces the in-memory session.
+    /// Rebuild document at a given position, save checkpoint there, update cursor.
+    /// Returns the serialized bytes at that position.
     /// </summary>
-    private void RebuildDocumentAtPosition(string id, int targetPosition)
+    private byte[] RebuildAndCheckpoint(string id, int targetPosition)
     {
-        var checkpointPositions = WithLockedIndex(index =>
+        using var session = RebuildDocumentAtPositionAsync(id, targetPosition).GetAwaiter().GetResult();
+        var bytes = session.ToBytes();
+
+        // Save checkpoint at new position so future Get() is fast
+        _history.SaveCheckpointAsync(TenantId, id, (ulong)targetPosition, bytes)
+            .GetAwaiter().GetResult();
+
+        // Update cursor + checkpoint in index
+        _history.UpdateSessionInIndexAsync(TenantId, id,
+            cursorPosition: (ulong)targetPosition,
+            addCheckpointPositions: new[] { (ulong)targetPosition }).GetAwaiter().GetResult();
+
+        return bytes;
+    }
+
+    private async Task<DocxSession> RebuildDocumentAtPositionAsync(string id, int targetPosition)
+    {
+        // Try to load checkpoint
+        var (ckptData, ckptPos, ckptFound) = await _history.LoadCheckpointAsync(
+            TenantId, id, (ulong)targetPosition);
+
+        byte[] baseBytes;
+        int checkpointPosition;
+
+        if (ckptFound && ckptData is not null && (int)ckptPos <= targetPosition)
         {
-            var indexEntry = index.Sessions.Find(e => e.Id == id);
-            return indexEntry?.CheckpointPositions.ToList() ?? new List<int>();
-        });
-
-        var (ckptPos, ckptBytes) = _store.LoadNearestCheckpoint(id, targetPosition, checkpointPositions);
-
-        var oldSession = Get(id);
-        var newSession = DocxSession.FromBytes(ckptBytes, oldSession.Id, oldSession.SourcePath);
-
-        // Replay patches from checkpoint position to target
-        if (targetPosition > ckptPos)
+            baseBytes = ckptData;
+            checkpointPosition = (int)ckptPos;
+        }
+        else
         {
-            var patches = _store.ReadWalRange(id, ckptPos, targetPosition);
-            foreach (var patchJson in patches)
+            // Fallback to baseline
+            var (baselineData, _) = await _history.LoadSessionAsync(TenantId, id);
+            baseBytes = baselineData ?? throw new InvalidOperationException($"No baseline found for session {id}");
+            checkpointPosition = 0;
+        }
+
+        var sourcePath = LoadSourcePath(id);
+        var session = DocxSession.FromBytes(baseBytes, id, sourcePath);
+
+        // Replay patches from checkpoint to target
+        if (targetPosition > checkpointPosition)
+        {
+            var walEntries = await ReadWalEntriesAsync(id);
+            var patchesToReplay = walEntries
+                .Skip(checkpointPosition)
+                .Take(targetPosition - checkpointPosition)
+                .Where(e => e.Patches is not null)
+                .Select(e => e.Patches!)
+                .ToList();
+
+            foreach (var patchJson in patchesToReplay)
             {
                 try
                 {
-                    ReplayPatch(newSession, patchJson);
+                    ReplayPatch(session, patchJson);
                 }
                 catch (Exception ex)
                 {
@@ -796,55 +802,9 @@ public sealed class SessionManager
             }
         }
 
-        // Replace in-memory session
-        _sessions[id] = newSession;
-        _cursors[id] = targetPosition;
-        oldSession.Dispose();
-
-        WithLockedIndex(index =>
-        {
-            var entry = index.Sessions.Find(e => e.Id == id);
-            if (entry is not null)
-            {
-                entry.CursorPosition = targetPosition;
-            }
-        });
+        return session;
     }
 
-    /// <summary>
-    /// Create a checkpoint if the new cursor crosses a checkpoint interval boundary.
-    /// </summary>
-    private void MaybeCreateCheckpoint(string id, int newCursor)
-    {
-        if (newCursor > 0 && newCursor % _checkpointInterval == 0)
-        {
-            try
-            {
-                var session = Get(id);
-                var bytes = session.ToBytes();
-                _store.PersistCheckpoint(id, newCursor, bytes);
-
-                WithLockedIndex(index =>
-                {
-                    var entry = index.Sessions.Find(e => e.Id == id);
-                    if (entry is not null && !entry.CheckpointPositions.Contains(newCursor))
-                    {
-                        entry.CheckpointPositions.Add(newCursor);
-                    }
-                });
-
-                _logger.LogInformation("Created checkpoint at position {Position} for session {SessionId}.", newCursor, id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to create checkpoint at position {Position} for session {SessionId}.", newCursor, id);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Generate a description string from patch operations.
-    /// </summary>
     private static string GenerateDescription(string patchesJson)
     {
         try
@@ -895,10 +855,6 @@ public sealed class SessionManager
         }
     }
 
-    /// <summary>
-    /// Replay a single patch operation against a session's document.
-    /// Uses the same logic as PatchTool.ApplyPatch but without MCP tool wiring.
-    /// </summary>
     private static void ReplayPatch(DocxSession session, string patchesJson)
     {
         var patchArray = JsonDocument.Parse(patchesJson).RootElement;

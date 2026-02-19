@@ -8,8 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build (requires .NET 10 SDK)
 dotnet build
 
-# Run unit tests (xUnit, ~323 tests)
+# Run unit tests (xUnit, ~428 tests)
 dotnet test tests/DocxMcp.Tests/
+
+# Run tests with Cloudflare R2 backend (dual-server mode)
+# 1. Get credentials: source infra/env-setup.sh
+# 2. Build: cargo build --release -p docx-storage-cloudflare
+# 3. Launch server (in background):
+#    CLOUDFLARE_ACCOUNT_ID=... R2_BUCKET_NAME=... R2_ACCESS_KEY_ID=... \
+#    R2_SECRET_ACCESS_KEY=... GRPC_PORT=50052 \
+#    ./target/release/docx-storage-cloudflare &
+# 4. Run tests:
+STORAGE_GRPC_URL=http://localhost:50052 dotnet test tests/DocxMcp.Tests/
 
 # Run a single test by name
 dotnet test tests/DocxMcp.Tests/ --filter "FullyQualifiedName~TestMethodName"
@@ -48,7 +58,23 @@ MCP stdio / CLI command
     → SessionManager (session lifecycle + undo/redo + WAL coordination)
       → DocxSession (in-memory MemoryStream + WordprocessingDocument)
         → Open XML SDK (DocumentFormat.OpenXml)
+    → SyncManager (file sync + auto-save, caller-orchestrated)
 ```
+
+### Dual-Server Storage Architecture (`src/DocxMcp.Grpc/`)
+
+Storage is split into two interfaces for dual-server deployment:
+
+- **`IHistoryStorage`** — Sessions, WAL, index, checkpoints. Maps to `StorageService` gRPC. Can be remote (Cloudflare R2) or local embedded.
+- **`ISyncStorage`** — File sync + filesystem watch. Maps to `SourceSyncService` + `ExternalWatchService` gRPC. Always local (embedded staticlib).
+
+Implemented by `HistoryStorageClient` and `SyncStorageClient`.
+
+**Embedded mode** (no `STORAGE_GRPC_URL`): Both use in-memory channel via `NativeStorage.Init()` + `InMemoryPipeStream` (P/Invoke to Rust staticlib).
+
+**Dual mode** (`STORAGE_GRPC_URL` set): `IHistoryStorage` → remote gRPC, `ISyncStorage` → local embedded staticlib. Auto-save orchestration is caller-side: after each mutation, tool classes call `sync.MaybeAutoSave()`.
+
+The Rust storage server binary (`dist/{platform}/docx-storage-local`) is auto-launched by `GrpcLauncher` via Unix socket. **After modifying Rust code, rebuild and copy**: `cargo build --release -p docx-storage-local && cp target/release/docx-storage-local dist/macos-arm64/`
 
 ### Typed Path System (`src/DocxMcp/Paths/`)
 
@@ -84,10 +110,11 @@ Tools use attribute-based registration with DI:
 public sealed class SomeTools
 {
     [McpServerTool(Name = "tool_name"), Description("...")]
-    public static string ToolMethod(SessionManager sessions, string param) { ... }
+    public static string ToolMethod(SessionManager sessions, SyncManager sync,
+        ExternalChangeTracker? externalChangeTracker, string param) { ... }
 }
 ```
-`SessionManager` and other services are auto-injected from the DI container.
+`SessionManager`, `SyncManager`, and `ExternalChangeTracker` are auto-injected from the DI container. Mutation tools call `sync.MaybeAutoSave()` after `sessions.AppendWal()`.
 
 ### Environment Variables
 
@@ -97,6 +124,187 @@ public sealed class SomeTools
 | `DOCX_CHECKPOINT_INTERVAL` | `10` | Edits between checkpoints |
 | `DOCX_WAL_COMPACT_THRESHOLD` | `50` | WAL entries before compaction |
 | `DOCX_AUTO_SAVE` | `true` | Auto-save to source file after each edit |
+| `STORAGE_GRPC_URL` | _(unset)_ | Remote gRPC URL for history storage (enables dual-server mode) |
+| `SYNC_GRPC_URL` | _(unset)_ | Remote gRPC URL for sync/watch (e.g. `http://gdrive:50052`). Falls back to `STORAGE_GRPC_URL` if unset |
+
+### Docker Compose Deployment
+
+Two profiles are available:
+
+- **`proxy`** — Local development. `docx-storage-local` serves all 3 gRPC services on `:50051` (history + sync/watch for local files).
+- **`cloud`** — Production. `docx-storage-cloudflare` (R2, StorageService) + `docx-storage-gdrive` (SourceSyncService + ExternalWatchService, multi-tenant OAuth tokens from D1).
+
+```bash
+# Always source credentials first
+source infra/env-setup.sh
+
+# Local dev
+docker compose --profile proxy up -d
+
+# Production (R2 + Google Drive)
+docker compose --profile cloud up -d
+```
+
+### Multi-Tenant Google Drive Architecture (`crates/docx-storage-gdrive/`)
+
+Google Drive sync uses per-tenant OAuth tokens stored in D1 (`oauth_connection` table). The gdrive server never holds static credentials — each operation resolves the token from D1 via `TokenManager`.
+
+**Flow:** Website OAuth consent → tokens stored in D1 → gdrive server reads tokens per-connection → auto-refresh via `refresh_token` grant.
+
+**URI format:** `gdrive://{connection_id}/{file_id}` — the `connection_id` identifies which OAuth connection (and thus which Google account) to use.
+
+**Key files:**
+- Config: `crates/docx-storage-gdrive/src/config.rs`
+- D1 client: `crates/docx-storage-gdrive/src/d1_client.rs`
+- Token manager: `crates/docx-storage-gdrive/src/token_manager.rs`
+- GDrive API: `crates/docx-storage-gdrive/src/gdrive.rs`
+- OAuth routes: `website/src/pages/api/oauth/`
+- OAuth connections lib: `website/src/lib/oauth-connections.ts`
+- D1 migration: `website/migrations/0005_oauth_connections.sql`
+
+### Koyeb Deployment (Production)
+
+Four services on Koyeb app `docx-mcp`, managed via Pulumi (`infra/__main__.py`):
+
+| Service | Dockerfile | Port | Protocol | Route | Instance |
+|---------|-----------|------|----------|-------|----------|
+| `storage` | `Dockerfile.storage-cloudflare` | 50051 | tcp (mesh-only) | _(none)_ | nano |
+| `gdrive` | `Dockerfile.gdrive` | 50052 | tcp (mesh-only) | _(none)_ | nano |
+| `mcp-http` | `Dockerfile` | 3000 | tcp (mesh-only) | _(none)_ | small |
+| `proxy` | `Dockerfile.proxy` | 8080 | http (public) | `/` | nano |
+
+Internal services use `protocol=tcp` with no routes — they are only reachable via Koyeb service mesh (e.g. `http://storage:50051`). This prevents route conflicts: if multiple services in the same app share route `/`, Koyeb's edge routes traffic to the wrong service → 502.
+
+**Custom domain:** `mcp.docx.lapoule.dev` → Koyeb CNAME (DNS-only, no Cloudflare proxy)
+
+#### Koyeb CLI cheat sheet
+
+```bash
+# Always source credentials first
+source infra/env-setup.sh
+
+# List services
+koyeb services list --app docx-mcp
+
+# Describe a service (routing, scaling, git sha)
+koyeb services describe docx-mcp/<name>
+koyeb services describe docx-mcp/<name> -o json
+
+# List deployments for a service
+koyeb deployments list --service docx-mcp/<name>
+
+# Describe a deployment (definition, build status)
+koyeb deployments describe <deployment-id>
+koyeb deployments describe <deployment-id> -o json
+
+# List running instances
+koyeb instances list --app docx-mcp
+
+# Instance logs (historical range)
+koyeb instances logs <instance-id> --start-time "2026-02-19T18:00:00Z" --end-time "2026-02-19T19:30:00Z"
+
+# Instance logs (tail, blocks until Ctrl-C)
+koyeb instances logs <instance-id> --tail
+
+# Update a service (e.g. scale-to-zero)
+koyeb services update docx-mcp/<name> --min-scale 0
+koyeb services update docx-mcp/<name> --min-scale 1
+
+# Redeploy with latest commit
+koyeb services update docx-mcp/<name> --git-sha ''
+
+# Redeploy specific commit
+koyeb services update docx-mcp/<name> --git-sha <sha>
+```
+
+**Koyeb CLI gotchas:**
+- `-o json` outputs one JSON object per line (not a JSON array) — use `head -1 | python3 -c "import json,sys; d=json.loads(sys.stdin.readline())"` to parse
+- `--tail` flag blocks forever (no `--lines` limit) — use `timeout 10 koyeb instances logs <id> --tail` or Ctrl-C
+- No `--type build/runtime` flag on logs — all logs are mixed
+- `koyeb logs` does NOT exist — use `koyeb instances logs <instance-id>`
+- `koyeb services logs` exists but is unreliable (empty output) — prefer `koyeb instances logs`
+- `koyeb domains list` has no `--app` flag — lists all domains across all apps
+
+**Debugging 502 errors:** Koyeb uses Cloudflare as its edge/CDN — a `502` with `server: cloudflare` and `cf-ray` headers comes from Koyeb's Cloudflare layer, not our own Cloudflare zone. Common causes:
+- **HTTP/2 (h2c) mismatch**: Koyeb's edge may connect to containers via HTTP/2 cleartext (h2c). If the server only speaks HTTP/1.1 (e.g. `axum::serve`), Koyeb returns 502 even though health checks pass (health checks use HTTP/1.1). Fix: use `hyper-util::server::conn::auto::Builder` for dual-stack HTTP/1.1 + h2c.
+- **Health check testing upstream**: If `/health` checks upstream services (e.g. mcp-http), it can timeout during cold start, making Koyeb mark the container as unhealthy. Fix: `/health` should only test that the proxy itself is running. Use `/upstream-health` for deep checks.
+- **Upstream unreachable**: If proxy is healthy but returns 502, check mcp-http logs first (`koyeb instances logs <mcp-http-instance-id> --tail`).
+
+**IMPORTANT — PAT tokens:** NEVER use fake/placeholder tokens like `dxs_test` or `dxs_fake`. The proxy validates every token against Cloudflare D1 and rejects invalid ones immediately. Always use a real PAT token from the D1 `pat` table (format: `dxs_<40-char-hex>`). To get one, query D1 directly or create one via the website.
+
+**Pulumi provider bug:** `scale_to_zero=True` on mesh-only services (no public route) fails with Pulumi provider validation error `"at least one route is required for services scaling to zero"`. The Koyeb API/CLI accepts it fine. Workaround: apply via CLI `koyeb services update --min-scale 0`, then set `scale_to_zero=True` in Pulumi to keep state aligned (Pulumi won't try to re-apply if already matching).
+
+#### Testing Dockerfiles locally
+
+Always test Dockerfile changes locally before pushing:
+
+```bash
+# Build and verify (use --target to stop at a specific stage)
+docker build -f Dockerfile --target runtime -t docx-mcp-test .
+docker build -f Dockerfile.proxy -t proxy-test .
+docker build -f Dockerfile.storage-cloudflare -t storage-test .
+docker build -f Dockerfile.gdrive -t gdrive-test .
+
+# Full stack local test
+source infra/env-setup.sh && docker compose --profile proxy up -d --build
+```
+
+#### Testing the MCP proxy with mcptools
+
+mcptools (`brew install mcptools`) speaks MCP protocol via stdio. For HTTP/SSE servers (proxy), use `npx mcp-remote` as a stdio-to-HTTP bridge.
+
+**Local proxy (docker compose):**
+
+```bash
+# 1. Start the local stack
+source infra/env-setup.sh && docker compose --profile proxy up -d
+
+# 2. List all MCP tools via local proxy
+mcptools tools npx mcp-remote http://localhost:8080/mcp --header "Authorization: Bearer dxs_<real-pat>"
+
+# 3. Call a specific tool
+mcptools call document_list npx mcp-remote http://localhost:8080/mcp --header "Authorization: Bearer dxs_<real-pat>"
+
+# 4. Interactive shell (call tools one by one)
+mcptools shell npx mcp-remote http://localhost:8080/mcp --header "Authorization: Bearer dxs_<real-pat>"
+```
+
+**Koyeb proxy (production):**
+
+```bash
+# Same commands, just change the URL to the Koyeb public endpoint
+mcptools tools npx mcp-remote https://mcp.docx.lapoule.dev/mcp --header "Authorization: Bearer dxs_<real-pat>"
+mcptools call document_list npx mcp-remote https://mcp.docx.lapoule.dev/mcp --header "Authorization: Bearer dxs_<real-pat>"
+mcptools shell npx mcp-remote https://mcp.docx.lapoule.dev/mcp --header "Authorization: Bearer dxs_<real-pat>"
+```
+
+**Direct stdio testing (no proxy, no docker):**
+
+```bash
+# Test MCP server directly via stdio (embedded storage, local only)
+mcptools tools dotnet run --project src/DocxMcp/
+mcptools call document_list dotnet run --project src/DocxMcp/
+mcptools shell dotnet run --project src/DocxMcp/
+```
+
+**mcptools gotchas:**
+- mcptools only speaks **stdio** natively — for HTTP/SSE servers always use `npx mcp-remote <url>` as the command
+- `mcptools tools <url>` does NOT work — it tries to exec the URL as a command
+- The `--header` flag is passed through to `mcp-remote`, not to mcptools itself
+- `mcptools configs ls` shows servers from Claude Desktop/Code configs but you can't use them directly as aliases
+
+#### Debugging services inside Koyeb
+
+`koyeb instances exec` requires a TTY — use `script -q /dev/null` wrapper:
+
+```bash
+# Test connectivity from inside a container
+script -q /dev/null koyeb instances exec <instance-id> -- curl -s http://mcp-http:3000/health
+
+# Test gRPC service (grpcurl is installed in mcp-http image)
+script -q /dev/null koyeb instances exec <mcp-http-instance-id> -- grpcurl -plaintext storage:50051 list
+script -q /dev/null koyeb instances exec <mcp-http-instance-id> -- grpcurl -plaintext storage:50051 storage.StorageService/HealthCheck
+```
 
 ## Key Conventions
 

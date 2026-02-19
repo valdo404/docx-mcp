@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
@@ -27,84 +29,94 @@ public sealed class StyleTools
         "Use [id='...'] for stable targeting (e.g. /body/paragraph[id='1A2B3C4D']/run[id='5E6F7A8B']).\n" +
         "Use [*] wildcards for batch operations (e.g. /body/paragraph[*]).")]
     public static string StyleElement(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of run-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all runs in the document.")] string? path = null)
     {
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-        var body = doc.MainDocumentPart?.Document?.Body
-            ?? throw new InvalidOperationException("Document has no body.");
-
-        JsonElement styleEl;
         try
         {
-            styleEl = JsonDocument.Parse(style).RootElement;
-        }
-        catch (JsonException ex)
-        {
-            return $"Error: Invalid style JSON — {ex.Message}";
-        }
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+            var body = doc.MainDocumentPart?.Document?.Body
+                ?? throw new InvalidOperationException("Document has no body.");
 
-        if (styleEl.ValueKind != JsonValueKind.Object)
-            return "Error: style must be a JSON object.";
-
-        List<Run> runs;
-        if (path is null)
-        {
-            runs = body.Descendants<Run>().ToList();
-        }
-        else
-        {
-            List<OpenXmlElement> elements;
+            JsonElement styleEl;
             try
             {
-                var parsed = DocxPath.Parse(path);
-                elements = PathResolver.Resolve(parsed, doc);
+                styleEl = JsonDocument.Parse(style).RootElement;
             }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                return $"Error: {ex.Message}";
+                return $"Error: Invalid style JSON — {ex.Message}";
             }
 
-            runs = new List<Run>();
-            foreach (var el in elements)
+            if (styleEl.ValueKind != JsonValueKind.Object)
+                return "Error: style must be a JSON object.";
+
+            List<Run> runs;
+            if (path is null)
             {
-                runs.AddRange(StyleHelper.CollectRuns(el));
-            }
-        }
-
-        if (runs.Count == 0)
-            return "No runs found to style.";
-
-        var trackChanges = RevisionHelper.IsTrackChangesEnabled(doc);
-
-        foreach (var run in runs)
-        {
-            if (trackChanges)
-            {
-                // Create RunProperties from style JSON and apply with tracking
-                var newProps = ElementFactory.CreateRunProperties(styleEl);
-                RevisionHelper.ApplyRunPropertiesWithTracking(doc, run, newProps);
+                runs = body.Descendants<Run>().ToList();
             }
             else
             {
-                StyleHelper.MergeRunProperties(run, styleEl);
+                List<OpenXmlElement> elements;
+                try
+                {
+                    var parsed = DocxPath.Parse(path);
+                    elements = PathResolver.Resolve(parsed, doc);
+                }
+                catch (Exception ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
+
+                runs = new List<Run>();
+                foreach (var el in elements)
+                {
+                    runs.AddRange(StyleHelper.CollectRuns(el));
+                }
             }
+
+            if (runs.Count == 0)
+                return "No runs found to style.";
+
+            var trackChanges = RevisionHelper.IsTrackChangesEnabled(doc);
+
+            foreach (var run in runs)
+            {
+                if (trackChanges)
+                {
+                    // Create RunProperties from style JSON and apply with tracking
+                    var newProps = ElementFactory.CreateRunProperties(styleEl);
+                    RevisionHelper.ApplyRunPropertiesWithTracking(doc, run, newProps);
+                }
+                else
+                {
+                    StyleHelper.MergeRunProperties(run, styleEl);
+                }
+            }
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "style_element",
+                ["path"] = path,
+                ["style"] = JsonNode.Parse(style)
+            };
+            var walEntry = new JsonArray { (JsonNode)walObj };
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return $"Styled {runs.Count} run(s).";
         }
-
-        // Append to WAL
-        var walObj = new JsonObject
-        {
-            ["op"] = "style_element",
-            ["path"] = path,
-            ["style"] = JsonNode.Parse(style)
-        };
-        var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-
-        return $"Styled {runs.Count} run(s).";
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"styling element in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "style_paragraph"), Description(
@@ -122,84 +134,94 @@ public sealed class StyleTools
         "Use [id='...'] for stable targeting (e.g. /body/paragraph[id='1A2B3C4D']).\n" +
         "Use [*] wildcards for batch operations.")]
     public static string StyleParagraph(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of paragraph-level style properties to merge.")] string style,
         [Description("Optional typed path. Omit to style all paragraphs in the document.")] string? path = null)
     {
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-        var body = doc.MainDocumentPart?.Document?.Body
-            ?? throw new InvalidOperationException("Document has no body.");
-
-        JsonElement styleEl;
         try
         {
-            styleEl = JsonDocument.Parse(style).RootElement;
-        }
-        catch (JsonException ex)
-        {
-            return $"Error: Invalid style JSON — {ex.Message}";
-        }
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+            var body = doc.MainDocumentPart?.Document?.Body
+                ?? throw new InvalidOperationException("Document has no body.");
 
-        if (styleEl.ValueKind != JsonValueKind.Object)
-            return "Error: style must be a JSON object.";
-
-        List<Paragraph> paragraphs;
-        if (path is null)
-        {
-            paragraphs = body.Descendants<Paragraph>().ToList();
-        }
-        else
-        {
-            List<OpenXmlElement> elements;
+            JsonElement styleEl;
             try
             {
-                var parsed = DocxPath.Parse(path);
-                elements = PathResolver.Resolve(parsed, doc);
+                styleEl = JsonDocument.Parse(style).RootElement;
             }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                return $"Error: {ex.Message}";
+                return $"Error: Invalid style JSON — {ex.Message}";
             }
 
-            paragraphs = new List<Paragraph>();
-            foreach (var el in elements)
+            if (styleEl.ValueKind != JsonValueKind.Object)
+                return "Error: style must be a JSON object.";
+
+            List<Paragraph> paragraphs;
+            if (path is null)
             {
-                paragraphs.AddRange(StyleHelper.CollectParagraphs(el));
-            }
-        }
-
-        if (paragraphs.Count == 0)
-            return "No paragraphs found to style.";
-
-        var trackChanges = RevisionHelper.IsTrackChangesEnabled(doc);
-
-        foreach (var para in paragraphs)
-        {
-            if (trackChanges)
-            {
-                // Create ParagraphProperties from style JSON and apply with tracking
-                var newProps = ElementFactory.CreateParagraphProperties(styleEl);
-                RevisionHelper.ApplyParagraphPropertiesWithTracking(doc, para, newProps);
+                paragraphs = body.Descendants<Paragraph>().ToList();
             }
             else
             {
-                StyleHelper.MergeParagraphProperties(para, styleEl);
+                List<OpenXmlElement> elements;
+                try
+                {
+                    var parsed = DocxPath.Parse(path);
+                    elements = PathResolver.Resolve(parsed, doc);
+                }
+                catch (Exception ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
+
+                paragraphs = new List<Paragraph>();
+                foreach (var el in elements)
+                {
+                    paragraphs.AddRange(StyleHelper.CollectParagraphs(el));
+                }
             }
+
+            if (paragraphs.Count == 0)
+                return "No paragraphs found to style.";
+
+            var trackChanges = RevisionHelper.IsTrackChangesEnabled(doc);
+
+            foreach (var para in paragraphs)
+            {
+                if (trackChanges)
+                {
+                    // Create ParagraphProperties from style JSON and apply with tracking
+                    var newProps = ElementFactory.CreateParagraphProperties(styleEl);
+                    RevisionHelper.ApplyParagraphPropertiesWithTracking(doc, para, newProps);
+                }
+                else
+                {
+                    StyleHelper.MergeParagraphProperties(para, styleEl);
+                }
+            }
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "style_paragraph",
+                ["path"] = path,
+                ["style"] = JsonNode.Parse(style)
+            };
+            var walEntry = new JsonArray { (JsonNode)walObj };
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return $"Styled {paragraphs.Count} paragraph(s).";
         }
-
-        // Append to WAL
-        var walObj = new JsonObject
-        {
-            ["op"] = "style_paragraph",
-            ["path"] = path,
-            ["style"] = JsonNode.Parse(style)
-        };
-        var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-
-        return $"Styled {paragraphs.Count} paragraph(s).";
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"styling paragraph in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "style_table"), Description(
@@ -219,118 +241,128 @@ public sealed class StyleTools
         "Omit path to style ALL tables in the document.\n" +
         "Use [id='...'] for stable targeting (e.g. /body/table[id='1A2B3C4D']).")]
     public static string StyleTable(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("JSON object of table-level style properties to merge.")] string? style = null,
         [Description("JSON object of cell-level style properties to merge (applied to ALL cells).")] string? cell_style = null,
         [Description("JSON object of row-level style properties to merge (applied to ALL rows).")] string? row_style = null,
         [Description("Optional typed path. Omit to style all tables in the document.")] string? path = null)
     {
-        if (style is null && cell_style is null && row_style is null)
-            return "Error: At least one of style, cell_style, or row_style must be provided.";
-
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-        var body = doc.MainDocumentPart?.Document?.Body
-            ?? throw new InvalidOperationException("Document has no body.");
-
-        JsonElement? styleEl = null, cellStyleEl = null, rowStyleEl = null;
         try
         {
-            if (style is not null)
-            {
-                var parsed = JsonDocument.Parse(style).RootElement;
-                if (parsed.ValueKind != JsonValueKind.Object)
-                    return "Error: style must be a JSON object.";
-                styleEl = parsed;
-            }
-            if (cell_style is not null)
-            {
-                var parsed = JsonDocument.Parse(cell_style).RootElement;
-                if (parsed.ValueKind != JsonValueKind.Object)
-                    return "Error: cell_style must be a JSON object.";
-                cellStyleEl = parsed;
-            }
-            if (row_style is not null)
-            {
-                var parsed = JsonDocument.Parse(row_style).RootElement;
-                if (parsed.ValueKind != JsonValueKind.Object)
-                    return "Error: row_style must be a JSON object.";
-                rowStyleEl = parsed;
-            }
-        }
-        catch (JsonException ex)
-        {
-            return $"Error: Invalid JSON — {ex.Message}";
-        }
+            if (style is null && cell_style is null && row_style is null)
+                return "Error: At least one of style, cell_style, or row_style must be provided.";
 
-        List<Table> tables;
-        if (path is null)
-        {
-            tables = body.Descendants<Table>().ToList();
-        }
-        else
-        {
-            List<OpenXmlElement> elements;
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+            var body = doc.MainDocumentPart?.Document?.Body
+                ?? throw new InvalidOperationException("Document has no body.");
+
+            JsonElement? styleEl = null, cellStyleEl = null, rowStyleEl = null;
             try
             {
-                var parsed = DocxPath.Parse(path);
-                elements = PathResolver.Resolve(parsed, doc);
-            }
-            catch (Exception ex)
-            {
-                return $"Error: {ex.Message}";
-            }
-
-            tables = new List<Table>();
-            foreach (var el in elements)
-            {
-                tables.AddRange(StyleHelper.CollectTables(el));
-            }
-        }
-
-        if (tables.Count == 0)
-            return "No tables found to style.";
-
-        foreach (var table in tables)
-        {
-            if (styleEl.HasValue)
-                StyleHelper.MergeTableProperties(table, styleEl.Value);
-
-            if (cellStyleEl.HasValue)
-            {
-                foreach (var cell in table.Descendants<TableCell>())
+                if (style is not null)
                 {
-                    StyleHelper.MergeTableCellProperties(cell, cellStyleEl.Value);
+                    var parsed = JsonDocument.Parse(style).RootElement;
+                    if (parsed.ValueKind != JsonValueKind.Object)
+                        return "Error: style must be a JSON object.";
+                    styleEl = parsed;
+                }
+                if (cell_style is not null)
+                {
+                    var parsed = JsonDocument.Parse(cell_style).RootElement;
+                    if (parsed.ValueKind != JsonValueKind.Object)
+                        return "Error: cell_style must be a JSON object.";
+                    cellStyleEl = parsed;
+                }
+                if (row_style is not null)
+                {
+                    var parsed = JsonDocument.Parse(row_style).RootElement;
+                    if (parsed.ValueKind != JsonValueKind.Object)
+                        return "Error: row_style must be a JSON object.";
+                    rowStyleEl = parsed;
+                }
+            }
+            catch (JsonException ex)
+            {
+                return $"Error: Invalid JSON — {ex.Message}";
+            }
+
+            List<Table> tables;
+            if (path is null)
+            {
+                tables = body.Descendants<Table>().ToList();
+            }
+            else
+            {
+                List<OpenXmlElement> elements;
+                try
+                {
+                    var parsed = DocxPath.Parse(path);
+                    elements = PathResolver.Resolve(parsed, doc);
+                }
+                catch (Exception ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
+
+                tables = new List<Table>();
+                foreach (var el in elements)
+                {
+                    tables.AddRange(StyleHelper.CollectTables(el));
                 }
             }
 
-            if (rowStyleEl.HasValue)
+            if (tables.Count == 0)
+                return "No tables found to style.";
+
+            foreach (var table in tables)
             {
-                foreach (var row in table.Elements<TableRow>())
+                if (styleEl.HasValue)
+                    StyleHelper.MergeTableProperties(table, styleEl.Value);
+
+                if (cellStyleEl.HasValue)
                 {
-                    StyleHelper.MergeTableRowProperties(row, rowStyleEl.Value);
+                    foreach (var cell in table.Descendants<TableCell>())
+                    {
+                        StyleHelper.MergeTableCellProperties(cell, cellStyleEl.Value);
+                    }
+                }
+
+                if (rowStyleEl.HasValue)
+                {
+                    foreach (var row in table.Elements<TableRow>())
+                    {
+                        StyleHelper.MergeTableRowProperties(row, rowStyleEl.Value);
+                    }
                 }
             }
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "style_table",
+                ["path"] = path
+            };
+            if (style is not null)
+                walObj["style"] = JsonNode.Parse(style);
+            if (cell_style is not null)
+                walObj["cell_style"] = JsonNode.Parse(cell_style);
+            if (row_style is not null)
+                walObj["row_style"] = JsonNode.Parse(row_style);
+
+            var walEntry = new JsonArray { (JsonNode)walObj };
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return $"Styled {tables.Count} table(s).";
         }
-
-        // Append to WAL
-        var walObj = new JsonObject
-        {
-            ["op"] = "style_table",
-            ["path"] = path
-        };
-        if (style is not null)
-            walObj["style"] = JsonNode.Parse(style);
-        if (cell_style is not null)
-            walObj["cell_style"] = JsonNode.Parse(cell_style);
-        if (row_style is not null)
-            walObj["row_style"] = JsonNode.Parse(row_style);
-
-        var walEntry = new JsonArray { (JsonNode)walObj };
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
-
-        return $"Styled {tables.Count} table(s).";
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"styling table in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     // --- Replay methods for WAL ---

@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
@@ -23,7 +25,8 @@ public sealed class CommentTools
         "  comment_add(doc_id, \"/body/paragraph[0]\", \"Needs revision\")\n" +
         "  comment_add(doc_id, \"/body/paragraph[id='1A2B3C4D']\", \"Fix this phrase\", anchor_text=\"specific words\")")]
     public static string CommentAdd(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path to the target element (must resolve to exactly 1 element).")] string path,
         [Description("Comment text. Use \\n for multi-paragraph comments.")] string text,
@@ -31,66 +34,75 @@ public sealed class CommentTools
         [Description("Comment author name. Default: 'AI Assistant'.")] string? author = null,
         [Description("Author initials. Default: 'AI'.")] string? initials = null)
     {
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-
-        List<OpenXmlElement> elements;
         try
         {
-            var parsed = DocxPath.Parse(path);
-            elements = PathResolver.Resolve(parsed, doc);
-        }
-        catch (Exception ex)
-        {
-            return $"Error: {ex.Message}";
-        }
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
 
-        if (elements.Count == 0)
-            return $"Error: Path '{path}' resolved to 0 elements.";
-        if (elements.Count > 1)
-            return $"Error: Path '{path}' resolved to {elements.Count} elements — must resolve to exactly 1.";
-
-        var target = elements[0];
-        var effectiveAuthor = author ?? "AI Assistant";
-        var effectiveInitials = initials ?? "AI";
-        var date = DateTime.UtcNow;
-        var commentId = CommentHelper.AllocateCommentId(doc);
-
-        try
-        {
-            if (anchor_text is not null)
+            List<OpenXmlElement> elements;
+            try
             {
-                CommentHelper.AddCommentToText(doc, target, commentId, text,
-                    effectiveAuthor, effectiveInitials, date, anchor_text);
+                var parsed = DocxPath.Parse(path);
+                elements = PathResolver.Resolve(parsed, doc);
             }
-            else
+            catch (Exception ex)
             {
-                CommentHelper.AddCommentToElement(doc, target, commentId, text,
-                    effectiveAuthor, effectiveInitials, date);
+                return $"Error: {ex.Message}";
             }
-        }
-        catch (Exception ex)
-        {
-            return $"Error: {ex.Message}";
-        }
 
-        // Append to WAL
-        var walObj = new JsonObject
-        {
-            ["op"] = "add_comment",
-            ["comment_id"] = commentId,
-            ["path"] = path,
-            ["text"] = text,
-            ["author"] = effectiveAuthor,
-            ["initials"] = effectiveInitials,
-            ["date"] = date.ToString("o"),
-            ["anchor_text"] = anchor_text is not null ? JsonValue.Create(anchor_text) : null
-        };
-        var walEntry = new JsonArray();
-        walEntry.Add((JsonNode)walObj);
-        sessions.AppendWal(doc_id, walEntry.ToJsonString());
+            if (elements.Count == 0)
+                return $"Error: Path '{path}' resolved to 0 elements.";
+            if (elements.Count > 1)
+                return $"Error: Path '{path}' resolved to {elements.Count} elements — must resolve to exactly 1.";
 
-        return $"Comment {commentId} added by '{effectiveAuthor}' on {path}.";
+            var target = elements[0];
+            var effectiveAuthor = author ?? "AI Assistant";
+            var effectiveInitials = initials ?? "AI";
+            var date = DateTime.UtcNow;
+            var commentId = CommentHelper.AllocateCommentId(doc);
+
+            try
+            {
+                if (anchor_text is not null)
+                {
+                    CommentHelper.AddCommentToText(doc, target, commentId, text,
+                        effectiveAuthor, effectiveInitials, date, anchor_text);
+                }
+                else
+                {
+                    CommentHelper.AddCommentToElement(doc, target, commentId, text,
+                        effectiveAuthor, effectiveInitials, date);
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "add_comment",
+                ["comment_id"] = commentId,
+                ["path"] = path,
+                ["text"] = text,
+                ["author"] = effectiveAuthor,
+                ["initials"] = effectiveInitials,
+                ["date"] = date.ToString("o"),
+                ["anchor_text"] = anchor_text is not null ? JsonValue.Create(anchor_text) : null
+            };
+            var walEntry = new JsonArray();
+            walEntry.Add((JsonNode)walObj);
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return $"Comment {commentId} added by '{effectiveAuthor}' on {path}.";
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"adding comment to '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "comment_list"), Description(
@@ -98,54 +110,61 @@ public sealed class CommentTools
         "Returns a JSON object with pagination envelope and array of comment objects " +
         "containing id, author, initials, date, text, and anchored_text.")]
     public static string CommentList(
-        SessionManager sessions,
+        TenantScope tenant,
         [Description("Session ID of the document.")] string doc_id,
         [Description("Filter by author name (case-insensitive).")] string? author = null,
         [Description("Number of comments to skip. Default: 0.")] int? offset = null,
         [Description("Maximum number of comments to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-
-        var comments = CommentHelper.ListComments(doc, author);
-        var total = comments.Count;
-
-        var effectiveOffset = Math.Max(0, offset ?? 0);
-        var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
-
-        var page = comments
-            .Skip(effectiveOffset)
-            .Take(effectiveLimit)
-            .ToList();
-
-        var arr = new JsonArray();
-        foreach (var c in page)
+        try
         {
-            var obj = new JsonObject
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+
+            var comments = CommentHelper.ListComments(doc, author);
+            var total = comments.Count;
+
+            var effectiveOffset = Math.Max(0, offset ?? 0);
+            var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
+
+            var page = comments
+                .Skip(effectiveOffset)
+                .Take(effectiveLimit)
+                .ToList();
+
+            var arr = new JsonArray();
+            foreach (var c in page)
             {
-                ["id"] = c.Id,
-                ["author"] = c.Author,
-                ["initials"] = c.Initials,
-                ["date"] = c.Date?.ToString("o"),
-                ["text"] = c.Text,
+                var obj = new JsonObject
+                {
+                    ["id"] = c.Id,
+                    ["author"] = c.Author,
+                    ["initials"] = c.Initials,
+                    ["date"] = c.Date?.ToString("o"),
+                    ["text"] = c.Text,
+                };
+
+                if (c.AnchoredText is not null)
+                    obj["anchored_text"] = c.AnchoredText;
+
+                arr.Add((JsonNode)obj);
+            }
+
+            var result = new JsonObject
+            {
+                ["total"] = total,
+                ["offset"] = effectiveOffset,
+                ["limit"] = effectiveLimit,
+                ["count"] = page.Count,
+                ["comments"] = arr
             };
 
-            if (c.AnchoredText is not null)
-                obj["anchored_text"] = c.AnchoredText;
-
-            arr.Add((JsonNode)obj);
+            return result.ToJsonString(JsonOpts);
         }
-
-        var result = new JsonObject
-        {
-            ["total"] = total,
-            ["offset"] = effectiveOffset,
-            ["limit"] = effectiveLimit,
-            ["count"] = page.Count,
-            ["comments"] = arr
-        };
-
-        return result.ToJsonString(JsonOpts);
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"listing comments in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "comment_delete"), Description(
@@ -153,59 +172,75 @@ public sealed class CommentTools
         "At least one of comment_id or author must be provided.\n" +
         "When deleting by author, each comment generates its own WAL entry for deterministic replay.")]
     public static string CommentDelete(
-        SessionManager sessions,
+        TenantScope tenant,
+        SyncManager sync,
         [Description("Session ID of the document.")] string doc_id,
         [Description("ID of the specific comment to delete.")] int? comment_id = null,
         [Description("Delete all comments by this author (case-insensitive).")] string? author = null)
     {
-        if (comment_id is null && author is null)
-            return "Error: At least one of comment_id or author must be provided.";
-
-        var session = sessions.Get(doc_id);
-        var doc = session.Document;
-
-        if (comment_id is not null)
+        try
         {
-            var deleted = CommentHelper.DeleteComment(doc, comment_id.Value);
-            if (!deleted)
-                return $"Error: Comment {comment_id.Value} not found.";
+            if (comment_id is null && author is null)
+                return "Error: At least one of comment_id or author must be provided.";
 
-            // Append to WAL
-            var walObj = new JsonObject
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+
+            if (comment_id is not null)
             {
-                ["op"] = "delete_comment",
-                ["comment_id"] = comment_id.Value
-            };
-            var walEntry = new JsonArray();
-            walEntry.Add((JsonNode)walObj);
-            sessions.AppendWal(doc_id, walEntry.ToJsonString());
+                var deleted = CommentHelper.DeleteComment(doc, comment_id.Value);
+                if (!deleted)
+                    return $"Error: Comment {comment_id.Value} not found.";
 
-            return "Deleted 1 comment(s).";
-        }
-
-        // Delete by author — expand to individual WAL entries
-        var comments = CommentHelper.ListComments(doc, author);
-        if (comments.Count == 0)
-            return $"Error: No comments found by author '{author}'.";
-
-        var deletedCount = 0;
-        foreach (var c in comments)
-        {
-            if (CommentHelper.DeleteComment(doc, c.Id))
-            {
+                // Append to WAL
                 var walObj = new JsonObject
                 {
                     ["op"] = "delete_comment",
-                    ["comment_id"] = c.Id
+                    ["comment_id"] = comment_id.Value
                 };
                 var walEntry = new JsonArray();
                 walEntry.Add((JsonNode)walObj);
-                sessions.AppendWal(doc_id, walEntry.ToJsonString());
-                deletedCount++;
-            }
-        }
+                var bytes = session.ToBytes();
+                tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
 
-        return $"Deleted {deletedCount} comment(s).";
+                return "Deleted 1 comment(s).";
+            }
+
+            // Delete by author — expand to individual WAL entries
+            var comments = CommentHelper.ListComments(doc, author);
+            if (comments.Count == 0)
+                return $"Error: No comments found by author '{author}'.";
+
+            var deletedCount = 0;
+            byte[]? lastBytes = null;
+            foreach (var c in comments)
+            {
+                if (CommentHelper.DeleteComment(doc, c.Id))
+                {
+                    var walObj = new JsonObject
+                    {
+                        ["op"] = "delete_comment",
+                        ["comment_id"] = c.Id
+                    };
+                    var walEntry = new JsonArray();
+                    walEntry.Add((JsonNode)walObj);
+                    lastBytes = session.ToBytes();
+                    tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, lastBytes);
+                    deletedCount++;
+                }
+            }
+
+            // Auto-save after all deletions
+            if (deletedCount > 0 && lastBytes is not null)
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, lastBytes);
+
+            return $"Deleted {deletedCount} comment(s).";
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"deleting comment in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     /// <summary>

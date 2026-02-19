@@ -1,7 +1,6 @@
 using DocumentFormat.OpenXml.Wordprocessing;
-using DocxMcp.Persistence;
+using DocxMcp.ExternalChanges;
 using DocxMcp.Tools;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DocxMcp.Tests;
@@ -9,23 +8,22 @@ namespace DocxMcp.Tests;
 public class UndoRedoTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly SessionStore _store;
 
     public UndoRedoTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "docx-mcp-tests", Guid.NewGuid().ToString("N"));
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
+        Directory.CreateDirectory(_tempDir);
     }
 
     public void Dispose()
     {
-        _store.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
 
-    private SessionManager CreateManager() =>
-        new SessionManager(_store, NullLogger<SessionManager>.Instance);
+    private SessionManager CreateManager() => TestHelpers.CreateSessionManager();
+
+    private SyncManager CreateSyncManager() => TestHelpers.CreateSyncManager();
 
     private static string AddParagraphPatch(string text) =>
         $"[{{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{{\"type\":\"paragraph\",\"text\":\"{text}\"}}}}]";
@@ -39,16 +37,19 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("First"));
-        Assert.Contains("First", session.GetBody().InnerText);
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("First"));
+
+        // Reload from gRPC to verify patch was applied
+        using (var afterPatch = mgr.Get(id))
+            Assert.Contains("First", afterPatch.GetBody().InnerText);
 
         var result = mgr.Undo(id);
         Assert.Equal(0, result.Position);
         Assert.Equal(1, result.Steps);
 
         // Document should be back to empty baseline
-        var body = mgr.Get(id).GetBody();
-        Assert.DoesNotContain("First", body.InnerText);
+        using var afterUndo = mgr.Get(id);
+        Assert.DoesNotContain("First", afterUndo.GetBody().InnerText);
     }
 
     [Fact]
@@ -58,9 +59,9 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("C"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("C"));
 
         var result = mgr.Undo(id, 2);
         Assert.Equal(1, result.Position);
@@ -92,8 +93,8 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
 
         var result = mgr.Undo(id, 100);
         Assert.Equal(0, result.Position);
@@ -109,7 +110,7 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Hello"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("Hello"));
         mgr.Undo(id);
 
         // After undo, document should not contain "Hello"
@@ -129,9 +130,9 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("C"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("C"));
 
         mgr.Undo(id, 3);
         Assert.DoesNotContain("A", mgr.Get(id).GetBody().InnerText);
@@ -152,7 +153,7 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
 
         // No undo happened, so redo should do nothing
         var result = mgr.Redo(id);
@@ -167,8 +168,8 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
         mgr.Undo(id, 2);
 
         var result = mgr.Redo(id, 100);
@@ -185,15 +186,15 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("C"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("C"));
 
         // Undo 2 steps (back to position 1, only A)
         mgr.Undo(id, 2);
 
         // Apply new patch — should discard B and C from history
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("D"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("D"));
 
         // Redo should now have nothing
         var redoResult = mgr.Redo(id);
@@ -216,9 +217,9 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("C"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("C"));
 
         mgr.JumpTo(id, 0);
         Assert.DoesNotContain("A", mgr.Get(id).GetBody().InnerText);
@@ -239,9 +240,9 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("C"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("C"));
 
         var result = mgr.JumpTo(id, 1);
         Assert.Equal(1, result.Position);
@@ -258,7 +259,7 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
 
         var result = mgr.JumpTo(id, 0);
         Assert.Equal(0, result.Position);
@@ -272,7 +273,7 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
 
         var result = mgr.JumpTo(id, 100);
         Assert.Equal(0, result.Steps);
@@ -286,7 +287,7 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
 
         var result = mgr.JumpTo(id, 1);
         Assert.Equal(0, result.Steps);
@@ -302,8 +303,8 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
 
         var history = mgr.GetHistory(id);
         Assert.Equal(3, history.TotalEntries); // baseline + 2 patches
@@ -327,8 +328,8 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
         mgr.Undo(id);
 
         var history = mgr.GetHistory(id);
@@ -350,7 +351,7 @@ public class UndoRedoTests : IDisposable
         var id = session.Id;
 
         for (int i = 0; i < 5; i++)
-            PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
+            PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch($"P{i}"));
 
         var page = mgr.GetHistory(id, offset: 2, limit: 2);
         Assert.Equal(6, page.TotalEntries);
@@ -368,16 +369,16 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
         mgr.Undo(id);
 
         // Compact should skip because redo entries exist
         mgr.Compact(id);
 
-        // WAL should still have entries (compact was skipped)
-        var walCount = _store.WalEntryCount(id);
-        Assert.True(walCount > 0);
+        // History should still have entries (compact was skipped)
+        var history = mgr.GetHistory(id);
+        Assert.True(history.TotalEntries > 1);
     }
 
     [Fact]
@@ -387,14 +388,15 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
         mgr.Undo(id);
 
         mgr.Compact(id, discardRedoHistory: true);
 
-        var walCount = _store.WalEntryCount(id);
-        Assert.Equal(0, walCount);
+        // After compact with discard, history should be minimal
+        var history = mgr.GetHistory(id);
+        Assert.Equal(1, history.TotalEntries); // Only baseline
     }
 
     [Fact]
@@ -406,14 +408,18 @@ public class UndoRedoTests : IDisposable
 
         // Apply enough patches to create a checkpoint (interval default = 10)
         for (int i = 0; i < 10; i++)
-            PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
+            PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch($"P{i}"));
 
-        // Checkpoint at position 10 should exist
-        Assert.True(File.Exists(_store.CheckpointPath(id, 10)));
+        // Verify checkpoint exists via history
+        var historyBefore = mgr.GetHistory(id);
+        var hasCheckpoint = historyBefore.Entries.Any(e => e.IsCheckpoint && e.Position == 10);
+        Assert.True(hasCheckpoint);
 
         mgr.Compact(id);
 
-        Assert.False(File.Exists(_store.CheckpointPath(id, 10)));
+        // After compact, only baseline checkpoint remains
+        var historyAfter = mgr.GetHistory(id);
+        Assert.Equal(1, historyAfter.TotalEntries);
     }
 
     // --- Checkpoint tests ---
@@ -427,9 +433,11 @@ public class UndoRedoTests : IDisposable
 
         // Default interval is 10
         for (int i = 0; i < 10; i++)
-            PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
+            PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch($"P{i}"));
 
-        Assert.True(File.Exists(_store.CheckpointPath(id, 10)));
+        var history = mgr.GetHistory(id);
+        var hasCheckpoint = history.Entries.Any(e => e.IsCheckpoint && e.Position == 10);
+        Assert.True(hasCheckpoint);
     }
 
     [Fact]
@@ -441,9 +449,11 @@ public class UndoRedoTests : IDisposable
 
         // Apply 15 patches (checkpoint at position 10)
         for (int i = 0; i < 15; i++)
-            PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch($"P{i}"));
+            PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch($"P{i}"));
 
-        Assert.True(File.Exists(_store.CheckpointPath(id, 10)));
+        // Verify checkpoint at 10
+        var history = mgr.GetHistory(id);
+        Assert.True(history.Entries.Any(e => e.IsCheckpoint && e.Position == 10));
 
         // Undo to position 12 — should use checkpoint at 10, replay 2 patches
         var result = mgr.Undo(id, 3);
@@ -460,65 +470,29 @@ public class UndoRedoTests : IDisposable
     [Fact]
     public void RestoreSessions_RespectsCursor()
     {
-        var mgr1 = CreateManager();
+        // Use explicit tenant so second manager can find the session
+        var tenantId = $"test-restore-cursor-{Guid.NewGuid():N}";
+        var mgr1 = TestHelpers.CreateSessionManager(tenantId);
         var session = mgr1.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("B"));
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("C"));
+        PatchTool.ApplyPatch(mgr1, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr1, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr1, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("C"));
 
         // Undo to position 1
         mgr1.Undo(id, 2);
 
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
+        // Simulate restart: create a new manager with same tenant (stateless, no RestoreSessions needed)
+        var mgr2 = TestHelpers.CreateSessionManager(tenantId);
 
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
-
-        // Document should be at position 1 (only "A")
-        var body = mgr2.Get(id).GetBody();
+        // Cursor position IS persisted in the gRPC index, so Get() respects it.
+        // After undo to position 1, only "A" should be present.
+        using var restored = mgr2.Get(id);
+        var body = restored.GetBody();
         Assert.Contains("A", body.InnerText);
         Assert.DoesNotContain("B", body.InnerText);
         Assert.DoesNotContain("C", body.InnerText);
-
-        store2.Dispose();
-    }
-
-    [Fact]
-    public void RestoreSessions_BackwardCompat_CursorZeroReplayAll()
-    {
-        // Simulate an old index without cursor position
-        var mgr1 = CreateManager();
-        var session = mgr1.Create();
-        var id = session.Id;
-
-        PatchTool.ApplyPatch(mgr1, null, id, AddParagraphPatch("Legacy"));
-
-        // Manually set cursor to -1 in index to simulate old format (no cursor tracking)
-        var index = _store.LoadIndex();
-        var entry = index.Sessions.Find(e => e.Id == id);
-        Assert.NotNull(entry);
-        entry!.CursorPosition = -1;
-        entry.CheckpointPositions.Clear();
-        _store.SaveIndex(index);
-
-        // Simulate restart
-        _store.Dispose();
-        var store2 = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        var mgr2 = new SessionManager(store2, NullLogger<SessionManager>.Instance);
-
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
-
-        // All WAL entries should be replayed (backward compat)
-        var body = mgr2.Get(id).GetBody();
-        Assert.Contains("Legacy", body.InnerText);
-
-        store2.Dispose();
     }
 
     // --- MCP Tool integration ---
@@ -530,9 +504,9 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("Test"));
 
-        var result = HistoryTools.DocumentUndo(mgr, id);
+        var result = HistoryTools.DocumentUndo(mgr, CreateSyncManager(), id);
         Assert.Contains("Undid 1 step", result);
         Assert.Contains("Position: 0", result);
     }
@@ -544,10 +518,10 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("Test"));
         mgr.Undo(id);
 
-        var result = HistoryTools.DocumentRedo(mgr, id);
+        var result = HistoryTools.DocumentRedo(mgr, CreateSyncManager(), id);
         Assert.Contains("Redid 1 step", result);
         Assert.Contains("Position: 1", result);
     }
@@ -559,7 +533,7 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("Test"));
 
         var result = HistoryTools.DocumentHistory(mgr, id);
         Assert.Contains("History for document", result);
@@ -575,10 +549,10 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("Test"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("More"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("Test"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("More"));
 
-        var result = HistoryTools.DocumentJumpTo(mgr, id, 0);
+        var result = HistoryTools.DocumentJumpTo(mgr, CreateSyncManager(), id, 0);
         Assert.Contains("Jumped to position 0", result);
     }
 
@@ -589,8 +563,8 @@ public class UndoRedoTests : IDisposable
         var session = mgr.Create();
         var id = session.Id;
 
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("A"));
-        PatchTool.ApplyPatch(mgr, null, id, AddParagraphPatch("B"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
         mgr.Undo(id);
 
         var result = DocumentTools.DocumentSnapshot(mgr, id, discard_redo: true);

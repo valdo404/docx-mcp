@@ -1,0 +1,51 @@
+[package]
+name = "docx-mcp-sse-proxy"
+description = "HTTP reverse proxy with D1 auth for docx-mcp multi-tenant architecture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Web framework
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+
+# HTTP client (D1 API + backend forwarding)
+reqwest = { workspace = true, features = ["stream"] }
+
+# Cache
+moka.workspace = true
+
+# Crypto
+sha2.workspace = true
+hex.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Time
+chrono.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# CLI
+clap.workspace = true
+
+[[bin]]
+name = "docx-mcp-sse-proxy"
+path = "src/main.rs"
+
+[lints]
+workspace = true

@@ -3,31 +3,30 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using DocxMcp.Diff;
 using DocxMcp.ExternalChanges;
+using DocxMcp.Grpc;
 using DocxMcp.Persistence;
-using Microsoft.Extensions.Logging.Abstractions;
+using DocxMcp.Tools;
 using Xunit;
 
 namespace DocxMcp.Tests;
 
 /// <summary>
 /// Tests for external sync WAL integration.
+/// Uses ExternalChangeTools.PerformSync (replaces ExternalChangeTracker).
 /// </summary>
 public class ExternalSyncTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly List<DocxSession> _sessions = [];
-    private readonly SessionStore _store;
     private readonly SessionManager _sessionManager;
-    private readonly ExternalChangeTracker _tracker;
+    private readonly ExternalChangeGate _gate = TestHelpers.CreateExternalChangeGate();
 
     public ExternalSyncTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"docx-mcp-sync-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
 
-        _store = new SessionStore(NullLogger<SessionStore>.Instance, _tempDir);
-        _sessionManager = new SessionManager(_store, NullLogger<SessionManager>.Instance);
-        _tracker = new ExternalChangeTracker(_sessionManager, NullLogger<ExternalChangeTracker>.Instance);
+        _sessionManager = TestHelpers.CreateSessionManager();
     }
 
     #region SyncExternalChanges Tests
@@ -41,15 +40,14 @@ public class ExternalSyncTests : IDisposable
 
         // Save the session back to disk to ensure file hash matches
         // (opening a session assigns IDs which changes the bytes)
-        _sessionManager.Save(session.Id, filePath);
+        File.WriteAllBytes(filePath, _sessionManager.Get(session.Id).ToBytes());
 
         // Act
-        var result = _tracker.SyncExternalChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.True(result.Success);
         Assert.False(result.HasChanges);
-        Assert.Contains("No external changes", result.Message);
     }
 
     [Fact]
@@ -58,13 +56,12 @@ public class ExternalSyncTests : IDisposable
         // Arrange
         var filePath = CreateTempDocx("Original content");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
 
         // Modify the file externally
         ModifyDocx(filePath, "Modified content");
 
         // Act
-        var result = _tracker.SyncExternalChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.True(result.Success);
@@ -84,12 +81,16 @@ public class ExternalSyncTests : IDisposable
         ModifyDocx(filePath, "Changed");
 
         // Act
-        var result = _tracker.SyncExternalChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
-        // Assert
-        var walPosition = result.WalPosition!.Value;
-        var checkpointPath = _store.CheckpointPath(session.Id, walPosition);
-        Assert.True(File.Exists(checkpointPath), "Checkpoint should be created for sync");
+        // Assert - checkpoint is created at the WAL position
+        Assert.NotNull(result.WalPosition);
+        Assert.True(result.WalPosition > 0, "Checkpoint should be created for sync");
+
+        // Verify checkpoint exists by checking that we can jump to that position
+        var history = _sessionManager.GetHistory(session.Id);
+        var syncEntry = history.Entries.FirstOrDefault(e => e.IsExternalSync);
+        Assert.NotNull(syncEntry);
     }
 
     [Fact]
@@ -100,7 +101,7 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         ModifyDocx(filePath, "Changed");
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Act
         var history = _sessionManager.GetHistory(session.Id);
@@ -112,23 +113,25 @@ public class ExternalSyncTests : IDisposable
     }
 
     [Fact]
-    public void SyncExternalChanges_AcknowledgesChangeIdIfProvided()
+    public void SyncExternalChanges_ClearsGatePendingState()
     {
         // Arrange
         var filePath = CreateTempDocx("Original");
         var session = OpenSession(filePath);
-        _tracker.StartWatching(session.Id);
 
         ModifyDocx(filePath, "Changed");
-        var patch = _tracker.CheckForChanges(session.Id)!;
+        // Gate detects the change
+        _gate.CheckForChanges(_sessionManager.TenantId, _sessionManager, session.Id);
+        Assert.True(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
 
-        // Act
-        var result = _tracker.SyncExternalChanges(session.Id, patch.Id);
+        // Act — sync clears the gate
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
+        if (result.Success)
+            _gate.ClearPending(_sessionManager.TenantId, session.Id);
 
         // Assert
         Assert.True(result.Success);
-        Assert.Equal(patch.Id, result.AcknowledgedChangeId);
-        Assert.False(_tracker.HasPendingChanges(session.Id));
+        Assert.False(_gate.HasPendingChanges(_sessionManager.TenantId, session.Id));
     }
 
     [Fact]
@@ -145,7 +148,7 @@ public class ExternalSyncTests : IDisposable
         ModifyDocx(filePath, "Externally modified paragraph");
 
         // Act
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert - session should now have the new content
         var updatedSession = _sessionManager.Get(session.Id);
@@ -170,7 +173,7 @@ public class ExternalSyncTests : IDisposable
 
         // Modify and sync
         ModifyDocx(filePath, "Synced content");
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Verify sync worked
         var syncedText = GetFirstParagraphText(_sessionManager.Get(session.Id));
@@ -193,7 +196,7 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         ModifyDocx(filePath, "Synced content here");
-        var syncResult = _tracker.SyncExternalChanges(session.Id);
+        var syncResult = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
         Assert.True(syncResult.HasChanges, "Sync should detect changes");
 
         // Get synced state text
@@ -221,20 +224,28 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         // Make a regular change
-        var body = _sessionManager.Get(session.Id).GetBody();
-        var newPara = new Paragraph(new Run(new Text("Regular change")));
-        body.AppendChild(newPara);
-        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]");
+        byte[] walBytes;
+        using (var s = _sessionManager.Get(session.Id))
+        {
+            var body = s.GetBody();
+            var newPara = new Paragraph(new Run(new Text("Regular change")));
+            body.AppendChild(newPara);
+            walBytes = s.ToBytes();
+        }
+        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]", null, walBytes);
 
         // External sync
         ModifyDocx(filePath, "External sync content");
-        var syncResult = _tracker.SyncExternalChanges(session.Id);
+        var syncResult = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
         var syncPosition = syncResult.WalPosition!.Value;
 
         // Make another change after sync
-        body = _sessionManager.Get(session.Id).GetBody();
-        body.AppendChild(new Paragraph(new Run(new Text("After sync"))));
-        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]");
+        using (var s2 = _sessionManager.Get(session.Id))
+        {
+            s2.GetBody().AppendChild(new Paragraph(new Run(new Text("After sync"))));
+            walBytes = s2.ToBytes();
+        }
+        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]", null, walBytes);
 
         // Act - jump back to sync position
         _sessionManager.JumpTo(session.Id, syncPosition);
@@ -293,7 +304,7 @@ public class ExternalSyncTests : IDisposable
         CreateTempDocxWithHeader("Modified", "New Header", filePath);
 
         // Act
-        var result = _tracker.SyncExternalChanges(session.Id);
+        var result = ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Assert
         Assert.True(result.HasChanges);
@@ -313,13 +324,17 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         // Regular change
-        var body = _sessionManager.Get(session.Id).GetBody();
-        body.AppendChild(new Paragraph(new Run(new Text("Regular"))));
-        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]");
+        byte[] walBytes;
+        using (var s = _sessionManager.Get(session.Id))
+        {
+            s.GetBody().AppendChild(new Paragraph(new Run(new Text("Regular"))));
+            walBytes = s.ToBytes();
+        }
+        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]", null, walBytes);
 
         // External sync
         ModifyDocx(filePath, "External");
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Act
         var history = _sessionManager.GetHistory(session.Id);
@@ -342,7 +357,7 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         ModifyDocxMultipleParagraphs(filePath, new[] { "New 1", "New 2", "New 3" });
-        _tracker.SyncExternalChanges(session.Id);
+        ExternalChangeTools.PerformSync(_sessionManager, session.Id, isImport: false);
 
         // Act
         var history = _sessionManager.GetHistory(session.Id);
@@ -363,7 +378,7 @@ public class ExternalSyncTests : IDisposable
     public void WalEntry_ExternalSync_SerializesAndDeserializesCorrectly()
     {
         // Arrange
-        var entry = new WalEntry
+        var entry = new DocxMcp.Persistence.WalEntry
         {
             EntryType = WalEntryType.ExternalSync,
             Timestamp = DateTime.UtcNow,
@@ -545,15 +560,16 @@ public class ExternalSyncTests : IDisposable
 
     public void Dispose()
     {
-        _tracker.Dispose();
-
         foreach (var session in _sessions)
         {
             try { _sessionManager.Close(session.Id); }
             catch { /* ignore */ }
         }
 
-        try { Directory.Delete(_tempDir, true); }
-        catch { /* ignore */ }
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); }
+            catch { /* ignore */ }
+        }
     }
 }

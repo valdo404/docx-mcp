@@ -4,6 +4,8 @@ import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import PatManager from '../components/PatManager.astro';
+import ConnectionsManager from '../components/ConnectionsManager.astro';
+import OAuthAppsManager from '../components/OAuthAppsManager.astro';
 import Doccy from '../components/Doccy.astro';
 import { useTranslations } from '../i18n/utils';
 
@@ -19,17 +21,14 @@ const tenant = Astro.locals.tenant!;
     <div class="container">
       <h1>{t('dashboard.welcome')}, {user.name}</h1>
 
-      <div class="cards">
-        <div class="card">
-          <h3>{t('dashboard.storage')}</h3>
-          <p class="coming-soon">{t('dashboard.comingSoon')}</p>
-        </div>
+      <ConnectionsManager lang="fr" />
 
-        <div class="card">
-          <h3>{t('dashboard.documents')}</h3>
-          <p class="coming-soon">{t('dashboard.comingSoon')}</p>
-        </div>
+      <div class="card">
+        <h3>{t('dashboard.documents')}</h3>
+        <p class="coming-soon">{t('dashboard.comingSoon')}</p>
       </div>
+
+      <OAuthAppsManager lang="fr" />
 
       <PatManager lang="fr" />
 
@@ -73,6 +72,7 @@ const tenant = Astro.locals.tenant!;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-l);
     padding: var(--spacing-xxl);
+    margin-bottom: var(--spacing-xxxl);
   }
 
   .card h3 {

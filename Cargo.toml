@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/docx-storage-core",
+    "crates/docx-storage-local",
+    "crates/docx-storage-cloudflare",
+    "crates/docx-storage-gdrive",
+    "crates/docx-mcp-sse-proxy",
+]
+
+[workspace.package]
+version = "1.6.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+# gRPC
+tonic = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+
+# Async runtime
+tokio = { version = "1", features = ["full", "signal"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+
+# Web framework (for proxy)
+axum = { version = "0.8", features = ["macros"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "http2"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# S3/R2
+aws-sdk-s3 = "1"
+aws-config = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async utilities
+async-trait = "0.1"
+futures = "0.3"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Cache (for proxy)
+moka = { version = "0.12", features = ["future"] }
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+
+# Testing
+tempfile = "3"
+
+[workspace.lints.rust]
+# Using "deny" instead of "forbid" to allow local #[allow(unsafe_code)]
+# for specific safe patterns like libc::kill(pid, 0) for process checking
+unsafe_code = "deny"
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "warn"

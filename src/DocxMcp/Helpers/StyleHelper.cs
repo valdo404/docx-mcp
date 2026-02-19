@@ -528,6 +528,8 @@ public static class StyleHelper
 
     public static List<Run> CollectRuns(OpenXmlElement element)
     {
+        if (element is Run r)
+            return [r];
         return element.Descendants<Run>().ToList();
     }
 

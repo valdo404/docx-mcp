@@ -1,0 +1,291 @@
+---
+interface Props {
+  lang: 'fr' | 'en';
+}
+
+const { lang } = Astro.props;
+
+const translations = {
+  fr: {
+    title: 'Applications autorisées',
+    description: 'Applications tierces ayant accès à votre compte via OAuth.',
+    empty: 'Aucune application autorisée',
+    revoke: 'Révoquer',
+    revokeConfirm: 'Êtes-vous sûr de vouloir révoquer l\'accès de cette application ?',
+    authorized: 'Autorisé le',
+    lastUsed: 'Dernière utilisation',
+    never: 'Jamais',
+    tokens: 'token(s) actif(s)',
+    scope: 'Permissions',
+  },
+  en: {
+    title: 'Authorized applications',
+    description: 'Third-party apps with access to your account via OAuth.',
+    empty: 'No authorized applications',
+    revoke: 'Revoke',
+    revokeConfirm: 'Are you sure you want to revoke access for this application?',
+    authorized: 'Authorized',
+    lastUsed: 'Last used',
+    never: 'Never',
+    tokens: 'active token(s)',
+    scope: 'Permissions',
+  },
+};
+
+const t = translations[lang];
+---
+
+<oauth-apps-manager data-lang={lang} data-translations={JSON.stringify(t)}>
+  <div class="apps-section">
+    <div class="apps-header">
+      <div>
+        <h2>{t.title}</h2>
+        <p class="apps-description">{t.description}</p>
+      </div>
+    </div>
+
+    <div class="apps-list" id="apps-list">
+      <div class="apps-loading">Loading...</div>
+    </div>
+  </div>
+</oauth-apps-manager>
+
+<script>
+  interface OAuthAppInfo {
+    clientId: string;
+    clientName: string;
+    scope: string;
+    createdAt: string;
+    lastUsedAt: string | null;
+    activeTokens: number;
+  }
+
+  interface Translations {
+    title: string;
+    description: string;
+    empty: string;
+    revoke: string;
+    revokeConfirm: string;
+    authorized: string;
+    lastUsed: string;
+    never: string;
+    tokens: string;
+    scope: string;
+  }
+
+  class OAuthAppsManager extends HTMLElement {
+    private t!: Translations;
+
+    async connectedCallback() {
+      this.t = JSON.parse(this.dataset.translations || '{}');
+      await this.loadApps();
+    }
+
+    async loadApps() {
+      try {
+        const res = await fetch('/api/oauth/apps');
+        if (!res.ok) throw new Error('Failed to load apps');
+        const data = await res.json();
+        this.renderApps(data.apps);
+      } catch (e) {
+        console.error('Failed to load OAuth apps:', e);
+        this.renderApps([]);
+      }
+    }
+
+    renderApps(apps: OAuthAppInfo[]) {
+      const list = this.querySelector('#apps-list');
+      if (!list) return;
+
+      if (apps.length === 0) {
+        list.innerHTML = `<div class="apps-empty">${this.t.empty}</div>`;
+        return;
+      }
+
+      const scopeLabels: Record<string, Record<string, string>> = {
+        'mcp:tools': {
+          fr: 'Outils MCP (lecture, édition, formatage de documents)',
+          en: 'MCP tools (read, edit, format documents)',
+        },
+      };
+      const lang = this.dataset.lang || 'fr';
+
+      list.innerHTML = apps
+        .map(
+          (app) => `
+        <div class="app-item" data-client-id="${app.clientId}">
+          <div class="app-info">
+            <div class="app-name">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18" class="app-icon">
+                <path fill-rule="evenodd" d="M4.25 2A2.25 2.25 0 002 4.25v2.5A2.25 2.25 0 004.25 9h2.5A2.25 2.25 0 009 6.75v-2.5A2.25 2.25 0 006.75 2h-2.5zm0 9A2.25 2.25 0 002 13.25v2.5A2.25 2.25 0 004.25 18h2.5A2.25 2.25 0 009 15.75v-2.5A2.25 2.25 0 006.75 11h-2.5zm9-9A2.25 2.25 0 0011 4.25v2.5A2.25 2.25 0 0013.25 9h2.5A2.25 2.25 0 0018 6.75v-2.5A2.25 2.25 0 0015.75 2h-2.5zm0 9A2.25 2.25 0 0011 13.25v2.5A2.25 2.25 0 0013.25 18h2.5A2.25 2.25 0 0018 15.75v-2.5A2.25 2.25 0 0015.75 11h-2.5z" clip-rule="evenodd" />
+              </svg>
+              <strong>${app.clientName}</strong>
+            </div>
+            <div class="app-meta">
+              <span>${this.t.authorized}: ${this.formatDate(app.createdAt)}</span>
+              <span>${this.t.lastUsed}: ${app.lastUsedAt ? this.formatDate(app.lastUsedAt) : this.t.never}</span>
+              <span>${app.activeTokens} ${this.t.tokens}</span>
+            </div>
+            <div class="app-scope">
+              ${this.t.scope}: ${app.scope
+                .split(' ')
+                .map((s: string) => scopeLabels[s]?.[lang] ?? s)
+                .join(', ')}
+            </div>
+          </div>
+          <button class="btn btn-danger btn-small revoke-app" data-client-id="${app.clientId}">${this.t.revoke}</button>
+        </div>
+      `,
+        )
+        .join('');
+
+      list.querySelectorAll('.revoke-app').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const clientId = (e.target as HTMLElement).dataset.clientId;
+          if (clientId && confirm(this.t.revokeConfirm)) {
+            await this.revokeApp(clientId);
+          }
+        });
+      });
+    }
+
+    formatDate(iso: string): string {
+      return new Date(iso).toLocaleDateString(
+        this.dataset.lang === 'fr' ? 'fr-FR' : 'en-US',
+        { year: 'numeric', month: 'short', day: 'numeric' },
+      );
+    }
+
+    async revokeApp(clientId: string) {
+      try {
+        const res = await fetch('/api/oauth/apps', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId }),
+        });
+        if (!res.ok) throw new Error('Failed to revoke app');
+        await this.loadApps();
+      } catch (e) {
+        console.error('Failed to revoke OAuth app:', e);
+      }
+    }
+  }
+
+  customElements.define('oauth-apps-manager', OAuthAppsManager);
+</script>
+
+<style>
+  .apps-section {
+    background: var(--bg-layer-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-l);
+    padding: var(--spacing-xxl);
+    margin-bottom: var(--spacing-xxxl);
+  }
+
+  .apps-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .apps-header h2 {
+    font-size: var(--font-size-500);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xs);
+  }
+
+  .apps-description {
+    font-size: var(--font-size-300);
+    color: var(--text-secondary);
+  }
+
+  .apps-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-m);
+  }
+
+  .apps-loading,
+  .apps-empty {
+    text-align: center;
+    padding: var(--spacing-xl);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-300);
+  }
+
+  .apps-list :global(.app-item) {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-l) var(--spacing-xl);
+    background: var(--bg-layer-3);
+    border-radius: var(--radius-m);
+    gap: var(--spacing-xl);
+  }
+
+  .apps-list :global(.app-info) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .apps-list :global(.app-name) {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-s);
+    margin-bottom: var(--spacing-s);
+  }
+
+  .apps-list :global(.app-icon) {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .apps-list :global(.app-meta) {
+    display: flex;
+    gap: var(--spacing-xl);
+    font-size: var(--font-size-200);
+    color: var(--text-tertiary);
+    margin-bottom: var(--spacing-xs);
+  }
+
+  .apps-list :global(.app-scope) {
+    font-size: var(--font-size-200);
+    color: var(--text-secondary);
+  }
+
+  .apps-list :global(.btn-danger) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-s) var(--spacing-m);
+    border-radius: var(--radius-s);
+    font-size: var(--font-size-200);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: transparent;
+    color: var(--text-error, #dc2626);
+    border: 1px solid var(--border-error, rgba(220, 38, 38, 0.3));
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .apps-list :global(.btn-danger:hover) {
+    background: rgba(220, 38, 38, 0.1);
+    border-color: var(--border-error, #dc2626);
+  }
+
+  @media (max-width: 640px) {
+    .apps-list :global(.app-item) {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .apps-list :global(.app-meta) {
+      flex-direction: column;
+      gap: var(--spacing-xs);
+    }
+  }
+</style>
