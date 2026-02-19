@@ -38,6 +38,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   // Public OAuth server endpoints — pass through without auth
   if (isOAuthServerPublicRoute) {
+    console.log('[Middleware] Public OAuth route, passing through:', url.pathname);
     return next();
   }
 

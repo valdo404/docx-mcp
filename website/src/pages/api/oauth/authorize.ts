@@ -13,6 +13,7 @@ export const prerender = false;
 // On POST (consent granted): generate code and redirect
 export const GET: APIRoute = async (context) => {
   const url = new URL(context.request.url);
+  console.log('[OAuth Authorize] GET', url.pathname + url.search);
   const { env } = await import('cloudflare:workers');
   const db = (env as unknown as Env).DB;
 
@@ -89,6 +90,8 @@ export const GET: APIRoute = async (context) => {
     return context.redirect(`${loginPath}?return_to=${returnTo}`);
   }
 
+  console.log('[OAuth Authorize] User logged in:', context.locals.user?.name, 'tenant:', context.locals.tenant?.id);
+
   // User is logged in — redirect to consent page with all params
   const consentParams = new URLSearchParams({
     client_id: clientId,
@@ -106,11 +109,13 @@ export const GET: APIRoute = async (context) => {
 
 // POST /api/oauth/authorize — Consent granted, generate code and redirect
 export const POST: APIRoute = async (context) => {
+  console.log('[OAuth Authorize] POST /api/oauth/authorize');
   const { env } = await import('cloudflare:workers');
   const db = (env as unknown as Env).DB;
 
   // Must be logged in
   if (!context.locals.user || !context.locals.tenant) {
+    console.log('[OAuth Authorize] POST — no session, returning 401');
     return new Response(
       JSON.stringify({ error: 'unauthorized' }),
       { status: 401, headers: { 'Content-Type': 'application/json' } },
@@ -161,6 +166,8 @@ export const POST: APIRoute = async (context) => {
     );
   }
 
+  console.log('[OAuth Authorize] POST consent approved for client:', client_id, 'redirect_uri:', redirect_uri);
+
   // Generate authorization code
   const code = await createAuthorizationCode(
     db,
@@ -178,5 +185,6 @@ export const POST: APIRoute = async (context) => {
     ...(state ? { state } : {}),
   });
 
+  console.log('[OAuth Authorize] Redirecting to:', redirect_uri, 'with code:', code.substring(0, 12) + '...');
   return context.redirect(`${redirect_uri}?${params.toString()}`);
 };

@@ -6,6 +6,8 @@ export const prerender = false;
 // POST /api/oauth/token — Token endpoint
 // No session auth required (clients send client_id in body)
 export const POST: APIRoute = async (context) => {
+  console.log('[OAuth Token] POST /api/oauth/token');
+  console.log('[OAuth Token] Origin:', context.request.headers.get('origin'), 'Content-Type:', context.request.headers.get('content-type'));
   const { env } = await import('cloudflare:workers');
   const db = (env as unknown as Env).DB;
 
@@ -33,6 +35,7 @@ export const POST: APIRoute = async (context) => {
   try {
     if (grantType === 'authorization_code') {
       const { code, client_id, redirect_uri, code_verifier } = params;
+      console.log('[OAuth Token] authorization_code grant — client_id:', client_id, 'redirect_uri:', redirect_uri, 'code:', code?.substring(0, 12) + '...', 'code_verifier present:', !!code_verifier);
 
       if (!code || !client_id || !redirect_uri || !code_verifier) {
         return new Response(
@@ -52,6 +55,7 @@ export const POST: APIRoute = async (context) => {
 
       const result = await exchangeCode(db, code, client_id, redirect_uri, code_verifier);
 
+      console.log('[OAuth Token] Token issued successfully, access_token prefix:', result.access_token?.substring(0, 12));
       return new Response(JSON.stringify(result), {
         status: 200,
         headers: {
@@ -106,6 +110,7 @@ export const POST: APIRoute = async (context) => {
     );
   } catch (e) {
     if (e instanceof OAuthError) {
+      console.error('[OAuth Token] OAuthError:', e.code, e.message);
       return new Response(JSON.stringify(e.toJSON()), {
         status: 400,
         headers: {

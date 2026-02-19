@@ -10,6 +10,7 @@ export const prerender = false;
 // POST /api/oauth/register — Dynamic Client Registration (RFC 7591)
 // No auth required
 export const POST: APIRoute = async (context) => {
+  console.log('[OAuth DCR] POST /api/oauth/register');
   let body: RegisterClientParams;
   try {
     body = await context.request.json();
@@ -104,10 +105,13 @@ export const POST: APIRoute = async (context) => {
     );
   }
 
+  console.log('[OAuth DCR] Registering client:', body.client_name, 'redirect_uris:', body.redirect_uris);
+
   try {
     const { env } = await import('cloudflare:workers');
     const client = await registerClient((env as unknown as Env).DB, body);
 
+    console.log('[OAuth DCR] Client registered:', client.id);
     return new Response(
       JSON.stringify({
         client_id: client.id,
