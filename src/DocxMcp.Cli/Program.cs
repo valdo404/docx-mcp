@@ -161,12 +161,7 @@ try
         "comment-delete" => CmdCommentDelete(args),
 
         // Export commands
-        "export-html" => ExportTools.ExportHtml(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
-            Require(args, 2, "output_path")),
-        "export-markdown" => ExportTools.ExportMarkdown(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
-            Require(args, 2, "output_path")),
-        "export-pdf" => ExportTools.ExportPdf(tenant, ResolveDocId(Require(args, 1, "doc_id_or_path")),
-            Require(args, 2, "output_path")).GetAwaiter().GetResult(),
+        "export" => CmdExport(args),
 
         // Read commands
         "read-section" => CmdReadSection(args),
@@ -339,6 +334,27 @@ string CmdCommentDelete(string[] a)
     var commentId = ParseIntOpt(OptNamed(a, "--id"));
     var author = OptNamed(a, "--author");
     return CommentTools.CommentDelete(tenant, syncManager, docId, commentId, author);
+}
+
+string CmdExport(string[] a)
+{
+    var docId = ResolveDocId(Require(a, 1, "doc_id_or_path"));
+    var format = Require(a, 2, "format");
+    var outputPath = a.Length > 3 ? a[3] : null;
+
+    var content = ExportTools.Export(tenant, docId, format).GetAwaiter().GetResult();
+
+    // If an output path is given, write to file (for CLI convenience)
+    if (outputPath is not null)
+    {
+        if (format is "pdf" or "docx")
+            File.WriteAllBytes(outputPath, Convert.FromBase64String(content));
+        else
+            File.WriteAllText(outputPath, content);
+        return $"Exported to '{outputPath}'.";
+    }
+
+    return content;
 }
 
 string CmdReadSection(string[] a)
@@ -569,22 +585,6 @@ string CmdInspect(string[] a)
     return sb.ToString();
 }
 
-string FindOrCreateSession(string filePath)
-{
-    // Check if session already exists for this file
-    foreach (var (id, sessPath) in sessions.List())
-    {
-        if (sessPath is not null && Path.GetFullPath(sessPath) == Path.GetFullPath(filePath))
-        {
-            return id;
-        }
-    }
-
-    var session = sessions.Open(filePath);
-    Console.WriteLine($"[SESSION] Created session {session.Id} for {Path.GetFileName(filePath)}");
-    return session.Id;
-}
-
 // --- Argument helpers ---
 
 static string Require(string[] a, int idx, string name)
@@ -707,9 +707,7 @@ static void PrintUsage()
       track-changes-enable <doc_id> <true|false> Enable/disable Track Changes
 
     Export commands:
-      export-html <doc_id> <output_path>
-      export-markdown <doc_id> <output_path>
-      export-pdf <doc_id> <output_path>
+      export <doc_id> <format> [output_path]   (format: html, markdown, pdf, docx)
 
     Diff commands:
       diff <doc_id> [file_path] [--threshold 0.6] [--format text|json|patch]
