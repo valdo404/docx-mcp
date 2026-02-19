@@ -9,6 +9,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-${(%):-%x}}")" && pwd)"
 STACK="${PULUMI_STACK:-prod}"
 
+# Ensure Koyeb plugin is installed (hosted on GitHub, not Pulumi CDN)
+KOYEB_VERSION="0.1.11"
+if ! pulumi plugin ls 2>/dev/null | grep -q "koyeb.*${KOYEB_VERSION}"; then
+  echo "Installing Koyeb Pulumi plugin v${KOYEB_VERSION}..."
+  pulumi plugin install resource koyeb "v${KOYEB_VERSION}" \
+    --server "https://github.com/koyeb/pulumi-koyeb/releases/download/v${KOYEB_VERSION}/"
+fi
+
 _out() {
   pulumi stack output "$1" --stack "$STACK" --cwd "$SCRIPT_DIR" --show-secrets 2>/dev/null
 }
@@ -33,3 +41,9 @@ echo "  D1_DATABASE_ID=$D1_DATABASE_ID"
 echo "  CLOUDFLARE_API_TOKEN=(set)"
 echo "  OAUTH_GOOGLE_CLIENT_ID=${OAUTH_GOOGLE_CLIENT_ID:-(not set)}"
 echo "  OAUTH_GOOGLE_CLIENT_SECRET=${OAUTH_GOOGLE_CLIENT_SECRET:+****(set)}"
+
+# Koyeb
+export KOYEB_TOKEN="$(pulumi config get koyebToken --stack "$STACK" --cwd "$SCRIPT_DIR" 2>/dev/null)"
+export KOYEB_APP_ID="$(_out koyeb_app_id 2>/dev/null)"
+echo "  KOYEB_TOKEN=${KOYEB_TOKEN:+(set)}"
+echo "  KOYEB_APP_ID=${KOYEB_APP_ID:-(not set)}"

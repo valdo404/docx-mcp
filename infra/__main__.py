@@ -158,6 +158,187 @@ pages_project = cloudflare.PagesProject(
 )
 
 # =============================================================================
+# Koyeb — MCP backend services (storage + gdrive + mcp-http + proxy)
+# Plugin hosted on GitHub (not Pulumi CDN). Install via:
+#   pulumi plugin install resource koyeb v0.1.11 \
+#     --server https://github.com/koyeb/pulumi-koyeb/releases/download/v0.1.11/
+# Or: source infra/env-setup.sh (auto-installs if missing)
+# Auth: KOYEB_TOKEN env var only (no Pulumi config key — provider has no schema).
+#   pulumi config set --secret koyebToken "<token>"  # stored under app namespace
+#   source infra/env-setup.sh  # exports as KOYEB_TOKEN
+# =============================================================================
+
+import pulumi_koyeb as koyeb
+
+KOYEB_REGION = "fra"
+KOYEB_INSTANCE = "eco-small"
+GIT_REPO = "github.com/valdo404/docx-mcp"
+GIT_BRANCH = "feat/sse-grpc-multi-tenant-20"
+
+
+def _koyeb_service(
+    name: str,
+    dockerfile: str,
+    port: int,
+    envs: list,
+    *,
+    public: bool = False,
+    http_health_path: str | None = None,
+) -> koyeb.ServiceDefinitionArgs:
+    """Build a ServiceDefinitionArgs for a Koyeb service."""
+    routes = (
+        [koyeb.ServiceDefinitionRouteArgs(path="/", port=port)]
+        if public
+        else None
+    )
+    if http_health_path:
+        health_checks = [
+            koyeb.ServiceDefinitionHealthCheckArgs(
+                grace_period=10,
+                interval=30,
+                timeout=5,
+                restart_limit=3,
+                http=koyeb.ServiceDefinitionHealthCheckHttpArgs(
+                    port=port, path=http_health_path,
+                ),
+            )
+        ]
+    else:
+        health_checks = [
+            koyeb.ServiceDefinitionHealthCheckArgs(
+                grace_period=10,
+                interval=30,
+                timeout=5,
+                restart_limit=3,
+                tcp=koyeb.ServiceDefinitionHealthCheckTcpArgs(port=port),
+            )
+        ]
+    return koyeb.ServiceDefinitionArgs(
+        name=name,
+        type="WEB",
+        regions=[KOYEB_REGION],
+        instance_types=[koyeb.ServiceDefinitionInstanceTypeArgs(type=KOYEB_INSTANCE)],
+        scalings=[koyeb.ServiceDefinitionScalingArgs(min=1, max=1)],
+        git=koyeb.ServiceDefinitionGitArgs(
+            repository=GIT_REPO,
+            branch=GIT_BRANCH,
+            dockerfile=koyeb.ServiceDefinitionGitDockerfileArgs(
+                dockerfile=dockerfile,
+            ),
+        ),
+        ports=[koyeb.ServiceDefinitionPortArgs(port=port, protocol="http")],
+        routes=routes,
+        envs=envs,
+        health_checks=health_checks,
+    )
+
+
+# --- App ---
+koyeb_app = koyeb.App("docx-mcp", name="docx-mcp")
+
+# --- Service 1: storage (gRPC, mesh-only) ---
+cloudflare_api_token = pulumi.Config("cloudflare").require_secret("apiToken")
+
+koyeb_storage = koyeb.Service(
+    "koyeb-storage",
+    app_name=koyeb_app.name,
+    definition=_koyeb_service(
+        name="storage",
+        dockerfile="Dockerfile.storage-cloudflare",
+        port=50051,
+        envs=[
+            koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info,docx_storage_cloudflare=debug"),
+            koyeb.ServiceDefinitionEnvArgs(key="GRPC_HOST", value="0.0.0.0"),
+            koyeb.ServiceDefinitionEnvArgs(key="GRPC_PORT", value="50051"),
+            koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_ACCOUNT_ID", value=account_id),
+            koyeb.ServiceDefinitionEnvArgs(key="R2_BUCKET_NAME", value=storage_bucket.name),
+            koyeb.ServiceDefinitionEnvArgs(key="R2_ACCESS_KEY_ID", value=r2_access_key_id),
+            koyeb.ServiceDefinitionEnvArgs(key="R2_SECRET_ACCESS_KEY", value=r2_secret_access_key),
+        ],
+    ),
+)
+
+# --- Service 2: gdrive (gRPC, mesh-only) ---
+koyeb_gdrive = koyeb.Service(
+    "koyeb-gdrive",
+    app_name=koyeb_app.name,
+    definition=_koyeb_service(
+        name="gdrive",
+        dockerfile="Dockerfile.gdrive",
+        port=50052,
+        envs=[
+            koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info"),
+            koyeb.ServiceDefinitionEnvArgs(key="GRPC_HOST", value="0.0.0.0"),
+            koyeb.ServiceDefinitionEnvArgs(key="GRPC_PORT", value="50052"),
+            koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_ACCOUNT_ID", value=account_id),
+            koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_API_TOKEN", value=cloudflare_api_token),
+            koyeb.ServiceDefinitionEnvArgs(key="D1_DATABASE_ID", value=auth_db.id),
+            koyeb.ServiceDefinitionEnvArgs(key="GOOGLE_CLIENT_ID", value=oauth_google_client_id),
+            koyeb.ServiceDefinitionEnvArgs(key="GOOGLE_CLIENT_SECRET", value=oauth_google_client_secret),
+            koyeb.ServiceDefinitionEnvArgs(key="WATCH_POLL_INTERVAL", value="60"),
+        ],
+    ),
+)
+
+# --- Service 3: mcp-http (HTTP, mesh-only) ---
+koyeb_mcp = koyeb.Service(
+    "koyeb-mcp-http",
+    app_name=koyeb_app.name,
+    definition=_koyeb_service(
+        name="mcp-http",
+        dockerfile="Dockerfile",
+        port=3000,
+        http_health_path="/health",
+        envs=[
+            koyeb.ServiceDefinitionEnvArgs(key="MCP_TRANSPORT", value="http"),
+            koyeb.ServiceDefinitionEnvArgs(key="ASPNETCORE_URLS", value="http://+:3000"),
+            koyeb.ServiceDefinitionEnvArgs(key="STORAGE_GRPC_URL", value="http://storage:50051"),
+            koyeb.ServiceDefinitionEnvArgs(key="SYNC_GRPC_URL", value="http://gdrive:50052"),
+        ],
+    ),
+)
+
+# --- Service 4: proxy (HTTP, PUBLIC) ---
+koyeb_proxy = koyeb.Service(
+    "koyeb-proxy",
+    app_name=koyeb_app.name,
+    definition=_koyeb_service(
+        name="proxy",
+        dockerfile="Dockerfile.proxy",
+        port=8080,
+        public=True,
+        http_health_path="/health",
+        envs=[
+            koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info,docx_mcp_sse_proxy=debug"),
+            koyeb.ServiceDefinitionEnvArgs(key="MCP_BACKEND_URL", value="http://mcp-http:3000"),
+            koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_ACCOUNT_ID", value=account_id),
+            koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_API_TOKEN", value=cloudflare_api_token),
+            koyeb.ServiceDefinitionEnvArgs(key="D1_DATABASE_ID", value=auth_db.id),
+        ],
+    ),
+)
+
+# --- Custom Domain: mcp.docx.lapoule.dev ---
+koyeb_domain = koyeb.Domain("docx-mcp-domain",
+    name="mcp.docx.lapoule.dev",
+    app_name=koyeb_app.name,
+)
+
+lapoule_zone = cloudflare.get_zone(filter=cloudflare.GetZoneFilterArgs(
+    name="lapoule.dev",
+    match="all",
+))
+
+cloudflare.DnsRecord("mcp-cname",
+    zone_id=lapoule_zone.zone_id,
+    name="mcp.docx",
+    type="CNAME",
+    content=koyeb_domain.intended_cname,
+    ttl=1,  # 1 = automatic
+    proxied=False,  # DNS-only — Koyeb needs direct access for TLS provisioning
+)
+
+# =============================================================================
 # Outputs
 # =============================================================================
 
@@ -173,3 +354,5 @@ pulumi.export("auth_d1_database_id", auth_db.id)
 pulumi.export("session_kv_namespace_id", session_kv.id)
 pulumi.export("oauth_google_client_id", pulumi.Output.secret(oauth_google_client_id))
 pulumi.export("oauth_google_client_secret", pulumi.Output.secret(oauth_google_client_secret))
+pulumi.export("koyeb_app_id", koyeb_app.id)
+pulumi.export("koyeb_mcp_domain", koyeb_domain.name)

@@ -7,4 +7,6 @@ config:
     secure: v1:raISJAbWen+CDHu2:HBGYHiNELaQlHdbb5K/6aoF6SFmn3RMMYD8Be8uFJOoxYwbzE44SEBh5F9EnNHwvZPTLieePHmALZuo2RZdZKxSZT2MPDVjswb0yLvyTtAZQtrSum/Tl9g==
   docx-mcp-infra:oauthGoogleClientSecret:
     secure: v1:AdxEHoLR7izIRfgL:A2+4U4BpwqBOIU8CjKiC4a6kohiYG94paviCDVv8FC1m6GN9sm8VNsm86jVfE/OHysD1
+  docx-mcp-infra:koyebToken:
+    secure: v1:ca3dUjXmIPmfDe31:KXWDX4kWyxHxa97IiFsHoEdl0k+NZHUikd5w3diP9TLwj7BbSsN80SssDWgh29kM3nBzTNtyN5aUFbhK5lIjBNmZeyflAlo5CBaz6xcW978=
 encryptionsalt: v1:4RqIT+yhimY=:v1:T/0KFvwDzDKZZjPT:RQTr9KQMSSjUI08lQHZV4W98CA93mw==
