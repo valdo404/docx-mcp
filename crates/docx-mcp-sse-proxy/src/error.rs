@@ -19,6 +19,9 @@ pub enum ProxyError {
     #[error("Backend error: {0}")]
     BackendError(String),
 
+    #[error("Backend temporarily unavailable after {1} retries: {0}")]
+    BackendUnavailable(String, u32),
+
     #[error("Invalid JSON: {0}")]
     JsonError(#[from] serde_json::Error),
 
@@ -55,6 +58,9 @@ impl IntoResponse for ProxyError {
             ProxyError::InvalidToken => (StatusCode::UNAUTHORIZED, "INVALID_TOKEN"),
             ProxyError::D1Error(_) => (StatusCode::BAD_GATEWAY, "D1_ERROR"),
             ProxyError::BackendError(_) => (StatusCode::BAD_GATEWAY, "BACKEND_ERROR"),
+            ProxyError::BackendUnavailable(_, _) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "BACKEND_UNAVAILABLE")
+            }
             ProxyError::SessionRecoveryFailed(_) => {
                 (StatusCode::BAD_GATEWAY, "SESSION_RECOVERY_FAILED")
             }

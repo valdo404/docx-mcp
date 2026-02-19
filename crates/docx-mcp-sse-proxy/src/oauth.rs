@@ -1,12 +1,11 @@
 //! OAuth access token validation via Cloudflare D1 API.
 //!
 //! Validates opaque OAuth access tokens (oat_...) against the D1 database
-//! using the Cloudflare REST API. Same pattern as PAT validation with moka cache.
+//! using the Cloudflare REST API. Always queries D1 directly (no cache) so that
+//! token revocation takes effect immediately.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use moka::future::Cache;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,13 +22,6 @@ pub struct OAuthValidationResult {
     pub tenant_id: String,
     #[allow(dead_code)]
     pub scope: String,
-}
-
-/// Cached validation result (either success or known-invalid).
-#[derive(Debug, Clone)]
-enum CachedResult {
-    Valid(OAuthValidationResult),
-    Invalid,
 }
 
 /// D1 query request body.
@@ -68,14 +60,12 @@ struct OAuthTokenRecord {
     expires_at: String,
 }
 
-/// OAuth token validator with D1 backend and caching.
+/// OAuth token validator with D1 backend.
 pub struct OAuthValidator {
     client: Client,
     account_id: String,
     api_token: String,
     database_id: String,
-    cache: Cache<String, CachedResult>,
-    negative_cache_ttl: Duration,
 }
 
 impl OAuthValidator {
@@ -84,21 +74,14 @@ impl OAuthValidator {
         account_id: String,
         api_token: String,
         database_id: String,
-        cache_ttl_secs: u64,
-        negative_cache_ttl_secs: u64,
+        _cache_ttl_secs: u64,
+        _negative_cache_ttl_secs: u64,
     ) -> Self {
-        let cache = Cache::builder()
-            .time_to_live(Duration::from_secs(cache_ttl_secs))
-            .max_capacity(10_000)
-            .build();
-
         Self {
             client: Client::new(),
             account_id,
             api_token,
             database_id,
-            cache,
-            negative_cache_ttl: Duration::from_secs(negative_cache_ttl_secs),
         }
     }
 
@@ -115,44 +98,14 @@ impl OAuthValidator {
 
         let token_hash = self.hash_token(token);
 
-        // Check cache first
-        if let Some(cached) = self.cache.get(&token_hash).await {
-            match cached {
-                CachedResult::Valid(result) => {
-                    debug!("OAuth validation cache hit (valid) for {}", &token[..12]);
-                    return Ok(result);
-                }
-                CachedResult::Invalid => {
-                    debug!("OAuth validation cache hit (invalid) for {}", &token[..12]);
-                    return Err(ProxyError::InvalidToken);
-                }
-            }
-        }
-
-        // Query D1
+        // Always validate against D1 (no cache for OAuth tokens — revocation must be immediate)
         debug!(
-            "OAuth validation cache miss, querying D1 for {}",
-            &token[..12]
+            "Validating OAuth token against D1 for {}",
+            &token[..12.min(token.len())]
         );
         match self.query_d1(&token_hash).await {
-            Ok(Some(result)) => {
-                self.cache
-                    .insert(token_hash.clone(), CachedResult::Valid(result.clone()))
-                    .await;
-                Ok(result)
-            }
-            Ok(None) => {
-                let cache_clone = self.cache.clone();
-                let token_hash_clone = token_hash.clone();
-                let ttl = self.negative_cache_ttl;
-                tokio::spawn(async move {
-                    cache_clone
-                        .insert(token_hash_clone, CachedResult::Invalid)
-                        .await;
-                    tokio::time::sleep(ttl).await;
-                });
-                Err(ProxyError::InvalidToken)
-            }
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => Err(ProxyError::InvalidToken),
             Err(e) => {
                 warn!("D1 query failed for OAuth token: {}", e);
                 Err(e)

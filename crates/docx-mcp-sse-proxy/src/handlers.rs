@@ -8,6 +8,7 @@
 //! the proxy transparently re-initializes the MCP session and retries the request.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -47,8 +48,17 @@ pub struct HealthResponse {
 
 /// GET /health - Health check endpoint.
 pub async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
+    let backend_ok = state
+        .http_client
+        .get(format!("{}/health", state.backend_url))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+
     Json(HealthResponse {
-        healthy: true,
+        healthy: backend_ok,
         version: env!("CARGO_PKG_VERSION"),
         auth_enabled: state.validator.is_some(),
     })
@@ -95,6 +105,11 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
+/// Maximum number of retry attempts for transient backend errors.
+const MAX_RETRIES: u32 = 3;
+/// Initial backoff delay in milliseconds.
+const INITIAL_BACKOFF_MS: u64 = 200;
+
 /// Headers to forward from the client to the backend.
 const FORWARD_HEADERS: &[header::HeaderName] = &[header::CONTENT_TYPE, header::ACCEPT];
 
@@ -125,6 +140,105 @@ struct BackendResponse {
     body_bytes: Option<Bytes>,
     /// For SSE responses, we keep the raw reqwest response to stream from.
     raw_response: Option<reqwest::Response>,
+}
+
+/// Check if an HTTP status code is retryable (transient server error).
+fn is_retryable_status(status: axum::http::StatusCode) -> bool {
+    matches!(status.as_u16(), 502 | 503)
+}
+
+/// Check if a proxy error is retryable (connection errors).
+fn is_retryable_error(err: &ProxyError) -> bool {
+    match err {
+        ProxyError::BackendError(msg) => {
+            // Network-level failures: reqwest wraps the root cause in
+            // "error sending request for url (...)" which may NOT contain
+            // the inner "Connection refused" text depending on the platform.
+            msg.contains("connection refused")
+                || msg.contains("Connection refused")
+                || msg.contains("connect error")
+                || msg.contains("dns error")
+                || msg.contains("timed out")
+                || msg.contains("error sending request")
+                || msg.contains("connection reset")
+                || msg.contains("broken pipe")
+        }
+        _ => false,
+    }
+}
+
+/// Send a request to the backend with retry for transient errors.
+#[allow(clippy::too_many_arguments)]
+async fn send_to_backend_with_retry(
+    http_client: &HttpClient,
+    backend_url: &str,
+    method: &Method,
+    path: &str,
+    query: &str,
+    client_headers: &HeaderMap,
+    tenant_id: &str,
+    session_id_override: Option<&str>,
+    body: Bytes,
+) -> Result<BackendResponse, ProxyError> {
+    let mut last_error = None;
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            let delay = INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1);
+            warn!(
+                "Retrying backend request ({}/{}) after {}ms",
+                attempt, MAX_RETRIES, delay
+            );
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+        match send_to_backend(
+            http_client,
+            backend_url,
+            method,
+            path,
+            query,
+            client_headers,
+            tenant_id,
+            session_id_override,
+            body.clone(),
+        )
+        .await
+        {
+            Ok(resp) if is_retryable_status(resp.status) && attempt < MAX_RETRIES => {
+                warn!(
+                    "Backend returned {}, will retry ({}/{})",
+                    resp.status,
+                    attempt + 1,
+                    MAX_RETRIES
+                );
+                last_error = Some(ProxyError::BackendUnavailable(
+                    format!("Backend returned {}", resp.status),
+                    attempt + 1,
+                ));
+            }
+            Ok(resp) => return Ok(resp),
+            Err(e) if is_retryable_error(&e) && attempt < MAX_RETRIES => {
+                warn!(
+                    "Backend error: {}, will retry ({}/{})",
+                    e,
+                    attempt + 1,
+                    MAX_RETRIES
+                );
+                last_error = Some(e);
+            }
+            // Last attempt failed with retryable error → wrap as BackendUnavailable (503)
+            Err(e) if is_retryable_error(&e) => {
+                return Err(ProxyError::BackendUnavailable(
+                    e.to_string(),
+                    MAX_RETRIES,
+                ));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_error.map_or_else(
+        || ProxyError::BackendUnavailable("All retries exhausted".into(), MAX_RETRIES),
+        |e| ProxyError::BackendUnavailable(e.to_string(), MAX_RETRIES),
+    ))
 }
 
 /// Send a request to the backend, returning status + headers + body.
@@ -469,7 +583,7 @@ pub async fn mcp_forward_handler(
     };
 
     // --- 4. Forward to backend ---
-    let backend_resp = send_to_backend(
+    let backend_resp = send_to_backend_with_retry(
         &state.http_client,
         &state.backend_url,
         &method,
