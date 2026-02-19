@@ -186,12 +186,32 @@ def _koyeb_service(
     instance_type: str = "nano",
     scale_to_zero: bool = False,
 ) -> koyeb.ServiceDefinitionArgs:
-    """Build a ServiceDefinitionArgs for a Koyeb service."""
-    routes = (
-        [koyeb.ServiceDefinitionRouteArgs(path="/", port=port)]
-        if public
-        else None
-    )
+    """Build a ServiceDefinitionArgs for a Koyeb service.
+
+    Public services: protocol=http, route "/", scale via requests_per_second.
+    Internal (mesh-only) services: protocol=tcp, no routes, min=1 (always on).
+    Koyeb requires at least one route for scale-to-zero, which is incompatible
+    with tcp — so internal services cannot scale to zero.
+    """
+    if public:
+        port_protocol = "http"
+        routes = [koyeb.ServiceDefinitionRouteArgs(path="/", port=port)]
+        min_instances = 0 if scale_to_zero else 1
+        scaling_targets = [koyeb.ServiceDefinitionScalingTargetArgs(
+            requests_per_seconds=[
+                koyeb.ServiceDefinitionScalingTargetRequestsPerSecondArgs(value=100),
+            ],
+        )]
+    else:
+        port_protocol = "tcp"
+        routes = []
+        min_instances = 1  # tcp services can't scale to zero (no route to intercept)
+        scaling_targets = [koyeb.ServiceDefinitionScalingTargetArgs(
+            concurrent_requests=[
+                koyeb.ServiceDefinitionScalingTargetConcurrentRequestArgs(value=10),
+            ],
+        )]
+    # Health checks: HTTP for services with http_health_path, TCP otherwise
     if http_health_path:
         health_checks = [
             koyeb.ServiceDefinitionHealthCheckArgs(
@@ -220,13 +240,9 @@ def _koyeb_service(
         regions=[KOYEB_REGION],
         instance_types=[koyeb.ServiceDefinitionInstanceTypeArgs(type=instance_type)],
         scalings=[koyeb.ServiceDefinitionScalingArgs(
-            min=0 if scale_to_zero else 1,
+            min=min_instances,
             max=2,
-            targets=[koyeb.ServiceDefinitionScalingTargetArgs(
-                requests_per_seconds=[
-                    koyeb.ServiceDefinitionScalingTargetRequestsPerSecondArgs(value=100),
-                ],
-            )],
+            targets=scaling_targets,
         )],
         git=koyeb.ServiceDefinitionGitArgs(
             repository=GIT_REPO,
@@ -235,7 +251,7 @@ def _koyeb_service(
                 dockerfile=dockerfile,
             ),
         ),
-        ports=[koyeb.ServiceDefinitionPortArgs(port=port, protocol="http")],
+        ports=[koyeb.ServiceDefinitionPortArgs(port=port, protocol=port_protocol)],
         routes=routes,
         envs=envs,
         health_checks=health_checks,

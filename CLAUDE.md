@@ -166,12 +166,14 @@ Google Drive sync uses per-tenant OAuth tokens stored in D1 (`oauth_connection` 
 
 Four services on Koyeb app `docx-mcp`, managed via Pulumi (`infra/__main__.py`):
 
-| Service | Dockerfile | Port | Public | Instance | scale-to-zero |
-|---------|-----------|------|--------|----------|---------------|
-| `storage` | `Dockerfile.storage-cloudflare` | 50051 | No (mesh) | nano | Yes (via CLI) |
-| `gdrive` | `Dockerfile.gdrive` | 50052 | No (mesh) | nano | Yes (via CLI) |
-| `mcp-http` | `Dockerfile` | 3000 | No (mesh) | small | No |
-| `proxy` | `Dockerfile.proxy` | 8080 | Yes | nano | No |
+| Service | Dockerfile | Port | Protocol | Route | Instance |
+|---------|-----------|------|----------|-------|----------|
+| `storage` | `Dockerfile.storage-cloudflare` | 50051 | tcp (mesh-only) | _(none)_ | nano |
+| `gdrive` | `Dockerfile.gdrive` | 50052 | tcp (mesh-only) | _(none)_ | nano |
+| `mcp-http` | `Dockerfile` | 3000 | tcp (mesh-only) | _(none)_ | small |
+| `proxy` | `Dockerfile.proxy` | 8080 | http (public) | `/` | nano |
+
+Internal services use `protocol=tcp` with no routes — they are only reachable via Koyeb service mesh (e.g. `http://storage:50051`). This prevents route conflicts: if multiple services in the same app share route `/`, Koyeb's edge routes traffic to the wrong service → 502.
 
 **Custom domain:** `mcp.docx.lapoule.dev` → Koyeb CNAME (DNS-only, no Cloudflare proxy)
 
@@ -223,9 +225,12 @@ koyeb services update docx-mcp/<name> --git-sha <sha>
 - `koyeb services logs` exists but is unreliable (empty output) — prefer `koyeb instances logs`
 - `koyeb domains list` has no `--app` flag — lists all domains across all apps
 
-**Debugging 502 errors:** A `502` from `mcp.docx.lapoule.dev` means the proxy cannot reach `mcp-http:3000`. Check mcp-http logs first (`koyeb instances logs <mcp-http-instance-id> --tail`), not the proxy.
+**Debugging 502 errors:** Koyeb uses Cloudflare as its edge/CDN — a `502` with `server: cloudflare` and `cf-ray` headers comes from Koyeb's Cloudflare layer, not our own Cloudflare zone. Common causes:
+- **HTTP/2 (h2c) mismatch**: Koyeb's edge may connect to containers via HTTP/2 cleartext (h2c). If the server only speaks HTTP/1.1 (e.g. `axum::serve`), Koyeb returns 502 even though health checks pass (health checks use HTTP/1.1). Fix: use `hyper-util::server::conn::auto::Builder` for dual-stack HTTP/1.1 + h2c.
+- **Health check testing upstream**: If `/health` checks upstream services (e.g. mcp-http), it can timeout during cold start, making Koyeb mark the container as unhealthy. Fix: `/health` should only test that the proxy itself is running. Use `/upstream-health` for deep checks.
+- **Upstream unreachable**: If proxy is healthy but returns 502, check mcp-http logs first (`koyeb instances logs <mcp-http-instance-id> --tail`).
 
-**Testing the proxy:** Always use a real PAT token (e.g. `dxs_539de...`). Never use fake tokens like `dxs_test` — the proxy validates against D1 and will reject them before even forwarding.
+**IMPORTANT — PAT tokens:** NEVER use fake/placeholder tokens like `dxs_test` or `dxs_fake`. The proxy validates every token against Cloudflare D1 and rejects invalid ones immediately. Always use a real PAT token from the D1 `pat` table (format: `dxs_<40-char-hex>`). To get one, query D1 directly or create one via the website.
 
 **Pulumi provider bug:** `scale_to_zero=True` on mesh-only services (no public route) fails with Pulumi provider validation error `"at least one route is required for services scaling to zero"`. The Koyeb API/CLI accepts it fine. Workaround: apply via CLI `koyeb services update --min-scale 0`, then set `scale_to_zero=True` in Pulumi to keep state aligned (Pulumi won't try to re-apply if already matching).
 
