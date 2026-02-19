@@ -337,6 +337,7 @@ impl StorageService for StorageServiceImpl {
         let wal_position = req.wal_position;
         let cursor_position = req.cursor_position;
         let pending_external_change = req.pending_external_change;
+        let source_path = req.source_path.clone();
         let add_checkpoint_positions = req.add_checkpoint_positions.clone();
         let remove_checkpoint_positions = req.remove_checkpoint_positions.clone();
 
@@ -364,6 +365,9 @@ impl StorageService for StorageServiceImpl {
                 }
                 if let Some(pending) = pending_external_change {
                     entry.pending_external_change = pending;
+                }
+                if let Some(ref sp) = source_path {
+                    entry.source_path = if sp.is_empty() { None } else { Some(sp.clone()) };
                 }
 
                 for pos in &add_checkpoint_positions {

@@ -180,6 +180,7 @@ message UpdateSessionInIndexRequest {
   repeated uint64 remove_checkpoint_positions = 6;   // Positions to remove
   optional uint64 cursor_position = 7;               // Current undo/redo cursor
   optional bool pending_external_change = 8;          // External change pending flag
+  optional string source_path = 9;                     // Update source path
 }
 
 message UpdateSessionInIndexResponse {

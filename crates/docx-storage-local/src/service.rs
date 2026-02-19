@@ -398,6 +398,9 @@ impl StorageService for StorageServiceImpl {
                 if let Some(pending) = req.pending_external_change {
                     entry.pending_external_change = pending;
                 }
+                if let Some(ref source_path) = req.source_path {
+                    entry.source_path = if source_path.is_empty() { None } else { Some(source_path.clone()) };
+                }
 
                 // Add checkpoint positions
                 for pos in &req.add_checkpoint_positions {

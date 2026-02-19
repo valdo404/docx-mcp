@@ -267,6 +267,7 @@ public sealed class HistoryStorageClient : IHistoryStorage
         IEnumerable<ulong>? removeCheckpointPositions = null,
         ulong? cursorPosition = null,
         bool? pendingExternalChange = null,
+        string? sourcePath = null,
         CancellationToken cancellationToken = default)
     {
         var request = new UpdateSessionInIndexRequest
@@ -281,6 +282,7 @@ public sealed class HistoryStorageClient : IHistoryStorage
         if (removeCheckpointPositions is not null) request.RemoveCheckpointPositions.AddRange(removeCheckpointPositions);
         if (cursorPosition.HasValue) request.CursorPosition = cursorPosition.Value;
         if (pendingExternalChange.HasValue) request.PendingExternalChange = pendingExternalChange.Value;
+        if (sourcePath is not null) request.SourcePath = sourcePath;
 
         var response = await _client.UpdateSessionInIndexAsync(request, cancellationToken: cancellationToken);
         return (response.Success, response.NotFound);

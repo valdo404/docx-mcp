@@ -37,6 +37,7 @@ public interface IHistoryStorage : IAsyncDisposable
         IEnumerable<ulong>? removeCheckpointPositions = null,
         ulong? cursorPosition = null,
         bool? pendingExternalChange = null,
+        string? sourcePath = null,
         CancellationToken cancellationToken = default);
 
     Task<(bool Success, bool Existed)> RemoveSessionFromIndexAsync(
