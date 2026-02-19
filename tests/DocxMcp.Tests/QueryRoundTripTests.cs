@@ -32,6 +32,7 @@ public class QueryRoundTripTests : IDisposable
     {
         var body = _session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Single run"))));
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -52,6 +53,7 @@ public class QueryRoundTripTests : IDisposable
             new Run(new TabChar()),
             new Run(new Text("After") { Space = SpaceProcessingModeValues.Preserve }));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -77,6 +79,7 @@ public class QueryRoundTripTests : IDisposable
             new Run(new Break { Type = BreakValues.Page }),
             new Run(new Text("After")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -97,6 +100,7 @@ public class QueryRoundTripTests : IDisposable
                 new Indentation { Left = "720", Right = "360" }),
             new Run(new Text("Formatted")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -126,6 +130,7 @@ public class QueryRoundTripTests : IDisposable
             new Run(new TabChar()),
             new Run(new Text("Right")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);
@@ -156,6 +161,7 @@ public class QueryRoundTripTests : IDisposable
                     new Color { Val = "FF0000" }),
                 new Text("Styled run")));
         body.AppendChild(p);
+        TestHelpers.PersistBaseline(_sessions, _session);
 
         var result = QueryTool.Query(_sessions, _session.Id, "/body/paragraph[0]");
         using var doc = JsonDocument.Parse(result);

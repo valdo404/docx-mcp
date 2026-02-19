@@ -49,9 +49,10 @@ public class AutoSaveTests : IDisposable
         body.AppendChild(new Paragraph(new Run(new Text("Added paragraph"))));
 
         // Append WAL then auto-save (caller-orchestrated pattern)
+        var currentBytes = session.ToBytes();
         mgr.AppendWal(session.Id,
-            "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Added paragraph\"}}]");
-        sync.MaybeAutoSave(mgr.TenantId, session.Id, mgr.Get(session.Id).ToBytes());
+            "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Added paragraph\"}}]", null, currentBytes);
+        sync.MaybeAutoSave(mgr.TenantId, session.Id, currentBytes);
 
         // File on disk should have changed
         var newBytes = File.ReadAllBytes(_tempFile);
@@ -97,9 +98,10 @@ public class AutoSaveTests : IDisposable
         // AppendWal + MaybeAutoSave should not throw even though there's no source path
         var ex = Record.Exception(() =>
         {
+            var currentBytes = session.ToBytes();
             mgr.AppendWal(session.Id,
-                "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"New content\"}}]");
-            sync.MaybeAutoSave(mgr.TenantId, session.Id, mgr.Get(session.Id).ToBytes());
+                "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"New content\"}}]", null, currentBytes);
+            sync.MaybeAutoSave(mgr.TenantId, session.Id, currentBytes);
         });
 
         Assert.Null(ex);
@@ -126,9 +128,10 @@ public class AutoSaveTests : IDisposable
             // Mutate and append WAL + try auto-save
             var body = session.Document.MainDocumentPart!.Document!.Body!;
             body.AppendChild(new Paragraph(new Run(new Text("Should not save"))));
+            var currentBytes = session.ToBytes();
             mgr.AppendWal(session.Id,
-                "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Should not save\"}}]");
-            sync.MaybeAutoSave(mgr.TenantId, session.Id, mgr.Get(session.Id).ToBytes());
+                "[{\"op\":\"add\",\"path\":\"/body/children/-1\",\"value\":{\"type\":\"paragraph\",\"text\":\"Should not save\"}}]", null, currentBytes);
+            sync.MaybeAutoSave(mgr.TenantId, session.Id, currentBytes);
 
             var afterBytes = File.ReadAllBytes(_tempFile);
             Assert.Equal(originalBytes, afterBytes);

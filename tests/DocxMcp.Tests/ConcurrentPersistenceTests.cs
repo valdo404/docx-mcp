@@ -22,10 +22,7 @@ public class ConcurrentPersistenceTests
 
         var s1 = mgr1.Create();
 
-        // Manager 2 should be able to restore and see the session
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
-
+        // Manager 2 should see the session via List() (stateless, shared gRPC storage)
         var list = mgr2.List().ToList();
         Assert.Single(list);
         Assert.Equal(s1.Id, list[0].Id);
@@ -176,7 +173,8 @@ public class ConcurrentPersistenceTests
             session.GetBody().AppendChild(new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
                 new DocumentFormat.OpenXml.Wordprocessing.Run(
                     new DocumentFormat.OpenXml.Wordprocessing.Text($"Paragraph"))));
-            mgr.AppendWal(id, patch);
+            var bytes = session.ToBytes();
+            mgr.AppendWal(id, patch, null, bytes);
         }
 
         // All patches should be in history

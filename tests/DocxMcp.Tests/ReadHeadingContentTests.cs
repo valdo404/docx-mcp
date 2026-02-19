@@ -59,6 +59,8 @@ public class ReadHeadingContentTests : IDisposable
 
         body.AppendChild(MakeHeading(1, "Conclusion"));
         body.AppendChild(MakeParagraph("Conclusion text"));
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     // --- Listing mode tests ---

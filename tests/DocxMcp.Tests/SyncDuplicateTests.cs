@@ -221,18 +221,15 @@ public class SyncDuplicateTests : IDisposable
         Assert.True(syncResult.HasChanges, "Sync should detect changes");
 
         // Verify synced content is in memory
-        var syncedText = GetParagraphText(_sessionManager.Get(sessionId));
+        using var syncedSession = _sessionManager.Get(sessionId);
+        var syncedText = GetParagraphText(syncedSession);
         Assert.Contains("New content from external", syncedText);
 
-        // Simulate server restart by creating a new SessionManager with same tenant
+        // Simulate server restart by creating a new SessionManager with same tenant (stateless, no RestoreSessions needed)
         var newSessionManager = TestHelpers.CreateSessionManager(_tenantId);
 
-        // Act - restore sessions
-        var restoredCount = newSessionManager.RestoreSessions();
-
-        // Assert - should have restored the session with checkpoint content
-        Assert.Equal(1, restoredCount);
-        var restoredSession = newSessionManager.Get(sessionId);
+        // Assert - session is accessible via stateless Get (loads from gRPC checkpoint)
+        using var restoredSession = newSessionManager.Get(sessionId);
         var restoredText = GetParagraphText(restoredSession);
         Assert.Contains("New content from external", restoredText);
 

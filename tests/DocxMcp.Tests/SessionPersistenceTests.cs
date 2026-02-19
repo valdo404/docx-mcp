@@ -47,7 +47,8 @@ public class SessionPersistenceTests
 
         // Add content via WAL
         session.GetBody().AppendChild(new Paragraph(new Run(new Text("Hello"))));
-        mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Hello\"}}]");
+        var bytes = session.ToBytes();
+        mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Hello\"}}]", null, bytes);
 
         var history = mgr.GetHistory(session.Id);
         // History should have at least 2 entries: baseline + WAL entry
@@ -63,7 +64,8 @@ public class SessionPersistenceTests
         // Add content via patch
         var body = session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Test content"))));
-        mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Test\"}}]");
+        var bytes = session.ToBytes();
+        mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Test\"}}]", null, bytes);
 
         var historyBefore = mgr.GetHistory(session.Id);
         var countBefore = historyBefore.Entries.Count;
@@ -90,16 +92,17 @@ public class SessionPersistenceTests
         var body = session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Persisted content"))));
 
+        // Persist modified baseline so gRPC has the content
+        TestHelpers.PersistBaseline(mgr1, session);
+
         // Compact to save current state
         mgr1.Compact(id);
 
-        // Create a new manager with the same tenant
+        // Create a new manager with the same tenant — stateless, no RestoreSessions needed
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
 
-        // Verify the session is accessible with the same ID
-        var restoredSession = mgr2.Get(id);
+        // Verify the session is accessible with the same ID (stateless Get loads from gRPC)
+        using var restoredSession = mgr2.Get(id);
         Assert.NotNull(restoredSession);
         Assert.Contains("Persisted content", restoredSession.GetBody().InnerText);
     }
@@ -122,13 +125,11 @@ public class SessionPersistenceTests
         var history = mgr1.GetHistory(id);
         Assert.True(history.Entries.Count > 1);
 
-        // Create new manager with same tenant
+        // Create new manager with same tenant — stateless, no RestoreSessions needed
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
 
-        // Verify the WAL was replayed — the paragraph should exist
-        var restoredSession = mgr2.Get(id);
+        // Verify the WAL was replayed — the paragraph should exist (stateless Get loads from gRPC)
+        using var restoredSession = mgr2.Get(id);
         Assert.Contains("WAL entry", restoredSession.GetBody().InnerText);
     }
 
@@ -161,7 +162,8 @@ public class SessionPersistenceTests
 
         // Add some WAL entries
         session.GetBody().AppendChild(new Paragraph(new Run(new Text("Before snapshot"))));
-        mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Before snapshot\"}}]");
+        var bytes = session.ToBytes();
+        mgr.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/children/0\",\"value\":{\"type\":\"paragraph\",\"text\":\"Before snapshot\"}}]", null, bytes);
 
         var result = DocumentTools.DocumentSnapshot(mgr, session.Id);
         Assert.Contains("Snapshot created", result);

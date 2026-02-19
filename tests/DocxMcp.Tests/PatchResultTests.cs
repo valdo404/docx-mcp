@@ -26,6 +26,8 @@ public class PatchResultTests : IDisposable
         var body = _session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("hello world, hello universe, hello everyone"))));
         body.AppendChild(new Paragraph(new Run(new Text("Second paragraph with hello"))));
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     #region JSON Response Format Tests
@@ -185,7 +187,8 @@ public class PatchResultTests : IDisposable
         Assert.Equal(1, op.GetProperty("replacements_made").GetInt32());
 
         // Verify only first occurrence was replaced
-        var text = _session.GetBody().Elements<Paragraph>().First().InnerText;
+        using var reloaded = _sessions.Get(_session.Id);
+        var text = reloaded.GetBody().Elements<Paragraph>().First().InnerText;
         Assert.Equal("hi world, hello universe, hello everyone", text);
     }
 
@@ -234,7 +237,8 @@ public class PatchResultTests : IDisposable
         Assert.Equal(3, op.GetProperty("matches_found").GetInt32());
         Assert.Equal(3, op.GetProperty("replacements_made").GetInt32());
 
-        var text = _session.GetBody().Elements<Paragraph>().First().InnerText;
+        using var reloaded = _sessions.Get(_session.Id);
+        var text = reloaded.GetBody().Elements<Paragraph>().First().InnerText;
         Assert.Equal("hi world, hi universe, hi everyone", text);
     }
 
@@ -250,7 +254,8 @@ public class PatchResultTests : IDisposable
         Assert.Equal(3, op.GetProperty("matches_found").GetInt32());
         Assert.Equal(2, op.GetProperty("replacements_made").GetInt32());
 
-        var text = _session.GetBody().Elements<Paragraph>().First().InnerText;
+        using var reloaded = _sessions.Get(_session.Id);
+        var text = reloaded.GetBody().Elements<Paragraph>().First().InnerText;
         Assert.Equal("hi world, hi universe, hello everyone", text);
     }
 

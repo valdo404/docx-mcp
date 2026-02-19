@@ -37,6 +37,8 @@ public class ReadSectionTests : IDisposable
 
         // Final SectionProperties as direct child of body (marks end of last section)
         body.AppendChild(new SectionProperties());
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     [Fact]

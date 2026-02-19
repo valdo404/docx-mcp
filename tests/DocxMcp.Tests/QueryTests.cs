@@ -35,6 +35,8 @@ public class QueryTests : IDisposable
             new TableRow(
                 new TableCell(new Paragraph(new Run(new Text("V1")))),
                 new TableCell(new Paragraph(new Run(new Text("V2")))))));
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     [Fact]

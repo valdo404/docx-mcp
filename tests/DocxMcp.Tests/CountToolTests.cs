@@ -35,6 +35,8 @@ public class CountToolTests : IDisposable
             new TableRow(
                 new TableCell(new Paragraph(new Run(new Text("C")))),
                 new TableCell(new Paragraph(new Run(new Text("D")))))));
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     [Fact]

@@ -38,15 +38,18 @@ public class UndoRedoTests : IDisposable
         var id = session.Id;
 
         PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("First"));
-        Assert.Contains("First", session.GetBody().InnerText);
+
+        // Reload from gRPC to verify patch was applied
+        using (var afterPatch = mgr.Get(id))
+            Assert.Contains("First", afterPatch.GetBody().InnerText);
 
         var result = mgr.Undo(id);
         Assert.Equal(0, result.Position);
         Assert.Equal(1, result.Steps);
 
         // Document should be back to empty baseline
-        var body = mgr.Get(id).GetBody();
-        Assert.DoesNotContain("First", body.InnerText);
+        using var afterUndo = mgr.Get(id);
+        Assert.DoesNotContain("First", afterUndo.GetBody().InnerText);
     }
 
     [Fact]
@@ -480,19 +483,16 @@ public class UndoRedoTests : IDisposable
         // Undo to position 1
         mgr1.Undo(id, 2);
 
-        // Don't close - sessions auto-persist to gRPC storage
-        // Simulate restart: create a new manager with same tenant
+        // Simulate restart: create a new manager with same tenant (stateless, no RestoreSessions needed)
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
 
-        // Document should be restored at WAL position (position 3, all patches applied)
-        // Note: cursor position is local state, not persisted. On restore, we replay to WAL tip.
-        var body = mgr2.Get(id).GetBody();
+        // Cursor position IS persisted in the gRPC index, so Get() respects it.
+        // After undo to position 1, only "A" should be present.
+        using var restored = mgr2.Get(id);
+        var body = restored.GetBody();
         Assert.Contains("A", body.InnerText);
-        // After restore, document is at WAL tip (all patches replayed)
-        Assert.Contains("B", body.InnerText);
-        Assert.Contains("C", body.InnerText);
+        Assert.DoesNotContain("B", body.InnerText);
+        Assert.DoesNotContain("C", body.InnerText);
     }
 
     // --- MCP Tool integration ---

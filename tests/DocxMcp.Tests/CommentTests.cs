@@ -519,13 +519,10 @@ public class CommentTests : IDisposable
         PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("Hello world"));
         CommentTools.CommentAdd(mgr, CreateSyncManager(), id, "/body/paragraph[0]", "Persisted comment");
 
-        // Don't close - sessions auto-persist to gRPC storage
-        // Simulating a restart: create new manager with same tenant
+        // Simulating a restart: create new manager with same tenant (stateless, no RestoreSessions needed)
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
 
-        // Comment should be present after restore
+        // Comment should be present (stateless Get loads from gRPC checkpoint)
         var listResult = CommentTools.CommentList(mgr2, id);
         Assert.Contains("Persisted comment", listResult);
         Assert.Contains("\"total\": 1", listResult);
@@ -553,7 +550,8 @@ public class CommentTests : IDisposable
         var s0 = mgr0.Create();
         PatchTool.ApplyPatch(mgr0, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), s0.Id, AddParagraphPatch("Paragraph one"));
         PatchTool.ApplyPatch(mgr0, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), s0.Id, AddParagraphPatch("Paragraph two"));
-        File.WriteAllBytes(tempFile, mgr0.Get(s0.Id).ToBytes());
+        using (var exported = mgr0.Get(s0.Id))
+            File.WriteAllBytes(tempFile, exported.ToBytes());
         mgr0.Close(s0.Id);
 
         // Open the file (like mcptools document_open)
@@ -564,12 +562,10 @@ public class CommentTests : IDisposable
         var addResult = CommentTools.CommentAdd(mgr, CreateSyncManager(), id, "/body/paragraph[0]", "Review this paragraph");
         Assert.Contains("Comment 0 added", addResult);
 
-        // Don't close - simulating a restart: create new manager with same tenant
+        // Simulating a restart: create new manager with same tenant (stateless, no RestoreSessions needed)
         var mgr2 = TestHelpers.CreateSessionManager(tenantId);
-        var restored = mgr2.RestoreSessions();
-        Assert.Equal(1, restored);
 
-        // Comment should be present
+        // Comment should be present (stateless Get loads from gRPC checkpoint)
         var list1 = CommentTools.CommentList(mgr2, id);
         Assert.Contains("\"total\": 1", list1);
         Assert.Contains("Review this paragraph", list1);

@@ -130,6 +130,18 @@ internal static class TestHelpers
     }
 
     /// <summary>
+    /// After modifying a session's document in-memory during test setup,
+    /// call this to persist the current state as the baseline in gRPC storage.
+    /// This is necessary because Get(id) loads from gRPC (stateless).
+    /// </summary>
+    public static void PersistBaseline(SessionManager sessions, DocxSession session)
+    {
+        var bytes = session.ToBytes();
+        var history = GetOrCreateHistoryStorage();
+        history.SaveSessionAsync(sessions.TenantId, session.Id, bytes).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
     /// Cleanup: dispose the shared storage clients and remove temp directory.
     /// Call this in test cleanup if needed.
     /// </summary>

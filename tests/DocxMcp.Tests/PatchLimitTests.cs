@@ -22,6 +22,8 @@ public class PatchLimitTests : IDisposable
 
         var body = _session.GetBody();
         body.AppendChild(new Paragraph(new Run(new Text("Content"))));
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     [Fact]

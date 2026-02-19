@@ -224,10 +224,15 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         // Make a regular change
-        var body = _sessionManager.Get(session.Id).GetBody();
-        var newPara = new Paragraph(new Run(new Text("Regular change")));
-        body.AppendChild(newPara);
-        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]");
+        byte[] walBytes;
+        using (var s = _sessionManager.Get(session.Id))
+        {
+            var body = s.GetBody();
+            var newPara = new Paragraph(new Run(new Text("Regular change")));
+            body.AppendChild(newPara);
+            walBytes = s.ToBytes();
+        }
+        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]", null, walBytes);
 
         // External sync
         ModifyDocx(filePath, "External sync content");
@@ -235,9 +240,12 @@ public class ExternalSyncTests : IDisposable
         var syncPosition = syncResult.WalPosition!.Value;
 
         // Make another change after sync
-        body = _sessionManager.Get(session.Id).GetBody();
-        body.AppendChild(new Paragraph(new Run(new Text("After sync"))));
-        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]");
+        using (var s2 = _sessionManager.Get(session.Id))
+        {
+            s2.GetBody().AppendChild(new Paragraph(new Run(new Text("After sync"))));
+            walBytes = s2.ToBytes();
+        }
+        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]", null, walBytes);
 
         // Act - jump back to sync position
         _sessionManager.JumpTo(session.Id, syncPosition);
@@ -316,9 +324,13 @@ public class ExternalSyncTests : IDisposable
         var session = OpenSession(filePath);
 
         // Regular change
-        var body = _sessionManager.Get(session.Id).GetBody();
-        body.AppendChild(new Paragraph(new Run(new Text("Regular"))));
-        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]");
+        byte[] walBytes;
+        using (var s = _sessionManager.Get(session.Id))
+        {
+            s.GetBody().AppendChild(new Paragraph(new Run(new Text("Regular"))));
+            walBytes = s.ToBytes();
+        }
+        _sessionManager.AppendWal(session.Id, "[{\"op\":\"add\",\"path\":\"/body/paragraph[-1]\",\"value\":{\"type\":\"paragraph\"}}]", null, walBytes);
 
         // External sync
         ModifyDocx(filePath, "External");

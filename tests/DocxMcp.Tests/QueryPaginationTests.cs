@@ -23,6 +23,8 @@ public class QueryPaginationTests : IDisposable
         {
             body.AppendChild(new Paragraph(new Run(new Text($"Paragraph {i}"))));
         }
+
+        TestHelpers.PersistBaseline(_sessions, _session);
     }
 
     [Fact]
