@@ -82,6 +82,8 @@ public sealed class ConnectionTools
     {
         try
         {
+            page_size = Math.Clamp(page_size, 1, 100);
+
             var type = source_type switch
             {
                 "local" => SourceType.LocalFile,

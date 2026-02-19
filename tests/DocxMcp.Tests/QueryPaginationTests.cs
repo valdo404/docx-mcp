@@ -191,6 +191,27 @@ public class QueryPaginationTests : IDisposable
         Assert.Equal("Paragraph 10", firstItem.GetProperty("text").GetString());
     }
 
+    [Fact]
+    public void WildcardSingleElementHasPaginationEnvelope()
+    {
+        // Create a session with exactly 1 paragraph
+        var sessions = TestHelpers.CreateSessionManager();
+        var session = sessions.Create();
+        session.GetBody().AppendChild(new Paragraph(new Run(new Text("Only one"))));
+        TestHelpers.PersistBaseline(sessions, session);
+
+        var result = DocxMcp.Tools.QueryTool.Query(sessions, session.Id, "/body/paragraph[*]");
+        using var doc = JsonDocument.Parse(result);
+
+        // With the fix, [*] with single element should still have pagination envelope
+        Assert.Equal(1, doc.RootElement.GetProperty("total").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("count").GetInt32());
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.Equal(1, items.GetArrayLength());
+
+        sessions.Close(session.Id);
+    }
+
     public void Dispose()
     {
         _sessions.Close(_session.Id);

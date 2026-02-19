@@ -751,6 +751,19 @@ public sealed class PatchTool
 
                 pos = runEnd;
             }
+
+            // Clean up empty runs left after cross-run replacement
+            // (runs with empty text that don't contain tabs or breaks)
+            foreach (var run in para.Elements<Run>().ToList())
+            {
+                var textElem = run.GetFirstChild<Text>();
+                if (textElem is not null && textElem.Text.Length == 0
+                    && run.GetFirstChild<TabChar>() is null
+                    && run.GetFirstChild<Break>() is null)
+                {
+                    run.Remove();
+                }
+            }
         }
 
         return totalReplaced;
@@ -776,6 +789,15 @@ public sealed class PatchTool
         {
             if (target is not Table table)
                 throw new InvalidOperationException("remove_column target must be a table.");
+
+            var firstRow = table.Elements<TableRow>().FirstOrDefault();
+            if (firstRow is not null)
+            {
+                var firstRowCellCount = firstRow.Elements<TableCell>().Count();
+                if (op.Column < 0 || op.Column >= firstRowCellCount)
+                    throw new InvalidOperationException(
+                        $"Column index {op.Column} is out of range. Table has {firstRowCellCount} columns (0-{firstRowCellCount - 1}).");
+            }
 
             var rows = table.Elements<TableRow>().ToList();
             foreach (var row in rows)

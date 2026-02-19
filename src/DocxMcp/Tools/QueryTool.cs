@@ -62,7 +62,7 @@ public sealed class QueryTool
 
             // Apply pagination when multiple elements are returned
             var totalCount = elements.Count;
-            if (totalCount > 1)
+            if (totalCount > 1 || (path.Contains("[*]") && totalCount >= 1))
             {
                 var rawOffset = offset ?? 0;
                 // Negative offset counts from the end: -10 means start at (total - 10)

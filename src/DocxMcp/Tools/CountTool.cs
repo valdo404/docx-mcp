@@ -40,7 +40,7 @@ public sealed class CountTool
             {
                 var body = doc.MainDocumentPart?.Document?.Body;
                 if (body is null)
-                    return """{"error": "Document has no body."}""";
+                    throw new InvalidOperationException("Document has no body.");
 
                 var result = new JsonObject
                 {

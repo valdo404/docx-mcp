@@ -855,6 +855,115 @@ public class TableModificationTests : IDisposable
         Assert.Equal(2, headerCells.Count);
     }
 
+    // ===========================
+    // RemoveColumn Bounds Checks
+    // ===========================
+
+    [Fact]
+    public void RemoveColumn_NegativeIndex_ReturnsError()
+    {
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
+            """[{"op": "remove_column", "path": "/body/table[0]", "column": -1}]""");
+        // Validate() rejects negative column values
+        Assert.Contains("\"success\": false", result);
+    }
+
+    [Fact]
+    public void RemoveColumn_IndexBeyondColumnCount_ReturnsError()
+    {
+        // Table has 3 columns (0-2), so column 10 is invalid
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
+            """[{"op": "remove_column", "path": "/body/table[0]", "column": 10}]""");
+        Assert.Contains("out of range", result);
+    }
+
+    [Fact]
+    public void RemoveColumn_ExactBoundary_ReturnsError()
+    {
+        // Table has 3 columns (0-2), so column 3 is just past the end
+        var result = PatchTool.ApplyPatch(_sessions, _sync, _gate, _session.Id,
+            """[{"op": "remove_column", "path": "/body/table[0]", "column": 3}]""");
+        Assert.Contains("out of range", result);
+    }
+
+    // ===========================
+    // ReplaceText Empty Runs Cleanup
+    // ===========================
+
+    [Fact]
+    public void ReplaceTextCrossRun_CleansUpEmptyRuns()
+    {
+        // Create paragraph with multiple styled runs via patch (not in-memory)
+        var sessions = TestHelpers.CreateSessionManager();
+        var sync = TestHelpers.CreateSyncManager();
+        var gate = TestHelpers.CreateExternalChangeGate();
+        var session = sessions.Create();
+
+        // Add paragraph with 3 differently-styled runs through the patch system
+        PatchTool.ApplyPatch(sessions, sync, gate, session.Id, """
+        [{
+            "op": "add",
+            "path": "/body/children/0",
+            "value": {
+                "type": "paragraph",
+                "runs": [
+                    {"text": "Hello ", "style": {"bold": true}},
+                    {"text": "World", "style": {"italic": true}},
+                    {"text": " today"}
+                ]
+            }
+        }]
+        """);
+
+        // Verify runs are separate and check their exact text content
+        using (var check = sessions.Get(session.Id))
+        {
+            var para = check.GetBody().Elements<Paragraph>().First();
+            var runs = para.Elements<Run>().ToList();
+            var runTexts = runs.Select(r => {
+                var t = r.GetFirstChild<Text>();
+                return t?.Text ?? "(null)";
+            }).ToList();
+            Assert.True(runs.Count >= 3,
+                $"Expected 3+ runs but got {runs.Count}. Run texts: [{string.Join(", ", runTexts.Select(t => $"'{t}'"))}]");
+        }
+
+        // Now do cross-run replacement: "Hello World" spans run0 and run1
+        var result = PatchTool.ApplyPatch(sessions, sync, gate, session.Id, """
+        [{
+            "op": "replace_text",
+            "path": "/body/paragraph[text~='Hello World']",
+            "find": "Hello World",
+            "replace": "Hi"
+        }]
+        """);
+
+        Assert.Contains("\"success\": true", result);
+
+        using var reloaded = sessions.Get(session.Id);
+        var modified = reloaded.GetBody().Elements<Paragraph>()
+            .FirstOrDefault(par => par.InnerText.Contains("Hi"));
+        Assert.NotNull(modified);
+
+        // Dump actual run content for debugging
+        var modifiedRuns = modified!.Elements<Run>().ToList();
+        var modifiedRunTexts = modifiedRuns.Select(r => {
+            var t = r.GetFirstChild<Text>();
+            return t?.Text ?? "(null)";
+        }).ToList();
+
+        // After cross-run replacement of "Hello World" -> "Hi":
+        // - The replacement was applied (we found "Hi" in the paragraph)
+        // - Verify no empty runs remain
+        foreach (var (runText, i) in modifiedRunTexts.Select((t, i) => (t, i)))
+        {
+            Assert.True(runText != "" && runText != "(null)",
+                $"Run {i} is empty. All runs: [{string.Join(", ", modifiedRunTexts.Select(t => $"'{t}'"))}]. Full text: '{modified.InnerText}'");
+        }
+
+        sessions.Close(session.Id);
+    }
+
     public void Dispose()
     {
         _sessions.Close(_session.Id);

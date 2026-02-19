@@ -23,7 +23,7 @@ public sealed class HistoryTools
         {
             var sessions = tenant.Sessions;
             var result = sessions.Undo(doc_id, steps);
-            if (result.Steps > 0 && result.CurrentBytes is not null)
+            if (result.CurrentBytes is not null)
                 sync.MaybeAutoSave(tenant.TenantId, doc_id, result.CurrentBytes);
             return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
         }
@@ -47,7 +47,7 @@ public sealed class HistoryTools
         {
             var sessions = tenant.Sessions;
             var result = sessions.Redo(doc_id, steps);
-            if (result.Steps > 0 && result.CurrentBytes is not null)
+            if (result.CurrentBytes is not null)
                 sync.MaybeAutoSave(tenant.TenantId, doc_id, result.CurrentBytes);
             return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
         }
@@ -70,6 +70,7 @@ public sealed class HistoryTools
     {
         try
         {
+            limit = Math.Clamp(limit, 1, 100);
             var result = tenant.Sessions.GetHistory(doc_id, offset, limit);
 
             var lines = new List<string>
@@ -122,7 +123,7 @@ public sealed class HistoryTools
         {
             var sessions = tenant.Sessions;
             var result = sessions.JumpTo(doc_id, position);
-            if (result.Steps > 0 && result.CurrentBytes is not null)
+            if (result.CurrentBytes is not null)
                 sync.MaybeAutoSave(tenant.TenantId, doc_id, result.CurrentBytes);
             return $"{result.Message}\nPosition: {result.Position}, Steps: {result.Steps}";
         }
