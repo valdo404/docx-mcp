@@ -46,7 +46,8 @@ if (transport == "http")
         .WithTools<StyleTools>()
         .WithTools<RevisionTools>()
         .WithTools<ExternalChangeTools>()
-        .WithTools<ConnectionTools>();
+        .WithTools<ConnectionTools>()
+        .WithTools<DiffTool>();
 
     var app = builder.Build();
     app.MapMcp("/mcp");
@@ -97,7 +98,8 @@ else
         .WithTools<StyleTools>()
         .WithTools<RevisionTools>()
         .WithTools<ExternalChangeTools>()
-        .WithTools<ConnectionTools>();
+        .WithTools<ConnectionTools>()
+        .WithTools<DiffTool>();
 
     await builder.Build().RunAsync();
 }

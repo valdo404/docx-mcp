@@ -732,6 +732,16 @@ public sealed class SessionManager
     }
 
     /// <summary>
+    /// Get the serialized document bytes at a given WAL position without side effects.
+    /// Does NOT save checkpoints or update the cursor. Used for read-only comparisons.
+    /// </summary>
+    public byte[] GetBytesAtPosition(string id, int position)
+    {
+        using var session = RebuildDocumentAtPositionAsync(id, position).GetAwaiter().GetResult();
+        return session.ToBytes();
+    }
+
+    /// <summary>
     /// Rebuild document at a given position, save checkpoint there, update cursor.
     /// Returns the serialized bytes at that position.
     /// </summary>
@@ -830,6 +840,12 @@ public sealed class SessionManager
                         var cid = patch.TryGetProperty("comment_id", out var cidEl) ? cidEl.GetInt32().ToString() : "?";
                         ops.Add($"delete_comment #{cid}");
                     }
+                    else if (op == "resolve_comment")
+                    {
+                        var cid = patch.TryGetProperty("comment_id", out var cidEl) ? cidEl.GetInt32().ToString() : "?";
+                        var resolved = patch.TryGetProperty("resolved", out var rEl) && rEl.GetBoolean();
+                        ops.Add(resolved ? $"resolve_comment #{cid}" : $"unresolve_comment #{cid}");
+                    }
                     else if (op is "style_element" or "style_paragraph" or "style_table")
                     {
                         var stylePath = patch.TryGetProperty("path", out var spEl) && spEl.ValueKind == JsonValueKind.String
@@ -896,6 +912,9 @@ public sealed class SessionManager
                     break;
                 case "delete_comment":
                     Tools.CommentTools.ReplayDeleteComment(patch, wpDoc);
+                    break;
+                case "resolve_comment":
+                    Tools.CommentTools.ReplayResolveComment(patch, wpDoc);
                     break;
                 case "style_element":
                     Tools.StyleTools.ReplayStyleElement(patch, wpDoc);

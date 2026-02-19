@@ -142,6 +142,7 @@ public sealed class CommentTools
                     ["initials"] = c.Initials,
                     ["date"] = c.Date?.ToString("o"),
                     ["text"] = c.Text,
+                    ["resolved"] = c.Resolved,
                 };
 
                 if (c.AnchoredText is not null)
@@ -243,6 +244,49 @@ public sealed class CommentTools
         catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
+    [McpServerTool(Name = "comment_resolve"), Description(
+        "Mark a comment as resolved or re-open it.\n\n" +
+        "Resolved comments appear greyed out in Word but are not deleted.\n" +
+        "Use comment_list to see current resolve status.")]
+    public static string CommentResolve(
+        TenantScope tenant,
+        SyncManager sync,
+        [Description("Session ID of the document.")] string doc_id,
+        [Description("ID of the comment to resolve/unresolve.")] int comment_id,
+        [Description("True to resolve, false to re-open. Default: true.")] bool resolved = true)
+    {
+        try
+        {
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+
+            var success = CommentHelper.ResolveComment(doc, comment_id, resolved);
+            if (!success)
+                return $"Error: Comment {comment_id} not found.";
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "resolve_comment",
+                ["comment_id"] = comment_id,
+                ["resolved"] = resolved
+            };
+            var walEntry = new JsonArray();
+            walEntry.Add((JsonNode)walObj);
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return resolved
+                ? $"Comment {comment_id} marked as resolved."
+                : $"Comment {comment_id} re-opened.";
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"resolving comment in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
+    }
+
     /// <summary>
     /// Replay an add_comment WAL operation.
     /// </summary>
@@ -255,7 +299,9 @@ public sealed class CommentTools
         var author = patch.GetProperty("author").GetString() ?? "AI Assistant";
         var initials = patch.GetProperty("initials").GetString() ?? "AI";
         var dateStr = patch.GetProperty("date").GetString();
-        var date = dateStr is not null ? DateTime.Parse(dateStr).ToUniversalTime() : DateTime.UtcNow;
+        var date = dateStr is not null && DateTime.TryParse(dateStr, out var parsedDate)
+            ? parsedDate.ToUniversalTime()
+            : DateTime.UtcNow;
 
         string? anchorText = null;
         if (patch.TryGetProperty("anchor_text", out var at) && at.ValueKind == JsonValueKind.String)
@@ -285,6 +331,16 @@ public sealed class CommentTools
     {
         var commentId = patch.GetProperty("comment_id").GetInt32();
         CommentHelper.DeleteComment(doc, commentId);
+    }
+
+    /// <summary>
+    /// Replay a resolve_comment WAL operation.
+    /// </summary>
+    internal static void ReplayResolveComment(JsonElement patch, WordprocessingDocument doc)
+    {
+        var commentId = patch.GetProperty("comment_id").GetInt32();
+        var resolved = patch.TryGetProperty("resolved", out var r) && r.GetBoolean();
+        CommentHelper.ResolveComment(doc, commentId, resolved);
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()

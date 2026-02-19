@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using W15 = DocumentFormat.OpenXml.Office2013.Word;
 
 namespace DocxMcp.Helpers;
 
@@ -315,10 +316,23 @@ public static class CommentHelper
     public static List<CommentInfo> ListComments(WordprocessingDocument doc, string? authorFilter = null)
     {
         var results = new List<CommentInfo>();
-        var commentsPart = doc.MainDocumentPart?.WordprocessingCommentsPart;
+        var mainPart = doc.MainDocumentPart;
+        var commentsPart = mainPart?.WordprocessingCommentsPart;
         if (commentsPart?.Comments is null) return results;
 
-        var body = doc.MainDocumentPart?.Document?.Body;
+        var body = mainPart?.Document?.Body;
+
+        // Build paraId→Done lookup from CommentsExPart
+        var resolvedParaIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var exPart = mainPart?.WordprocessingCommentsExPart;
+        if (exPart?.CommentsEx is not null)
+        {
+            foreach (var ce in exPart.CommentsEx.Elements<W15.CommentEx>())
+            {
+                if (ce.Done?.Value == true && ce.ParaId?.Value is not null)
+                    resolvedParaIds.Add(ce.ParaId.Value);
+            }
+        }
 
         foreach (var comment in commentsPart.Comments.Elements<Comment>())
         {
@@ -337,6 +351,11 @@ public static class CommentHelper
                 anchoredText = GetAnchoredText(body, idStr);
             }
 
+            // Check resolved state via first paragraph's paraId
+            var firstPara = comment.Elements<Paragraph>().FirstOrDefault();
+            var paraId = firstPara?.ParagraphId?.Value;
+            var isResolved = paraId is not null && resolvedParaIds.Contains(paraId);
+
             results.Add(new CommentInfo
             {
                 Id = int.TryParse(idStr, out var id) ? id : 0,
@@ -344,7 +363,8 @@ public static class CommentHelper
                 Initials = comment.Initials?.Value ?? "",
                 Date = comment.Date?.Value,
                 Text = commentText,
-                AnchoredText = anchoredText
+                AnchoredText = anchoredText,
+                Resolved = isResolved
             });
         }
 
@@ -435,6 +455,101 @@ public static class CommentHelper
     }
 
     /// <summary>
+    /// Resolve or un-resolve a comment by ID.
+    /// Uses WordprocessingCommentsExPart (commentsExtended.xml) with CommentEx.Done attribute.
+    /// </summary>
+    public static bool ResolveComment(WordprocessingDocument doc, int commentId, bool resolved)
+    {
+        var mainPart = doc.MainDocumentPart
+            ?? throw new InvalidOperationException("Document has no MainDocumentPart.");
+
+        // Verify the comment exists
+        var commentsPart = mainPart.WordprocessingCommentsPart;
+        if (commentsPart?.Comments is null) return false;
+
+        var idStr = commentId.ToString();
+        var comment = commentsPart.Comments.Elements<Comment>()
+            .FirstOrDefault(c => c.Id?.Value == idStr);
+        if (comment is null) return false;
+
+        // Get the first paragraph's paraId from the comment
+        var firstPara = comment.Elements<Paragraph>().FirstOrDefault();
+        if (firstPara is null) return false;
+
+        var paraId = firstPara.ParagraphId?.Value;
+        if (paraId is null)
+        {
+            // Generate a paraId if none exists
+            paraId = GenerateParaId();
+            firstPara.ParagraphId = new HexBinaryValue(paraId);
+        }
+
+        // Get or create CommentsExPart
+        var exPart = mainPart.WordprocessingCommentsExPart;
+        if (exPart is null)
+        {
+            exPart = mainPart.AddNewPart<WordprocessingCommentsExPart>();
+            exPart.CommentsEx = new W15.CommentsEx();
+        }
+        else if (exPart.CommentsEx is null)
+        {
+            exPart.CommentsEx = new W15.CommentsEx();
+        }
+
+        // Find existing CommentEx for this paraId, or create one
+        var commentEx = exPart.CommentsEx.Elements<W15.CommentEx>()
+            .FirstOrDefault(ce => ce.ParaId?.Value == paraId);
+
+        if (commentEx is null)
+        {
+            commentEx = new W15.CommentEx { ParaId = new HexBinaryValue(paraId) };
+            exPart.CommentsEx.AppendChild(commentEx);
+        }
+
+        commentEx.Done = resolved ? true : false;
+        exPart.CommentsEx.Save();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Check if a comment is resolved.
+    /// </summary>
+    public static bool IsCommentResolved(WordprocessingDocument doc, int commentId)
+    {
+        var mainPart = doc.MainDocumentPart;
+        var commentsPart = mainPart?.WordprocessingCommentsPart;
+        if (commentsPart?.Comments is null) return false;
+
+        var idStr = commentId.ToString();
+        var comment = commentsPart.Comments.Elements<Comment>()
+            .FirstOrDefault(c => c.Id?.Value == idStr);
+        if (comment is null) return false;
+
+        var firstPara = comment.Elements<Paragraph>().FirstOrDefault();
+        var paraId = firstPara?.ParagraphId?.Value;
+        if (paraId is null) return false;
+
+        var exPart = mainPart?.WordprocessingCommentsExPart;
+        if (exPart?.CommentsEx is null) return false;
+
+        var commentEx = exPart.CommentsEx.Elements<W15.CommentEx>()
+            .FirstOrDefault(ce => ce.ParaId?.Value == paraId);
+
+        return commentEx?.Done?.Value == true;
+    }
+
+    /// <summary>
+    /// Generate a random 8-character hex paraId (matching Word's format).
+    /// </summary>
+    private static string GenerateParaId()
+    {
+        var bytes = new byte[4];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        return Convert.ToHexString(bytes);
+    }
+
+    /// <summary>
     /// Create the reference Run: contains CommentReference with CommentReference style.
     /// </summary>
     private static Run CreateCommentReferenceRun(int commentId)
@@ -458,4 +573,5 @@ public class CommentInfo
     public DateTime? Date { get; set; }
     public string Text { get; set; } = "";
     public string? AnchoredText { get; set; }
+    public bool Resolved { get; set; }
 }
