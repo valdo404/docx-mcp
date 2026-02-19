@@ -171,8 +171,7 @@ pages_project = cloudflare.PagesProject(
 import pulumi_koyeb as koyeb
 
 KOYEB_REGION = "fra"
-KOYEB_INSTANCE = "eco-small"
-GIT_REPO = "github.com/valdo404/docx-mcp"
+GIT_REPO = "github.com/valdo404/docx-system"
 GIT_BRANCH = "feat/sse-grpc-multi-tenant-20"
 
 
@@ -184,6 +183,8 @@ def _koyeb_service(
     *,
     public: bool = False,
     http_health_path: str | None = None,
+    instance_type: str = "nano",
+    scale_to_zero: bool = False,
 ) -> koyeb.ServiceDefinitionArgs:
     """Build a ServiceDefinitionArgs for a Koyeb service."""
     routes = (
@@ -217,8 +218,16 @@ def _koyeb_service(
         name=name,
         type="WEB",
         regions=[KOYEB_REGION],
-        instance_types=[koyeb.ServiceDefinitionInstanceTypeArgs(type=KOYEB_INSTANCE)],
-        scalings=[koyeb.ServiceDefinitionScalingArgs(min=1, max=1)],
+        instance_types=[koyeb.ServiceDefinitionInstanceTypeArgs(type=instance_type)],
+        scalings=[koyeb.ServiceDefinitionScalingArgs(
+            min=0 if scale_to_zero else 1,
+            max=2,
+            targets=[koyeb.ServiceDefinitionScalingTargetArgs(
+                requests_per_seconds=[
+                    koyeb.ServiceDefinitionScalingTargetRequestsPerSecondArgs(value=100),
+                ],
+            )],
+        )],
         git=koyeb.ServiceDefinitionGitArgs(
             repository=GIT_REPO,
             branch=GIT_BRANCH,
@@ -246,6 +255,7 @@ koyeb_storage = koyeb.Service(
         name="storage",
         dockerfile="Dockerfile.storage-cloudflare",
         port=50051,
+        instance_type="nano",
         envs=[
             koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info,docx_storage_cloudflare=debug"),
             koyeb.ServiceDefinitionEnvArgs(key="GRPC_HOST", value="0.0.0.0"),
@@ -266,6 +276,7 @@ koyeb_gdrive = koyeb.Service(
         name="gdrive",
         dockerfile="Dockerfile.gdrive",
         port=50052,
+        instance_type="nano",
         envs=[
             koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info"),
             koyeb.ServiceDefinitionEnvArgs(key="GRPC_HOST", value="0.0.0.0"),
@@ -289,6 +300,7 @@ koyeb_mcp = koyeb.Service(
         dockerfile="Dockerfile",
         port=3000,
         http_health_path="/health",
+        instance_type="small",
         envs=[
             koyeb.ServiceDefinitionEnvArgs(key="MCP_TRANSPORT", value="http"),
             koyeb.ServiceDefinitionEnvArgs(key="ASPNETCORE_URLS", value="http://+:3000"),
@@ -308,8 +320,9 @@ koyeb_proxy = koyeb.Service(
         port=8080,
         public=True,
         http_health_path="/health",
+        instance_type="nano",
         envs=[
-            koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info,docx_mcp_sse_proxy=debug"),
+            koyeb.ServiceDefinitionEnvArgs(key="RUST_LOG", value="info"),
             koyeb.ServiceDefinitionEnvArgs(key="MCP_BACKEND_URL", value="http://mcp-http:3000"),
             koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_ACCOUNT_ID", value=account_id),
             koyeb.ServiceDefinitionEnvArgs(key="CLOUDFLARE_API_TOKEN", value=cloudflare_api_token),
