@@ -17,7 +17,8 @@ if (transport == "http")
     var builder = WebApplication.CreateBuilder(args);
 
     builder.Logging.AddConsole();
-    builder.Logging.SetMinimumLevel(LogLevel.Debug);
+    builder.Logging.SetMinimumLevel(LogLevel.Information);
+    builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
     RegisterStorageServices(builder.Services);
 

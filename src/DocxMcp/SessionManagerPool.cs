@@ -7,11 +7,13 @@ namespace DocxMcp;
 /// <summary>
 /// Thread-safe pool of SessionManagers, one per tenant.
 /// Used only in HTTP mode for multi-tenant isolation.
-/// Each SessionManager is lazy-created on first access.
+/// Each SessionManager is created on first access with session restore.
+/// If restoration fails, the entry is cleared so the next request can retry.
 /// </summary>
 public sealed class SessionManagerPool
 {
-    private readonly ConcurrentDictionary<string, Lazy<SessionManager>> _pool = new();
+    private readonly ConcurrentDictionary<string, SessionManager> _pool = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
     private readonly IHistoryStorage _history;
     private readonly ILoggerFactory _loggerFactory;
 
@@ -23,12 +25,32 @@ public sealed class SessionManagerPool
 
     public SessionManager GetForTenant(string tenantId)
     {
-        return _pool.GetOrAdd(tenantId, tid =>
-            new Lazy<SessionManager>(() =>
-            {
-                var sm = new SessionManager(_history, _loggerFactory.CreateLogger<SessionManager>(), tid);
-                sm.RestoreSessions();
-                return sm;
-            })).Value;
+        if (_pool.TryGetValue(tenantId, out var existing))
+            return existing;
+
+        // Serialize creation per-tenant
+        var @lock = _locks.GetOrAdd(tenantId, _ => new SemaphoreSlim(1, 1));
+        @lock.Wait();
+        try
+        {
+            // Double-check after acquiring lock
+            if (_pool.TryGetValue(tenantId, out existing))
+                return existing;
+
+            var sm = new SessionManager(_history, _loggerFactory.CreateLogger<SessionManager>(), tenantId);
+            sm.RestoreSessions();
+            _pool[tenantId] = sm;
+            return sm;
+        }
+        catch
+        {
+            // Don't cache failed managers — next request will retry
+            _pool.TryRemove(tenantId, out _);
+            throw;
+        }
+        finally
+        {
+            @lock.Release();
+        }
     }
 }
