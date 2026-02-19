@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 using DocxMcp.Paths;
@@ -28,37 +30,44 @@ public sealed class CountTool
         [Description("Session ID of the document.")] string doc_id,
         [Description("Typed path with selector (e.g. /body/paragraph[*], /body/table[0]/row[*]).")] string path)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-
-        // Handle special paths with counts
-        if (path is "/body" or "body" or "/")
+        try
         {
-            var body = doc.MainDocumentPart?.Document?.Body;
-            if (body is null)
-                return """{"error": "Document has no body."}""";
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
 
-            var result = new JsonObject
+            // Handle special paths with counts
+            if (path is "/body" or "body" or "/")
             {
-                ["paragraphs"] = body.Elements<Paragraph>().Count(),
-                ["tables"] = body.Elements<Table>().Count(),
-                ["headings"] = body.Elements<Paragraph>().Count(p => p.IsHeading()),
-                ["total_children"] = body.ChildElements.Count,
+                var body = doc.MainDocumentPart?.Document?.Body;
+                if (body is null)
+                    return """{"error": "Document has no body."}""";
+
+                var result = new JsonObject
+                {
+                    ["paragraphs"] = body.Elements<Paragraph>().Count(),
+                    ["tables"] = body.Elements<Table>().Count(),
+                    ["headings"] = body.Elements<Paragraph>().Count(p => p.IsHeading()),
+                    ["total_children"] = body.ChildElements.Count,
+                };
+
+                return result.ToJsonString(JsonOpts);
+            }
+
+            var parsed = DocxPath.Parse(path);
+            var elements = PathResolver.Resolve(parsed, doc);
+
+            var countResult = new JsonObject
+            {
+                ["path"] = path,
+                ["count"] = elements.Count,
             };
 
-            return result.ToJsonString(JsonOpts);
+            return countResult.ToJsonString(JsonOpts);
         }
-
-        var parsed = DocxPath.Parse(path);
-        var elements = PathResolver.Resolve(parsed, doc);
-
-        var countResult = new JsonObject
-        {
-            ["path"] = path,
-            ["count"] = elements.Count,
-        };
-
-        return countResult.ToJsonString(JsonOpts);
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"counting elements in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new()

@@ -2,7 +2,10 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DocxMcp.Grpc;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
+using DocxMcp.Helpers;
 
 namespace DocxMcp.Tools;
 
@@ -19,37 +22,43 @@ public sealed class ConnectionTools
         [Description("Filter by source type: 'local', 'google_drive', 'onedrive'. Omit to list all.")]
         string? source_type = null)
     {
-        SourceType? filter = source_type switch
+        try
         {
-            "local" => SourceType.LocalFile,
-            "google_drive" => SourceType.GoogleDrive,
-            "onedrive" => SourceType.Onedrive,
-            _ => null
-        };
-
-        var connections = sync.ListConnections(tenant.TenantId, filter);
-
-        var arr = new JsonArray();
-        foreach (var c in connections)
-        {
-            var obj = new JsonObject
+            SourceType? filter = source_type switch
             {
-                ["connection_id"] = c.ConnectionId,
-                ["type"] = c.Type.ToString(),
-                ["display_name"] = c.DisplayName
+                "local" => SourceType.LocalFile,
+                "google_drive" => SourceType.GoogleDrive,
+                "onedrive" => SourceType.Onedrive,
+                _ => null
             };
-            if (c.ProviderAccountId is not null)
-                obj["provider_account_id"] = c.ProviderAccountId;
-            arr.Add((JsonNode)obj);
+
+            var connections = sync.ListConnections(tenant.TenantId, filter);
+
+            var arr = new JsonArray();
+            foreach (var c in connections)
+            {
+                var obj = new JsonObject
+                {
+                    ["connection_id"] = c.ConnectionId,
+                    ["type"] = c.Type.ToString(),
+                    ["display_name"] = c.DisplayName
+                };
+                if (c.ProviderAccountId is not null)
+                    obj["provider_account_id"] = c.ProviderAccountId;
+                arr.Add((JsonNode)obj);
+            }
+
+            var result = new JsonObject
+            {
+                ["count"] = connections.Count,
+                ["connections"] = arr
+            };
+
+            return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         }
-
-        var result = new JsonObject
-        {
-            ["count"] = connections.Count,
-            ["connections"] = arr
-        };
-
-        return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, "listing connections"); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "list_connection_files"), Description(
@@ -71,45 +80,51 @@ public sealed class ConnectionTools
         [Description("Max results per page. Default 20.")]
         int page_size = 20)
     {
-        var type = source_type switch
+        try
         {
-            "local" => SourceType.LocalFile,
-            "google_drive" => SourceType.GoogleDrive,
-            "onedrive" => SourceType.Onedrive,
-            _ => throw new ArgumentException($"Unknown source type: {source_type}. Use 'local', 'google_drive', or 'onedrive'.")
-        };
-
-        var result = sync.ListFiles(tenant.TenantId, type, connection_id, path, page_token, page_size);
-
-        var filesArr = new JsonArray();
-        foreach (var f in result.Files)
-        {
-            var obj = new JsonObject
+            var type = source_type switch
             {
-                ["name"] = f.Name,
-                ["is_folder"] = f.IsFolder,
+                "local" => SourceType.LocalFile,
+                "google_drive" => SourceType.GoogleDrive,
+                "onedrive" => SourceType.Onedrive,
+                _ => throw new ArgumentException($"Unknown source type: {source_type}. Use 'local', 'google_drive', or 'onedrive'.")
             };
-            if (!f.IsFolder)
+
+            var result = sync.ListFiles(tenant.TenantId, type, connection_id, path, page_token, page_size);
+
+            var filesArr = new JsonArray();
+            foreach (var f in result.Files)
             {
-                obj["size_bytes"] = f.SizeBytes;
-                if (f.ModifiedAtUnix > 0)
-                    obj["modified_at"] = DateTimeOffset.FromUnixTimeSeconds(f.ModifiedAtUnix).ToString("o");
+                var obj = new JsonObject
+                {
+                    ["name"] = f.Name,
+                    ["is_folder"] = f.IsFolder,
+                };
+                if (!f.IsFolder)
+                {
+                    obj["size_bytes"] = f.SizeBytes;
+                    if (f.ModifiedAtUnix > 0)
+                        obj["modified_at"] = DateTimeOffset.FromUnixTimeSeconds(f.ModifiedAtUnix).ToString("o");
+                }
+                if (f.FileId is not null)
+                    obj["file_id"] = f.FileId;
+                obj["path"] = f.Path;
+                filesArr.Add((JsonNode)obj);
             }
-            if (f.FileId is not null)
-                obj["file_id"] = f.FileId;
-            obj["path"] = f.Path;
-            filesArr.Add((JsonNode)obj);
+
+            var response = new JsonObject
+            {
+                ["count"] = result.Files.Count,
+                ["files"] = filesArr
+            };
+
+            if (result.NextPageToken is not null)
+                response["next_page_token"] = result.NextPageToken;
+
+            return response.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         }
-
-        var response = new JsonObject
-        {
-            ["count"] = result.Files.Count,
-            ["files"] = filesArr
-        };
-
-        if (result.NextPageToken is not null)
-            response["next_page_token"] = result.NextPageToken;
-
-        return response.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, "listing files"); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 }

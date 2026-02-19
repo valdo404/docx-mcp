@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 
@@ -34,76 +36,83 @@ public sealed class ReadHeadingContentTool
         [Description("Number of elements to skip. Negative values count from the end. Default: 0.")] int? offset = null,
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-        var body = session.GetBody();
-
-        var allChildren = body.ChildElements.Cast<OpenXmlElement>().ToList();
-
-        // List mode: return heading hierarchy
-        if (heading_text is null && heading_index is null)
+        try
         {
-            return ListHeadings(allChildren, heading_level);
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+            var body = session.GetBody();
+
+            var allChildren = body.ChildElements.Cast<OpenXmlElement>().ToList();
+
+            // List mode: return heading hierarchy
+            if (heading_text is null && heading_index is null)
+            {
+                return ListHeadings(allChildren, heading_level);
+            }
+
+            // Find the target heading
+            var headingParagraph = FindHeading(allChildren, heading_text, heading_index, heading_level);
+            if (headingParagraph is null)
+            {
+                return heading_text is not null
+                    ? $"Error: No heading found matching text '{heading_text}'" +
+                      (heading_level.HasValue ? $" at level {heading_level.Value}" : "") + "."
+                    : $"Error: Heading index {heading_index} out of range" +
+                      (heading_level.HasValue ? $" at level {heading_level.Value}" : "") + ".";
+            }
+
+            // Collect content under this heading
+            var elements = CollectHeadingContent(allChildren, headingParagraph, include_sub_headings);
+            var totalCount = elements.Count;
+
+            // Apply pagination
+            var rawOffset = offset ?? 0;
+            var effectiveOffset = rawOffset < 0 ? Math.Max(0, totalCount + rawOffset) : rawOffset;
+            var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
+
+            if (effectiveOffset >= totalCount)
+            {
+                var headingInfo = BuildHeadingInfo(headingParagraph);
+                headingInfo["total"] = totalCount;
+                headingInfo["offset"] = effectiveOffset;
+                headingInfo["limit"] = effectiveLimit;
+                headingInfo["items"] = new JsonArray();
+                return headingInfo.ToJsonString(JsonOpts);
+            }
+
+            var page = elements
+                .Skip(effectiveOffset)
+                .Take(effectiveLimit)
+                .ToList();
+
+            var fmt = format?.ToLowerInvariant() ?? "json";
+            var formatted = fmt switch
+            {
+                "json" => FormatJson(page, doc),
+                "text" => FormatText(page),
+                "summary" => FormatSummary(page),
+                _ => FormatJson(page, doc)
+            };
+
+            if (fmt == "json")
+            {
+                var result = BuildHeadingInfo(headingParagraph);
+                result["total"] = totalCount;
+                result["offset"] = effectiveOffset;
+                result["limit"] = effectiveLimit;
+                result["count"] = page.Count;
+                result["items"] = JsonNode.Parse(formatted);
+                return result.ToJsonString(JsonOpts);
+            }
+
+            var headingLevel = headingParagraph.GetHeadingLevel();
+            var headingTextValue = headingParagraph.InnerText;
+            return $"[Heading {headingLevel}: \"{headingTextValue}\" — {page.Count}/{totalCount} elements, offset {effectiveOffset}]\n{formatted}";
         }
-
-        // Find the target heading
-        var headingParagraph = FindHeading(allChildren, heading_text, heading_index, heading_level);
-        if (headingParagraph is null)
-        {
-            return heading_text is not null
-                ? $"Error: No heading found matching text '{heading_text}'" +
-                  (heading_level.HasValue ? $" at level {heading_level.Value}" : "") + "."
-                : $"Error: Heading index {heading_index} out of range" +
-                  (heading_level.HasValue ? $" at level {heading_level.Value}" : "") + ".";
-        }
-
-        // Collect content under this heading
-        var elements = CollectHeadingContent(allChildren, headingParagraph, include_sub_headings);
-        var totalCount = elements.Count;
-
-        // Apply pagination
-        var rawOffset = offset ?? 0;
-        var effectiveOffset = rawOffset < 0 ? Math.Max(0, totalCount + rawOffset) : rawOffset;
-        var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
-
-        if (effectiveOffset >= totalCount)
-        {
-            var headingInfo = BuildHeadingInfo(headingParagraph);
-            headingInfo["total"] = totalCount;
-            headingInfo["offset"] = effectiveOffset;
-            headingInfo["limit"] = effectiveLimit;
-            headingInfo["items"] = new JsonArray();
-            return headingInfo.ToJsonString(JsonOpts);
-        }
-
-        var page = elements
-            .Skip(effectiveOffset)
-            .Take(effectiveLimit)
-            .ToList();
-
-        var fmt = format?.ToLowerInvariant() ?? "json";
-        var formatted = fmt switch
-        {
-            "json" => FormatJson(page, doc),
-            "text" => FormatText(page),
-            "summary" => FormatSummary(page),
-            _ => FormatJson(page, doc)
-        };
-
-        if (fmt == "json")
-        {
-            var result = BuildHeadingInfo(headingParagraph);
-            result["total"] = totalCount;
-            result["offset"] = effectiveOffset;
-            result["limit"] = effectiveLimit;
-            result["count"] = page.Count;
-            result["items"] = JsonNode.Parse(formatted);
-            return result.ToJsonString(JsonOpts);
-        }
-
-        var headingLevel = headingParagraph.GetHeadingLevel();
-        var headingTextValue = headingParagraph.InnerText;
-        return $"[Heading {headingLevel}: \"{headingTextValue}\" — {page.Count}/{totalCount} elements, offset {effectiveOffset}]\n{formatted}";
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"reading heading content in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     private static JsonObject BuildHeadingInfo(Paragraph heading)

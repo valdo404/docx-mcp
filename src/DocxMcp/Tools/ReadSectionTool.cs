@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 
@@ -28,55 +30,62 @@ public sealed class ReadSectionTool
         [Description("Number of elements to skip. Negative values count from the end (e.g. -10 = last 10 elements). Default: 0.")] int? offset = null,
         [Description("Maximum number of elements to return (1-50). Default: 50.")] int? limit = null)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-        var body = doc.MainDocumentPart?.Document?.Body
-            ?? throw new InvalidOperationException("Document has no body.");
-
-        var sections = BuildSections(body);
-
-        // List mode: return section overview
-        if (section_index is null or -1)
+        try
         {
-            return ListSections(sections);
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+            var body = doc.MainDocumentPart?.Document?.Body
+                ?? throw new InvalidOperationException("Document has no body.");
+
+            var sections = BuildSections(body);
+
+            // List mode: return section overview
+            if (section_index is null or -1)
+            {
+                return ListSections(sections);
+            }
+
+            var idx = section_index.Value;
+            if (idx < 0 || idx >= sections.Count)
+                return $"Error: Section index {idx} out of range. Document has {sections.Count} section(s) (0..{sections.Count - 1}).";
+
+            var sectionElements = sections[idx].Elements;
+            var totalCount = sectionElements.Count;
+
+            var rawOffset = offset ?? 0;
+            // Negative offset counts from the end: -10 means start at (total - 10)
+            var effectiveOffset = rawOffset < 0 ? Math.Max(0, totalCount + rawOffset) : rawOffset;
+            var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
+
+            if (effectiveOffset >= totalCount)
+                return $"{{\"section\": {idx}, \"total\": {totalCount}, \"offset\": {effectiveOffset}, \"limit\": {effectiveLimit}, \"items\": []}}";
+
+            var page = sectionElements
+                .Skip(effectiveOffset)
+                .Take(effectiveLimit)
+                .ToList();
+
+            var fmt = format?.ToLowerInvariant() ?? "json";
+            var formatted = fmt switch
+            {
+                "json" => FormatJson(page, doc),
+                "text" => FormatText(page),
+                "summary" => FormatSummary(page),
+                _ => FormatJson(page, doc)
+            };
+
+            if (fmt == "json")
+            {
+                return $"{{\"section\": {idx}, \"total\": {totalCount}, \"offset\": {effectiveOffset}, " +
+                       $"\"limit\": {effectiveLimit}, \"count\": {page.Count}, \"items\": {formatted}}}";
+            }
+
+            return $"[Section {idx}: {page.Count}/{totalCount} elements, offset {effectiveOffset}]\n{formatted}";
         }
-
-        var idx = section_index.Value;
-        if (idx < 0 || idx >= sections.Count)
-            return $"Error: Section index {idx} out of range. Document has {sections.Count} section(s) (0..{sections.Count - 1}).";
-
-        var sectionElements = sections[idx].Elements;
-        var totalCount = sectionElements.Count;
-
-        var rawOffset = offset ?? 0;
-        // Negative offset counts from the end: -10 means start at (total - 10)
-        var effectiveOffset = rawOffset < 0 ? Math.Max(0, totalCount + rawOffset) : rawOffset;
-        var effectiveLimit = Math.Clamp(limit ?? 50, 1, 50);
-
-        if (effectiveOffset >= totalCount)
-            return $"{{\"section\": {idx}, \"total\": {totalCount}, \"offset\": {effectiveOffset}, \"limit\": {effectiveLimit}, \"items\": []}}";
-
-        var page = sectionElements
-            .Skip(effectiveOffset)
-            .Take(effectiveLimit)
-            .ToList();
-
-        var fmt = format?.ToLowerInvariant() ?? "json";
-        var formatted = fmt switch
-        {
-            "json" => FormatJson(page, doc),
-            "text" => FormatText(page),
-            "summary" => FormatSummary(page),
-            _ => FormatJson(page, doc)
-        };
-
-        if (fmt == "json")
-        {
-            return $"{{\"section\": {idx}, \"total\": {totalCount}, \"offset\": {effectiveOffset}, " +
-                   $"\"limit\": {effectiveLimit}, \"count\": {page.Count}, \"items\": {formatted}}}";
-        }
-
-        return $"[Section {idx}: {page.Count}/{totalCount} elements, offset {effectiveOffset}]\n{formatted}";
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"reading section in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     private record SectionInfo(int Index, List<OpenXmlElement> Elements, string? FirstHeading);
