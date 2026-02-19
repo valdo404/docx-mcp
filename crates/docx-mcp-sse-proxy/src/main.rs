@@ -12,8 +12,11 @@ use std::sync::Arc;
 use axum::routing::{any, get};
 use axum::Router;
 use clap::Parser;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpListener;
 use tokio::signal;
+use tower::Service;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -140,14 +143,37 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Bind and serve
+    // Bind and serve (HTTP/1.1 + HTTP/2 h2c dual-stack)
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr).await?;
-    info!("Listening on http://{}", addr);
+    info!("Listening on http://{} (HTTP/1.1 + h2c)", addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, _remote_addr) = result?;
+                let tower_service = app.clone();
+                tokio::spawn(async move {
+                    let hyper_service = hyper::service::service_fn(move |req| {
+                        tower_service.clone().call(req)
+                    });
+                    if let Err(err) = Builder::new(TokioExecutor::new())
+                        .serve_connection_with_upgrades(TokioIo::new(stream), hyper_service)
+                        .await
+                    {
+                        tracing::debug!("connection error: {err}");
+                    }
+                });
+            }
+            _ = &mut shutdown => {
+                info!("Shutting down");
+                break;
+            }
+        }
+    }
 
     info!("Server shutdown complete");
     Ok(())
