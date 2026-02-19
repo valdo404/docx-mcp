@@ -7,6 +7,12 @@ public sealed class UndoRedoResult
     public int Position { get; set; }
     public int Steps { get; set; }
     public string Message { get; set; } = "";
+
+    /// <summary>
+    /// The serialized document bytes at the new position.
+    /// Avoids an extra gRPC roundtrip for auto-save after undo/redo.
+    /// </summary>
+    public byte[]? CurrentBytes { get; set; }
 }
 
 public sealed class HistoryEntry

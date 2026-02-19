@@ -7,6 +7,8 @@ using DocxMcp.ExternalChanges;
 using DocxMcp.Helpers;
 using DocxMcp.Persistence;
 using DocumentFormat.OpenXml.Packaging;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace DocxMcp.Tools;
@@ -36,58 +38,65 @@ public sealed class ExternalChangeTools
         [Description("Set to true to acknowledge the changes and allow editing to continue.")]
         bool acknowledge = false)
     {
-        var pending = gate.CheckForChanges(tenant.TenantId, tenant.Sessions, doc_id, sync);
-
-        // No changes detected
-        if (pending is null)
+        try
         {
-            return new JsonObject
+            var pending = gate.CheckForChanges(tenant.TenantId, tenant.Sessions, doc_id, sync);
+
+            // No changes detected
+            if (pending is null)
             {
-                ["has_changes"] = false,
-                ["can_edit"] = true,
-                ["message"] = "No external changes detected. The document is in sync with the source file."
-            }.ToJsonString(JsonOptions);
-        }
+                return new JsonObject
+                {
+                    ["has_changes"] = false,
+                    ["can_edit"] = true,
+                    ["message"] = "No external changes detected. The document is in sync with the source file."
+                }.ToJsonString(JsonOptions);
+            }
 
-        // Acknowledge if requested
-        if (acknowledge)
-        {
-            gate.Acknowledge(tenant.TenantId, doc_id);
+            // Acknowledge if requested
+            if (acknowledge)
+            {
+                gate.Acknowledge(tenant.TenantId, doc_id);
 
-            var ackResult = new JsonObject
+                var ackResult = new JsonObject
+                {
+                    ["has_changes"] = true,
+                    ["acknowledged"] = true,
+                    ["can_edit"] = true,
+                    ["change_id"] = pending.Id,
+                    ["detected_at"] = pending.DetectedAt.ToString("o"),
+                    ["source_path"] = pending.SourcePath,
+                    ["summary"] = BuildSummaryJson(pending.Summary),
+                    ["changes"] = BuildChangesJson(pending.Changes),
+                    ["message"] = $"External changes acknowledged. You may now continue editing.\n\n" +
+                                  $"Summary: {pending.Summary.TotalChanges} change(s) were made externally:\n" +
+                                  $"  - {pending.Summary.Added} added\n" +
+                                  $"  - {pending.Summary.Removed} removed\n" +
+                                  $"  - {pending.Summary.Modified} modified\n" +
+                                  $"  - {pending.Summary.Moved} moved"
+                };
+                return ackResult.ToJsonString(JsonOptions);
+            }
+
+            // Return details without acknowledging — editing is blocked
+            var result = new JsonObject
             {
                 ["has_changes"] = true,
-                ["acknowledged"] = true,
-                ["can_edit"] = true,
+                ["acknowledged"] = false,
+                ["can_edit"] = false,
                 ["change_id"] = pending.Id,
                 ["detected_at"] = pending.DetectedAt.ToString("o"),
                 ["source_path"] = pending.SourcePath,
                 ["summary"] = BuildSummaryJson(pending.Summary),
                 ["changes"] = BuildChangesJson(pending.Changes),
-                ["message"] = $"External changes acknowledged. You may now continue editing.\n\n" +
-                              $"Summary: {pending.Summary.TotalChanges} change(s) were made externally:\n" +
-                              $"  - {pending.Summary.Added} added\n" +
-                              $"  - {pending.Summary.Removed} removed\n" +
-                              $"  - {pending.Summary.Modified} modified\n" +
-                              $"  - {pending.Summary.Moved} moved"
+                ["message"] = BuildChangeMessage(pending)
             };
-            return ackResult.ToJsonString(JsonOptions);
+            return result.ToJsonString(JsonOptions);
         }
-
-        // Return details without acknowledging — editing is blocked
-        var result = new JsonObject
-        {
-            ["has_changes"] = true,
-            ["acknowledged"] = false,
-            ["can_edit"] = false,
-            ["change_id"] = pending.Id,
-            ["detected_at"] = pending.DetectedAt.ToString("o"),
-            ["source_path"] = pending.SourcePath,
-            ["summary"] = BuildSummaryJson(pending.Summary),
-            ["changes"] = BuildChangesJson(pending.Changes),
-            ["message"] = BuildChangeMessage(pending)
-        };
-        return result.ToJsonString(JsonOptions);
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"checking external changes for '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "sync_external_changes"), Description(
@@ -105,54 +114,61 @@ public sealed class ExternalChangeTools
         [Description("Session ID to sync.")]
         string doc_id)
     {
-        var syncResult = PerformSync(tenant.Sessions, doc_id, isImport: false,
-            tenantId: tenant.TenantId, sync: sync);
-
-        // Clear pending state after sync (whether successful or not for "no changes")
-        if (syncResult.Success)
-            gate.ClearPending(tenant.TenantId, doc_id);
-
-        var result = new JsonObject
+        try
         {
-            ["success"] = syncResult.Success,
-            ["has_changes"] = syncResult.HasChanges,
-            ["message"] = syncResult.Message
-        };
+            var syncResult = PerformSync(tenant.Sessions, doc_id, isImport: false,
+                tenantId: tenant.TenantId, sync: sync);
 
-        if (syncResult.Summary is not null)
-        {
-            result["summary"] = BuildSummaryJson(syncResult.Summary);
-        }
+            // Clear pending state after sync (whether successful or not for "no changes")
+            if (syncResult.Success)
+                gate.ClearPending(tenant.TenantId, doc_id);
 
-        if (syncResult.UncoveredChanges is { Count: > 0 })
-        {
-            var uncoveredArr = new JsonArray();
-            foreach (var u in syncResult.UncoveredChanges)
+            var result = new JsonObject
             {
-                var uObj = new JsonObject
-                {
-                    ["type"] = u.Type.ToString(),
-                    ["description"] = u.Description,
-                    ["change_kind"] = u.ChangeKind
-                };
-                if (u.PartUri is not null)
-                    uObj["part_uri"] = u.PartUri;
-                uncoveredArr.Add((JsonNode?)uObj);
+                ["success"] = syncResult.Success,
+                ["has_changes"] = syncResult.HasChanges,
+                ["message"] = syncResult.Message
+            };
+
+            if (syncResult.Summary is not null)
+            {
+                result["summary"] = BuildSummaryJson(syncResult.Summary);
             }
-            result["uncovered_changes"] = uncoveredArr;
+
+            if (syncResult.UncoveredChanges is { Count: > 0 })
+            {
+                var uncoveredArr = new JsonArray();
+                foreach (var u in syncResult.UncoveredChanges)
+                {
+                    var uObj = new JsonObject
+                    {
+                        ["type"] = u.Type.ToString(),
+                        ["description"] = u.Description,
+                        ["change_kind"] = u.ChangeKind
+                    };
+                    if (u.PartUri is not null)
+                        uObj["part_uri"] = u.PartUri;
+                    uncoveredArr.Add((JsonNode?)uObj);
+                }
+                result["uncovered_changes"] = uncoveredArr;
+            }
+
+            if (syncResult.WalPosition.HasValue)
+                result["wal_position"] = syncResult.WalPosition.Value;
+
+            // Auto-save after sync
+            if (syncResult.Success && syncResult.HasChanges)
+            {
+                var session = tenant.Sessions.Get(doc_id);
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
+            }
+
+            return result.ToJsonString(JsonOptions);
         }
-
-        if (syncResult.WalPosition.HasValue)
-            result["wal_position"] = syncResult.WalPosition.Value;
-
-        // Auto-save after sync
-        if (syncResult.Success && syncResult.HasChanges)
-        {
-            var session = tenant.Sessions.Get(doc_id);
-            sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
-        }
-
-        return result.ToJsonString(JsonOptions);
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"syncing external changes for '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     /// <summary>
@@ -201,12 +217,14 @@ public sealed class ExternalChangeTools
                 diff = DiffEngine.Compare(previousBytes, newBytes);
             }
 
-            // 5. Create new session with re-assigned IDs
-            var newSession = DocxSession.FromBytes(newBytes, session.Id, session.SourcePath);
-            ElementIdManager.EnsureNamespace(newSession.Document);
-            ElementIdManager.EnsureAllIds(newSession.Document);
-
-            var finalBytes = newSession.ToBytes();
+            // 5. Create temporary session to re-assign IDs, then serialize
+            byte[] finalBytes;
+            using (var tempSession = DocxSession.FromBytes(newBytes, session.Id, session.SourcePath))
+            {
+                ElementIdManager.EnsureNamespace(tempSession.Document);
+                ElementIdManager.EnsureAllIds(tempSession.Document);
+                finalBytes = tempSession.ToBytes();
+            }
 
             // 6. Build WAL entry with full document snapshot
             var walEntry = new WalEntry
@@ -227,7 +245,7 @@ public sealed class ExternalChangeTools
             };
 
             // 7. Append to WAL + checkpoint + replace session
-            var walPosition = sessions.AppendExternalSync(sessionId, walEntry, newSession);
+            var walPosition = sessions.AppendExternalSync(sessionId, walEntry, finalBytes);
 
             return SyncResult.Synced(diff.Summary, uncoveredChanges, diff.ToPatches(), null, walPosition);
         }

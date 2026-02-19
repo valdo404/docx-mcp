@@ -3,6 +3,8 @@ using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.ExternalChanges;
 using DocxMcp.Helpers;
@@ -29,6 +31,8 @@ public sealed class PatchTool
         [Description("JSON array of patch operations (max 10 per call).")] string patches,
         [Description("If true, simulates operations without applying changes.")] bool dry_run = false)
     {
+        try
+        {
         // Check for pending external changes — block edits until acknowledged
         if (!dry_run && gate.HasPendingChanges(tenant.TenantId, doc_id))
         {
@@ -152,8 +156,9 @@ public sealed class PatchTool
             try
             {
                 var walPatches = $"[{string.Join(",", succeededPatches)}]";
-                sessions.AppendWal(doc_id, walPatches);
-                sync.MaybeAutoSave(tenant.TenantId, doc_id, sessions.Get(doc_id).ToBytes());
+                var bytes = session.ToBytes();
+                sessions.AppendWal(doc_id, walPatches, null, bytes);
+                sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
             }
             catch { /* persistence is best-effort */ }
         }
@@ -163,6 +168,11 @@ public sealed class PatchTool
             : result.Applied == result.Total;
 
         return result.ToJson();
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"applying patch to '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     private static string GetOpString(PatchOperation? operation, JsonElement element)

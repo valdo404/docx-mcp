@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DocumentFormat.OpenXml.Packaging;
+using Grpc.Core;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using DocxMcp.Helpers;
 
@@ -24,50 +26,57 @@ public sealed class RevisionTools
         [Description("Number of revisions to skip. Default: 0.")] int? offset = null,
         [Description("Maximum number of revisions to return (1-100). Default: 50.")] int? limit = null)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-
-        var stats = RevisionHelper.GetRevisionStats(doc);
-        var revisions = RevisionHelper.ListRevisions(doc, author, type);
-        var total = revisions.Count;
-
-        var effectiveOffset = Math.Max(0, offset ?? 0);
-        var effectiveLimit = Math.Clamp(limit ?? 50, 1, 100);
-
-        var page = revisions
-            .Skip(effectiveOffset)
-            .Take(effectiveLimit)
-            .ToList();
-
-        var arr = new JsonArray();
-        foreach (var r in page)
+        try
         {
-            var obj = new JsonObject
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
+
+            var stats = RevisionHelper.GetRevisionStats(doc);
+            var revisions = RevisionHelper.ListRevisions(doc, author, type);
+            var total = revisions.Count;
+
+            var effectiveOffset = Math.Max(0, offset ?? 0);
+            var effectiveLimit = Math.Clamp(limit ?? 50, 1, 100);
+
+            var page = revisions
+                .Skip(effectiveOffset)
+                .Take(effectiveLimit)
+                .ToList();
+
+            var arr = new JsonArray();
+            foreach (var r in page)
             {
-                ["id"] = r.Id,
-                ["type"] = r.Type,
-                ["author"] = r.Author,
-                ["date"] = r.Date?.ToString("o"),
-                ["content"] = r.Content
+                var obj = new JsonObject
+                {
+                    ["id"] = r.Id,
+                    ["type"] = r.Type,
+                    ["author"] = r.Author,
+                    ["date"] = r.Date?.ToString("o"),
+                    ["content"] = r.Content
+                };
+
+                if (r.ElementId is not null)
+                    obj["element_id"] = r.ElementId;
+
+                arr.Add((JsonNode)obj);
+            }
+
+            var result = new JsonObject
+            {
+                ["track_changes_enabled"] = stats.TrackChangesEnabled,
+                ["total"] = total,
+                ["offset"] = effectiveOffset,
+                ["limit"] = effectiveLimit,
+                ["count"] = page.Count,
+                ["revisions"] = arr
             };
 
-            if (r.ElementId is not null)
-                obj["element_id"] = r.ElementId;
-
-            arr.Add((JsonNode)obj);
+            return result.ToJsonString(JsonOpts);
         }
-
-        var result = new JsonObject
-        {
-            ["track_changes_enabled"] = stats.TrackChangesEnabled,
-            ["total"] = total,
-            ["offset"] = effectiveOffset,
-            ["limit"] = effectiveLimit,
-            ["count"] = page.Count,
-            ["revisions"] = arr
-        };
-
-        return result.ToJsonString(JsonOpts);
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"listing revisions in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "revision_accept"), Description(
@@ -83,23 +92,31 @@ public sealed class RevisionTools
         [Description("Session ID of the document.")] string doc_id,
         [Description("Revision ID to accept.")] int revision_id)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-
-        if (!RevisionHelper.AcceptRevision(doc, revision_id))
-            return $"Error: Revision {revision_id} not found.";
-
-        // Append to WAL
-        var walObj = new JsonObject
+        try
         {
-            ["op"] = "accept_revision",
-            ["revision_id"] = revision_id
-        };
-        var walEntry = new JsonArray { (JsonNode)walObj };
-        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
 
-        return $"Accepted revision {revision_id}.";
+            if (!RevisionHelper.AcceptRevision(doc, revision_id))
+                return $"Error: Revision {revision_id} not found.";
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "accept_revision",
+                ["revision_id"] = revision_id
+            };
+            var walEntry = new JsonArray { (JsonNode)walObj };
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return $"Accepted revision {revision_id}.";
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"accepting revision in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "revision_reject"), Description(
@@ -115,23 +132,31 @@ public sealed class RevisionTools
         [Description("Session ID of the document.")] string doc_id,
         [Description("Revision ID to reject.")] int revision_id)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-
-        if (!RevisionHelper.RejectRevision(doc, revision_id))
-            return $"Error: Revision {revision_id} not found.";
-
-        // Append to WAL
-        var walObj = new JsonObject
+        try
         {
-            ["op"] = "reject_revision",
-            ["revision_id"] = revision_id
-        };
-        var walEntry = new JsonArray { (JsonNode)walObj };
-        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
 
-        return $"Rejected revision {revision_id}.";
+            if (!RevisionHelper.RejectRevision(doc, revision_id))
+                return $"Error: Revision {revision_id} not found.";
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "reject_revision",
+                ["revision_id"] = revision_id
+            };
+            var walEntry = new JsonArray { (JsonNode)walObj };
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return $"Rejected revision {revision_id}.";
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"rejecting revision in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     [McpServerTool(Name = "track_changes_enable"), Description(
@@ -144,24 +169,32 @@ public sealed class RevisionTools
         [Description("Session ID of the document.")] string doc_id,
         [Description("True to enable, false to disable Track Changes.")] bool enabled)
     {
-        var session = tenant.Sessions.Get(doc_id);
-        var doc = session.Document;
-
-        RevisionHelper.SetTrackChangesEnabled(doc, enabled);
-
-        // Append to WAL
-        var walObj = new JsonObject
+        try
         {
-            ["op"] = "track_changes_enable",
-            ["enabled"] = enabled
-        };
-        var walEntry = new JsonArray { (JsonNode)walObj };
-        tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString());
-        sync.MaybeAutoSave(tenant.TenantId, doc_id, session.ToBytes());
+            var session = tenant.Sessions.Get(doc_id);
+            var doc = session.Document;
 
-        return enabled
-            ? "Track Changes enabled. Edits made in Word will be tracked."
-            : "Track Changes disabled.";
+            RevisionHelper.SetTrackChangesEnabled(doc, enabled);
+
+            // Append to WAL
+            var walObj = new JsonObject
+            {
+                ["op"] = "track_changes_enable",
+                ["enabled"] = enabled
+            };
+            var walEntry = new JsonArray { (JsonNode)walObj };
+            var bytes = session.ToBytes();
+            tenant.Sessions.AppendWal(doc_id, walEntry.ToJsonString(), null, bytes);
+            sync.MaybeAutoSave(tenant.TenantId, doc_id, bytes);
+
+            return enabled
+                ? "Track Changes enabled. Edits made in Word will be tracked."
+                : "Track Changes disabled.";
+        }
+        catch (RpcException ex) { throw GrpcErrorHelper.Wrap(ex, $"toggling track changes in '{doc_id}'"); }
+        catch (KeyNotFoundException) { throw GrpcErrorHelper.WrapNotFound(doc_id); }
+        catch (McpException) { throw; }
+        catch (Exception ex) { throw new McpException(ex.Message, ex); }
     }
 
     // --- WAL Replay Methods ---
