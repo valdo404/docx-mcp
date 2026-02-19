@@ -557,6 +557,37 @@ public class UndoRedoTests : IDisposable
     }
 
     [Fact]
+    public void HistoryTools_History_LimitClampedToMin1()
+    {
+        var mgr = CreateManager();
+        var session = mgr.Create();
+        var id = session.Id;
+
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("B"));
+
+        // limit=0 should be clamped to 1 and not crash
+        var result = HistoryTools.DocumentHistory(mgr, id, limit: 0);
+        Assert.Contains("History for document", result);
+        // Should show at least the baseline entry
+        Assert.Contains("Baseline", result);
+    }
+
+    [Fact]
+    public void HistoryTools_History_NegativeLimitClampedToMin1()
+    {
+        var mgr = CreateManager();
+        var session = mgr.Create();
+        var id = session.Id;
+
+        PatchTool.ApplyPatch(mgr, CreateSyncManager(), TestHelpers.CreateExternalChangeGate(), id, AddParagraphPatch("A"));
+
+        // Negative limit should be clamped to 1
+        var result = HistoryTools.DocumentHistory(mgr, id, limit: -5);
+        Assert.Contains("History for document", result);
+    }
+
+    [Fact]
     public void DocumentSnapshot_WithDiscard_Integration()
     {
         var mgr = CreateManager();

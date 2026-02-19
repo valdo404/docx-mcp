@@ -407,6 +407,35 @@ public class ReadHeadingContentTests : IDisposable
         Assert.Equal("Scope", headings[1].GetProperty("text").GetString());
     }
 
+    // --- Validation tests ---
+
+    [Fact]
+    public void ReadContentWithHeadingLevelZeroThrows()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() =>
+            DocxMcp.Tools.ReadHeadingContentTool.ReadHeadingContent(
+                _sessions, _session.Id, heading_level: 0));
+        Assert.Contains("heading_level must be between 1 and 9", ex.Message);
+    }
+
+    [Fact]
+    public void ReadContentWithHeadingLevelAbove9Throws()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() =>
+            DocxMcp.Tools.ReadHeadingContentTool.ReadHeadingContent(
+                _sessions, _session.Id, heading_level: 10));
+        Assert.Contains("heading_level must be between 1 and 9", ex.Message);
+    }
+
+    [Fact]
+    public void ReadContentWithNegativeHeadingLevelThrows()
+    {
+        var ex = Assert.ThrowsAny<Exception>(() =>
+            DocxMcp.Tools.ReadHeadingContentTool.ReadHeadingContent(
+                _sessions, _session.Id, heading_level: -1));
+        Assert.Contains("heading_level must be between 1 and 9", ex.Message);
+    }
+
     // --- Helper methods ---
 
     private static Paragraph MakeHeading(int level, string text)
